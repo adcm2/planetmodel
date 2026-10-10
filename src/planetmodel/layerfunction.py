@@ -78,15 +78,25 @@ class LayerFunction(Protocol):
 
     interval: tuple[float, float]
 
-    def __call__(self, r: ArrayLike) -> np.ndarray: ...
+    def __call__(self, r: ArrayLike) -> np.ndarray:
+        """The values at `r`, of its shape."""
+        ...
 
-    def derivative(self, *, nu: int = 1) -> LayerFunction: ...
+    def derivative(self, *, nu: int = 1) -> LayerFunction:
+        """The nu-th derivative as a layer function; nu=0 is the function."""
+        ...
 
-    def integrate(self, a: float, b: float) -> float | complex: ...
+    def integrate(self, a: float, b: float) -> float | complex:
+        """The signed integral from a to b."""
+        ...
 
-    def on_interval(self, lo: float, hi: float) -> LayerFunction: ...
+    def on_interval(self, lo: float, hi: float) -> LayerFunction:
+        """The same function restated on [lo, hi]."""
+        ...
 
-    def rescaled(self, *, k: float, v: float) -> LayerFunction: ...
+    def rescaled(self, *, k: float, v: float) -> LayerFunction:
+        """v f(r / k) on the interval scaled by k."""
+        ...
 
 
 #: What `as_layer_function` accepts: a layer function, a scipy `PPoly` or
@@ -137,6 +147,7 @@ class PolynomialLayer:
 
     @property
     def interval(self) -> tuple[float, float]:
+        """The (lo, hi) span of radius the function is stated on."""
         return self._interval
 
     @property
@@ -146,12 +157,15 @@ class PolynomialLayer:
 
     @property
     def degree(self) -> int:
+        """The polynomial degree of the pieces."""
         return self._p.c.shape[0] - 1
 
     def __call__(self, r: ArrayLike) -> np.ndarray:
+        """The polynomial at `r`, of its shape."""
         return as_values(self._p(np.asarray(r, dtype=float)))
 
     def derivative(self, *, nu: int = 1) -> "PolynomialLayer":
+        """The nu-th derivative, exact on the coefficients."""
         if nu < 0:
             raise ValueError("nu must be non-negative")
         if nu == 0:
@@ -324,6 +338,7 @@ class NumericLayer:
 
     @property
     def interval(self) -> tuple[float, float]:
+        """The (lo, hi) span of radius the function is stated on."""
         return self._interval
 
     @property
@@ -332,11 +347,14 @@ class NumericLayer:
         return self._fn
 
     def __call__(self, r: ArrayLike) -> np.ndarray:
+        """The callable at `r`, broadcast to its shape."""
         r = np.asarray(r, dtype=float)
         out = as_values(self._fn(r))
         return np.broadcast_to(out, r.shape).copy() if out.shape != r.shape else out
 
     def derivative(self, *, nu: int = 1) -> "NumericLayer":
+        """The nu-th derivative: the supplied one, else a central
+        difference with a step relative to the interval's width."""
         if nu < 0:
             raise ValueError("nu must be non-negative")
         if nu == 0:
@@ -371,6 +389,7 @@ class NumericLayer:
         return NumericLayer((lo, hi), self._fn, derivative=self._d, dstep=self._dstep)
 
     def rescaled(self, *, k: float, v: float) -> "NumericLayer":
+        """v f(r / k) as a closure, on the interval scaled by k."""
         k, v = float(k), float(v)
         if k <= 0.0:
             raise ValueError(f"the coordinate factor must be positive, got {k}")

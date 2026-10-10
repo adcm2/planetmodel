@@ -138,10 +138,12 @@ class AngularGrid:
 
     @property
     def ntheta(self) -> int:
+        """The number of colatitudes."""
         return self.colatitudes.size
 
     @property
     def nphi(self) -> int:
+        """The number of longitudes."""
         return self.longitudes.size
 
     def __repr__(self) -> str:

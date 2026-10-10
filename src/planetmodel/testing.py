@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .geometry import Geometry
     from .layerfunction import LayerFunction
     from .mapping import Mapping
+    from .mesh3d.spec import Refinement
     from .model import Model
     from .randomfield.basis import SpectralBasis, SphericalBasis
     from .sampling import Sample
@@ -26,7 +27,8 @@ if TYPE_CHECKING:
 
 __all__ = ["check_displacement", "check_mapping", "check_geometry",
            "check_layer_function", "check_field", "check_model",
-           "check_sample", "check_spectral_basis", "check_spherical_basis"]
+           "check_refinement", "check_sample", "check_spectral_basis",
+           "check_spherical_basis"]
 
 
 def _rel(a: ArrayLike, b: ArrayLike, *, rtol: float, floor: float = 1.0) -> bool:
@@ -395,6 +397,45 @@ def check_field(field: Field, *, rng: np.random.Generator | None = None,
     back = g.rescaled(k=1.0 / k, v=1.0 / v)
     assert np.allclose(back.evaluate(r, theta, phi), values,
                        rtol=1e-10, atol=1e-10 * scale), "rescaled does not round-trip"
+
+
+def check_refinement(refinement: Refinement, points: ArrayLike) -> None:
+    """Hold a refinement to its protocol on the given points.
+
+    Checks `size` and `far_size` as a positive floor and ceiling; that
+    the (n, d) `points` give float64 sizes of shape (n,), finite and
+    within [size, far_size]; and that a batch agrees with its points
+    taken one at a time, so vectorisation is a promise rather than an
+    optimisation.  The points are the caller's probes and should span
+    the domain the refinement will be asked about, the refined region
+    included.
+    """
+    X = np.asarray(points, dtype=float)
+    assert X.ndim == 2 and X.shape[1] in (2, 3), (
+        f"probe points must be (n, 2) or (n, 3), got {X.shape}")
+    assert callable(refinement), f"{type(refinement).__name__} is not callable"
+    size = getattr(refinement, "size", None)
+    far = getattr(refinement, "far_size", None)
+    assert isinstance(size, (int, float)) and size > 0.0, (
+        f"size must be a positive number, got {size!r}")
+    assert isinstance(far, (int, float)) and far >= size, (
+        f"far_size must be at least size ({size!r}), got {far!r}")
+
+    h = refinement(X)
+    assert isinstance(h, np.ndarray) and h.dtype == np.float64, (
+        f"sizes are {type(h).__name__} of dtype {getattr(h, 'dtype', None)}, "
+        "not a float64 array")
+    assert h.shape == (X.shape[0],), (
+        f"sizes have shape {h.shape} for {X.shape[0]} points")
+    assert np.all(np.isfinite(h)), "sizes are not finite"
+    tol = 1e-12 * far
+    assert np.all(h >= size - tol), "a size falls below the declared floor"
+    assert np.all(h <= far + tol), "a size exceeds the declared ceiling"
+
+    for k in (0, X.shape[0] - 1):
+        one = refinement(X[k:k + 1])
+        assert np.shape(one) == (1,) and np.isclose(one[0], h[k], rtol=1e-12), (
+            "a batch disagrees with its points taken one at a time")
 
 
 def check_model(model: Model, *, rng: np.random.Generator | None = None) -> None:

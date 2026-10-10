@@ -15,10 +15,16 @@ on the interface itself is zero at the points and about half their
 spacing between them, and the Threshold turns that into an element size
 that ripples along the interface and is on average coarser than the one
 asked for, the more so the shorter the decay width.
+
+Refinements go through gmsh's size callback instead of its field graph:
+each is an arbitrary size function this library evaluates itself, and
+gmsh hands the callback the size its other sources computed, so the
+minimum over them is taken here, in one visible place, rather than by
+options gmsh applies in an order of its own.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 import gmsh
 import numpy as np
@@ -26,9 +32,9 @@ from numpy.typing import ArrayLike
 
 from ._orient import Centres
 from ._tagging import Tagging
-from .spec import InterfaceSizing
+from .spec import InterfaceSizing, Refinement
 
-__all__ = ["apply_size_fields", "apply_mesh_options",
+__all__ = ["apply_size_fields", "apply_refinements", "apply_mesh_options",
            "check_sizing_resolves_spans", "check_sizing_scale"]
 
 
@@ -79,6 +85,31 @@ def _distance_to_sphere(centre: ArrayLike, radius: float) -> str:
     cx, cy, cz = (float(c) for c in np.asarray(centre, dtype=float))
     return (f"Fabs(Sqrt((x-({cx!r}))^2+(y-({cy!r}))^2+(z-({cz!r}))^2)"
             f"-({float(radius)!r}))")
+
+
+def apply_refinements(refinements: Sequence[Refinement], *,
+                      dimension: int) -> None:
+    """Register the refinements as gmsh's size callback.
+
+    gmsh computes a size from its other sources — here the background
+    field, every competing option being off — and hands it to the
+    callback as `lc`; what the callback returns is the size used.  The
+    callback takes the minimum of `lc` and every refinement at the
+    point, so a refinement can only refine.  With no refinements no
+    callback is registered and meshing is untouched; a registered one
+    lives until its session closes.
+    """
+    refinements = tuple(refinements)
+    if not refinements:
+        return
+    d = int(dimension)
+
+    def size_at(dim: int, tag: int, x: float, y: float, z: float,
+                lc: float) -> float:
+        point = np.array([(x, y, z)[:d]])
+        return min(lc, *(float(fine(point)[0]) for fine in refinements))
+
+    gmsh.model.mesh.setSizeCallback(size_at)
 
 
 def apply_mesh_options(*, order: int, algorithm_2d: int, algorithm_3d: int,
@@ -143,21 +174,25 @@ def check_sizing_resolves_spans(boundaries: ArrayLike,
 
 
 def check_sizing_scale(outer_radius: float, sizes: Mapping[int, InterfaceSizing], *,
+                       refinements: Sequence[Refinement] = (),
                        floor: float = 1e-5, ceiling: float = 2.0) -> None:
     """Catch a sizing given at the wrong scale before gmsh does.
 
-    Sizing rules return lengths in the geometry's own units, the ones
-    its radii are in; a rule written for a unit ball and applied to one
-    of radius 6.4e6 asks for elements a million times too small, and
-    gmsh reports that as "identical points in triangulation", which
-    names neither the scale nor the rule.  Both bounds are relative to
-    the outer radius: a target element more than a hundred thousand
-    times smaller than the domain, or larger than the domain itself, is
-    not a resolution choice.
+    Sizing rules and refinements return lengths in the geometry's own
+    units, the ones its radii are in; a rule written for a unit ball
+    and applied to one of radius 6.4e6 asks for elements a million
+    times too small, and gmsh reports that as "identical points in
+    triangulation", which names neither the scale nor the rule.  Both
+    bounds are relative to the outer radius: a target element more than
+    a hundred thousand times smaller than the domain, or larger than
+    the domain itself, is not a resolution choice.  A refinement is
+    judged by its `size` floor.
     """
     outer = float(outer_radius)
-    smallest = min(s.size for s in sizes.values())
-    largest = max(s.size for s in sizes.values())
+    targets = ([s.size for s in sizes.values()]
+               + [float(fine.size) for fine in refinements])
+    smallest = min(targets)
+    largest = max(targets)
     if smallest < floor * outer:
         raise ValueError(
             f"the smallest element size is {smallest:.3g} against an outer "

@@ -70,11 +70,17 @@ class Mapping(Protocol):
     F[i, j] = d m_i / d X_j, and `jacobian(X)` returning det F.
     """
 
-    def __call__(self, X: ArrayLike) -> np.ndarray: ...
+    def __call__(self, X: ArrayLike) -> np.ndarray:
+        """m(X): the physical points of reference points X, (..., 3)."""
+        ...
 
-    def deformation_gradient(self, X: ArrayLike) -> np.ndarray: ...
+    def deformation_gradient(self, X: ArrayLike) -> np.ndarray:
+        """F at X, (..., 3, 3), with F[i, j] = d m_i / d X_j."""
+        ...
 
-    def jacobian(self, X: ArrayLike) -> np.ndarray: ...
+    def jacobian(self, X: ArrayLike) -> np.ndarray:
+        """J = det F at X, of the points' shape."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -163,12 +169,15 @@ class MappingBase:
     """
 
     def __call__(self, X: ArrayLike) -> np.ndarray:
+        """m(X); the concrete mapping supplies it."""
         raise NotImplementedError
 
     def deformation_gradient(self, X: ArrayLike) -> np.ndarray:
+        """F at X; the concrete mapping supplies it."""
         raise NotImplementedError
 
     def jacobian(self, X: ArrayLike) -> np.ndarray:
+        """J = det F at X; the concrete mapping supplies it."""
         raise NotImplementedError
 
     def right_cauchy_green(self, X: ArrayLike) -> np.ndarray:
@@ -223,25 +232,31 @@ class IdentityMapping(MappingBase):
     knots: tuple[float, ...] = ()
 
     def __call__(self, X: ArrayLike) -> np.ndarray:
+        """A float copy of X."""
         return np.array(np.asarray(X, dtype=float))
 
     def deformation_gradient(self, X: ArrayLike) -> np.ndarray:
+        """The identity on every point."""
         X = np.asarray(X, dtype=float)
         return np.broadcast_to(np.eye(3), X.shape[:-1] + (3, 3)).copy()
 
     def jacobian(self, X: ArrayLike) -> np.ndarray:
+        """Ones of the points' shape."""
         X = np.asarray(X, dtype=float)
         return np.ones(X.shape[:-1])
 
     def inverse(self, x: ArrayLike) -> np.ndarray:
+        """A float copy of x."""
         return np.array(np.asarray(x, dtype=float))
 
     def is_valid(self, *, X: ArrayLike | None = None,
                  sample: SphericalSample | None = None) -> ValidityReport:
+        """Valid everywhere, whatever the sample."""
         return ValidityReport(True, 1.0)
 
     @property
     def is_identity(self) -> bool:
+        """True: this is the identity."""
         return True
 
     def __repr__(self) -> str:
@@ -454,6 +469,7 @@ class RadialStretch(MappingBase):
 
     @property
     def is_identity(self) -> bool:
+        """Whether the driving displacement is the zero one."""
         return isinstance(self.h, ZeroDisplacement)
 
     def __repr__(self) -> str:
@@ -477,17 +493,21 @@ class ScaledMapping(MappingBase):
             raise ValueError(f"the scale factor must be positive, got {k}")
 
     def __call__(self, X: ArrayLike) -> np.ndarray:
+        """k m(X / k)."""
         return self.k * np.asarray(self.mapping(np.asarray(X, dtype=float) / self.k),
                                    dtype=float)
 
     def deformation_gradient(self, X: ArrayLike) -> np.ndarray:
+        """F of the underlying mapping at X / k, dimensionless as it is."""
         return self.mapping.deformation_gradient(np.asarray(X, dtype=float) / self.k)
 
     def jacobian(self, X: ArrayLike) -> np.ndarray:
+        """J of the underlying mapping at X / k."""
         return self.mapping.jacobian(np.asarray(X, dtype=float) / self.k)
 
     def is_valid(self, *, X: ArrayLike | None = None,
                  sample: SphericalSample | None = None) -> ValidityReport:
+        """The underlying mapping's verdict, in its own coordinates."""
         if X is not None:
             return self.mapping.is_valid(X=np.asarray(X, dtype=float) / self.k)
         if sample is not None:
@@ -497,15 +517,18 @@ class ScaledMapping(MappingBase):
         raise ValueError("give either points X or a (r, theta, phi) sample")
 
     def inverse(self, x: ArrayLike) -> np.ndarray:
+        """k m^-1(x / k), where the underlying mapping inverts itself."""
         return self.k * np.asarray(
             self.mapping.inverse(np.asarray(x, dtype=float) / self.k), dtype=float)
 
     @property
     def knots(self) -> tuple[float, ...]:
+        """The underlying mapping's knots, multiplied by k."""
         return tuple(self.k * float(k) for k in getattr(self.mapping, "knots", ()))
 
     @property
     def is_identity(self) -> bool:
+        """Whether the underlying mapping is the identity."""
         return bool(getattr(self.mapping, "is_identity", False))
 
     def __repr__(self) -> str:

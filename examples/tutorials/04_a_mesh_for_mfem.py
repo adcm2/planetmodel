@@ -9,12 +9,14 @@
 # the geometry's numbers to gmsh exactly as they are. It knows nothing
 # about units and changes no lengths.
 #
-# The tutorial has three steps. First a skeleton alone is meshed: a
+# The tutorial has four steps. First a skeleton alone is meshed: a
 # spherical mesh, the manifest that describes it, and the export to
 # MFEM. Then topography is added through a mapping, and the mesh of the
-# deformed planet is made at the export. Finally a buffer shell is added
+# deformed planet is made at the export. Then a buffer shell is added
 # outside the planet and the topography is tapered away across it, so
-# that the outer boundary of the mesh is a sphere.
+# that the outer boundary of the mesh is a sphere. Finally the mesh is
+# refined towards a curve on the surface, a shoreline, without refining
+# anything else.
 #
 # This tutorial needs the `meshing` extra (gmsh) and, for the MFEM
 # sections, the `mfem` extra (PyMFEM). Everything is coarse and runs in a
@@ -42,6 +44,7 @@ try:
         build_layered_mesh,
         export_mfem_mesh,
         manifest,
+        near_curve,
     )
 except ImportError as err:
     raise SystemExit(f"this tutorial needs gmsh: {err}")
@@ -344,6 +347,74 @@ if mfem is not None:
     buffered_mfem = export_mfem_mesh(buffered_result, workdir / "buffered_mfem")
     print("quality:", buffered_mfem.quality)
     read_with_mfem(buffered_mfem)
+
+# %% [markdown]
+# ## 4. Refining towards a feature
+#
+# The sizing sees distance to the interfaces and nothing else, so it
+# can only be radial. Some problems concentrate their error at a place
+# on a surface instead — a coastline, a source region, a network of
+# stations — and want the mesh finer there without paying for a finer
+# mesh everywhere. A *refinement* is an extra size field given to the
+# spec: a callable taking points of shape `(n, 3)` (or `(n, 2)` for a
+# disc), in the geometry's own lengths, and returning the element size
+# wanted at each, with two attributes, `size` and `far_size`, the
+# smallest and largest size it returns. The mesher takes the minimum of
+# the sizing and every refinement at each point, so a refinement can
+# only make the mesh finer, never coarser, and everything the sizing
+# guarantees still holds.
+#
+# `NearPoints` is the shipped refinement: the size is `size` out to one
+# `size` of distance from a cloud of points — the flat start is what
+# lets the mesher actually realise the asked size at the feature — and
+# then grows linearly to `far_size` over `decay_width`. Distance grows
+# with depth as fast as it grows sideways, so the refined region around
+# a curve on the surface is a tube around the curve, and nothing fine
+# is drilled towards the centre. `near_curve` builds a `NearPoints`
+# from the vertices of a polyline, resampling it finely enough that the
+# sampling cannot show through in the element sizes. The feature here
+# is the edge of a polar cap at colatitude 60 degrees — a shoreline,
+# say — given as sixty
+# vertices around the small circle, with the first repeated at the end
+# to close it.
+
+# %%
+colat = np.radians(60.0)
+angle = np.linspace(0.0, 2.0 * np.pi, 60)  # first vertex repeated: closed
+shoreline = np.stack(
+    [
+        np.sin(colat) * np.cos(angle),
+        np.sin(colat) * np.sin(angle),
+        np.full_like(angle, np.cos(colat)),
+    ],
+    axis=1,
+)
+coast = near_curve(shoreline, 0.05, 0.3, 0.2)
+print(coast)
+
+refined = build_layered_mesh(
+    MeshSpec(sphere, sizing, dimension=3, order=2, refinements=[coast]),
+    workdir / "refined",
+)
+print(refined)
+print("the same mesh without it had", result.counts["elements"], "elements")
+
+# %% [markdown]
+# The manifest records each refinement — its sizes, and for a cloud the
+# number of points and a digest of their coordinates — which is enough
+# to tell whether a mesh on disk was built towards the feature now
+# wanted, without storing the points themselves. The export is the same
+# as ever, and the refined patch along the shoreline is easy to see in
+# gmsh or glvis. Anything callable with the two attributes serves as a
+# refinement, so a size law of your own — finer where an ice sheet is
+# thick, say — needs no machinery beyond the function that states it.
+
+# %%
+print(manifest.read(refined.manifest_path).refinements)
+
+if mfem is not None:
+    refined_mfem = export_mfem_mesh(refined, workdir / "refined_mfem")
+    read_with_mfem(refined_mfem)
 
 # %% [markdown]
 # ## Looking at a mesh

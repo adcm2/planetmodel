@@ -1,6 +1,6 @@
 """A model: a geometry with a bag of fields on every layer.
 
-The third level of the design.  A `Model` holds a `Geometry`, one
+A `Model` holds a `Geometry`, one
 mapping of name to field per layer, the `Scales` its numbers are in,
 and the specs and constants that say what the names mean.  Everything
 a field is asked goes through its layer: `model.layer(i)["rho"]`, or
@@ -73,26 +73,32 @@ class Layer:
 
     @property
     def index(self) -> int:
+        """The layer's position, 0 at the centre."""
         return self._info.index
 
     @property
     def interval(self) -> tuple[float, float]:
+        """The (lo, hi) span of radius the layer occupies."""
         return self._info.interval
 
     @property
     def name(self) -> str | None:
+        """The layer's name, or None."""
         return self._info.name
 
     @property
     def info(self) -> LayerInfo:
+        """The geometry's record of this layer: index, interval, name."""
         return self._info
 
     @property
     def fields(self) -> abc.Mapping[str, Field]:
+        """The layer's fields by name, read-only."""
         return self._fields
 
     @property
     def names(self) -> tuple[str, ...]:
+        """The names of the fields this layer holds."""
         return tuple(self._fields)
 
     def __getitem__(self, name: str) -> Field:
@@ -233,14 +239,17 @@ class Model:
 
     @property
     def geometry(self) -> Geometry:
+        """The geometry the fields hang on."""
         return self._geometry
 
     @property
     def skeleton(self) -> Skeleton:
+        """The geometry's boundary radii."""
         return self._geometry.skeleton
 
     @property
     def scales(self) -> Scales:
+        """What one stored unit of length, mass and time is in SI."""
         return self._scales
 
     @property
@@ -250,10 +259,12 @@ class Model:
 
     @property
     def nlayers(self) -> int:
+        """The number of layers."""
         return len(self._layers)
 
     @property
     def layers(self) -> tuple[Layer, ...]:
+        """The layers, centre outward, each a bag of fields."""
         return self._layers
 
     @property
@@ -263,6 +274,7 @@ class Model:
 
     @property
     def constants(self) -> abc.Mapping[str, Constant]:
+        """The declared constants by name; `constant` reads their values."""
         return self._constants
 
     def layer(self, which: int | str) -> Layer:
@@ -388,16 +400,20 @@ class Model:
         return self.replaced(geometry=geometry)
 
     def renamed(self, *, layers: Renames = None, interfaces: Renames = None) -> "Model":
+        """The model with layers or interfaces renamed; see `Geometry.renamed`."""
         return self.replaced(geometry=self._geometry.renamed(layers=layers,
                                                           interfaces=interfaces),
                           check=False)
 
     def with_mapping(self, mapping: Mapping, *, check: bool = True) -> "Model":
+        """The model placed by `mapping`, over the same skeleton."""
         return self.replaced(geometry=self._geometry.with_mapping(mapping, check=check),
                           check=False)
 
     def stretched(self, h: RadialDisplacement | SphericalFunction, *,
                   name: str | None = None, check: bool = True) -> "Model":
+        """The model under the radial stretch driven by `h`; see
+        `Geometry.stretched`."""
         return self.replaced(geometry=self._geometry.stretched(h, name=name,
                                                             check=check),
                           check=False)
@@ -643,6 +659,7 @@ class Model:
         return self.converted(Scales.geophysical(length, density=density))
 
     def in_si(self) -> "Model":
+        """The model converted to SI scales."""
         return self.converted(Scales.SI)
 
     def __repr__(self) -> str:

@@ -161,10 +161,12 @@ class Geometry:
 
     @property
     def skeleton(self) -> Skeleton:
+        """The boundary radii the geometry is built over."""
         return self._sk
 
     @property
     def mapping(self) -> Mapping:
+        """The mapping taking the reference body to the physical one."""
         return self._m
 
     @property
@@ -174,6 +176,7 @@ class Geometry:
 
     @property
     def nlayers(self) -> int:
+        """The number of layers."""
         return self._sk.nlayers
 
     @property
@@ -183,15 +186,19 @@ class Geometry:
 
     @property
     def is_hollow(self) -> bool:
+        """Whether the innermost boundary is above zero."""
         return self._sk.is_hollow
 
     @property
     def layers(self) -> tuple[LayerInfo, ...]:
+        """Index, interval and name of every layer, centre outward."""
         return tuple(LayerInfo(i, self._sk.interval(i), name=self._layer_names[i])
                      for i in range(self._sk.nlayers))
 
     @property
     def interfaces(self) -> tuple[InterfaceInfo, ...]:
+        """Index, radius, `between` and name of every interface, centre
+        outward; see the module docstring for the numbering."""
         b = self._sk.boundaries
         L = self._sk.nlayers
         faces = []

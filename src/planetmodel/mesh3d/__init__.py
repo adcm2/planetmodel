@@ -30,13 +30,15 @@ from .export import ExportResult, export_mfem, export_mfem_mesh
 from .layered import build_layered_mesh
 from .offset import build_offset_mesh
 from .spec import (AngularResolution, CappedInterfaces, InterfaceSizing,
-                   MeshResult, MeshSpec, PerInterface, Shell, SizingRule,
-                   UniformInterfaces, ValidationReport)
+                   MeshResult, MeshSpec, NearPoints, PerInterface, Refinement,
+                   Shell, SizingRule, UniformInterfaces, ValidationReport,
+                   near_curve)
 
 __all__ = [
     "MeshSpec", "MeshResult", "Shell", "InterfaceSizing", "SizingRule",
     "AngularResolution", "UniformInterfaces", "CappedInterfaces",
-    "PerInterface", "ValidationReport", "build_layered_mesh",
+    "PerInterface", "Refinement", "NearPoints", "near_curve",
+    "ValidationReport", "build_layered_mesh",
     "build_offset_mesh", "export_mfem_mesh", "export_mfem", "ExportResult",
     "manifest",
 ]

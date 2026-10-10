@@ -14,7 +14,11 @@ interfaces of the computational domain and its outer radius, in the
 geometry's own lengths, and returns one InterfaceSizing per interface
 index.  The shipped rules are frozen dataclasses whose instances
 are the callable, so they print, compare and serialise; anything else
-is a function.
+is a function.  A refinement is a second kind of callable, a size
+field over the reference domain composed into the sizing by minimum,
+so it can only refine, never coarsen; NearPoints and near_curve are
+the shipped kinds, and anything with the Refinement protocol's two
+attributes serves.
 
 Nothing here knows about units.  Every length is a number in the
 geometry's own lengths, and the builder hands those numbers to gmsh
@@ -22,17 +26,23 @@ unchanged: a geometry of radius 6.4e6 is meshed at radius 6.4e6.
 """
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import KW_ONLY, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
+
+import numpy as np
+from numpy.typing import ArrayLike
+from scipy.spatial import KDTree
 
 from ..geometry import Geometry, InterfaceInfo, LayerInfo
 from ..mapping import Mapping
 
 __all__ = [
     "Shell", "InterfaceSizing", "SizingRule", "AngularResolution",
-    "UniformInterfaces", "CappedInterfaces", "PerInterface", "MeshSpec",
+    "UniformInterfaces", "CappedInterfaces", "PerInterface", "Refinement",
+    "NearPoints", "near_curve", "MeshSpec",
     "MeshResult", "ValidationReport", "optimise_methods", "DELIVERIES",
     "OUTER_BOUNDARIES", "QUALITY_FLOOR",
 ]
@@ -88,6 +98,18 @@ class Shell:
         return float(inner) * (1.0 + float(self.ratio))
 
 
+def _require_ramp(size: float, far_size: float, decay_width: float) -> None:
+    """Refuse ramp lengths that are not a refinement towards the target."""
+    for name, value in (("size", size), ("far_size", far_size),
+                        ("decay_width", decay_width)):
+        if not value > 0.0:
+            raise ValueError(f"{name} must be positive, got {value}")
+    if far_size < size:
+        raise ValueError(
+            f"far_size ({far_size}) is smaller than size ({size}): the mesh "
+            "would refine away from the target rather than towards it")
+
+
 @dataclass(frozen=True)
 class InterfaceSizing:
     """Target element size at an interface, and how it relaxes away.
@@ -104,15 +126,7 @@ class InterfaceSizing:
     decay_width: float
 
     def __post_init__(self) -> None:
-        for name, value in (("size", self.size), ("far_size", self.far_size),
-                            ("decay_width", self.decay_width)):
-            if not value > 0.0:
-                raise ValueError(f"{name} must be positive, got {value}")
-        if self.far_size < self.size:
-            raise ValueError(
-                f"far_size ({self.far_size}) is smaller than size "
-                f"({self.size}): the mesh would refine away from the "
-                "interface rather than towards it")
+        _require_ramp(self.size, self.far_size, self.decay_width)
 
     def scaled(self, factor: float) -> "InterfaceSizing":
         """The same sizing with every length multiplied by `factor`."""
@@ -125,6 +139,162 @@ class InterfaceSizing:
 #: objects with `index`, `radius`, `between` and `name`.
 type SizingRule = Callable[[Sequence[InterfaceInfo], float],
                            dict[int, InterfaceSizing]]
+
+
+class Refinement(Protocol):
+    """A size field over the reference domain, composed in by minimum.
+
+    A refinement maps points of shape (n, d), in reference coordinates
+    and the geometry's own lengths, to the element sizes wanted there,
+    shape (n,).  `size` is the floor of what it returns and `far_size`
+    the ceiling: they let the builder bound gmsh's global sizes and the
+    scale check judge the refinement without evaluating it.  The builder
+    takes the minimum over the per-interface sizing and every
+    refinement at each point, so a refinement can only refine, never
+    coarsen, and the sizing's own guarantees stand everywhere.
+    `planetmodel.testing.check_refinement` holds an implementation to
+    this contract.
+    """
+
+    #: The smallest size the refinement returns.
+    size: float
+    #: The largest size the refinement returns.
+    far_size: float
+
+    def __call__(self, points: np.ndarray) -> np.ndarray:
+        """The element sizes at (n, d) reference points, shape (n,)."""
+        ...
+
+
+def _ramp(distance: ArrayLike, size: float, far_size: float,
+          decay_width: float) -> np.ndarray:
+    """The element size at `distance` from a refined target: `size` out
+    to one `size` of distance, then growing linearly to `far_size` over
+    `decay_width`.
+
+    The plateau is what lets the asked size be realised.  The mesher
+    settles where an element's own length agrees with the size field
+    across the element, so against a ramp of gradient g starting at the
+    target the realised size there is about size / (1 - g/2) — twice
+    the ask already at g = 1.  Held flat for one element's width, the
+    field gives the mesher room to place that element before the ramp
+    bites.  An interface needs no plateau: it is meshed as a surface,
+    on which its distance is exactly zero.
+    """
+    d = np.maximum(np.asarray(distance, dtype=float) - size, 0.0)
+    return np.minimum(far_size, size + (far_size - size) * (d / decay_width))
+
+
+@dataclass(frozen=True, eq=False, repr=False)
+class NearPoints:
+    """Refine towards a cloud of points.
+
+    The points are positions in the reference domain, shape (n, 2) or
+    (n, 3) in the geometry's own lengths; a cloud on an interface is the
+    caller's unit directions times its radius.  The size is `size` out
+    to one `size` of Euclidean distance from the cloud (a KD-tree
+    query) — the plateau that lets the mesher realise the asked size,
+    see `_ramp` — and grows linearly to `far_size` over the next
+    `decay_width`.  Distance grows with depth under a surface cloud as
+    fast as it grows laterally, so the refined region around a densely
+    sampled curve is a tube of radius about `size + decay_width`, and
+    roughly `length * decay_width**2 / size**3` extra tetrahedra (in
+    2D, `length * decay_width / size**2` triangles) come with it, which
+    is where the element budget goes when the cloud's `size` is far
+    below the `far_size` around it.
+
+    The distance to a cloud sampled from a curve is zero at the points
+    and about half their spacing between them; spacing at most `size`
+    keeps that ripple inside the plateau, where it changes nothing.
+    `near_curve` guarantees the spacing by construction, while a cloud
+    of genuinely isolated points needs no such rule.  The array is
+    stored read-only and a copy; equality, hashing and the manifest go
+    through `digest` and the scalars rather than the points themselves.
+    """
+
+    #: The cloud, (n, d) reference coordinates, stored read-only.
+    points: np.ndarray
+    #: The element size on the cloud.
+    size: float
+    #: The element size far from it.
+    far_size: float
+    #: The distance over which the size grows from `size` to `far_size`.
+    decay_width: float
+
+    def __post_init__(self) -> None:
+        pts = np.array(self.points, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] not in (2, 3) or pts.shape[0] == 0:
+            raise ValueError(
+                "points must have shape (n, 2) or (n, 3) with n >= 1, got "
+                f"shape {np.shape(self.points)}")
+        if not np.all(np.isfinite(pts)):
+            raise ValueError("points must be finite")
+        _require_ramp(self.size, self.far_size, self.decay_width)
+        pts.setflags(write=False)
+        object.__setattr__(self, "points", pts)
+        object.__setattr__(self, "_tree", KDTree(pts))
+
+    def __call__(self, points: ArrayLike) -> np.ndarray:
+        """The element sizes at `points`, shaped (n, d) like the cloud."""
+        pts = np.asarray(points, dtype=float)
+        d = self.points.shape[1]
+        if pts.ndim != 2 or pts.shape[1] != d:
+            raise ValueError(
+                f"points must have shape (n, {d}) like the cloud, got "
+                f"{pts.shape}")
+        distance, _ = self._tree.query(pts)
+        return _ramp(distance, self.size, self.far_size, self.decay_width)
+
+    @property
+    def digest(self) -> str:
+        """A hex digest of the cloud's shape and bytes: its identity."""
+        h = hashlib.sha256(str(self.points.shape).encode())
+        h.update(np.ascontiguousarray(self.points).tobytes())
+        return h.hexdigest()[:16]
+
+    def _key(self) -> tuple:
+        return (self.points.shape, self.digest, self.size, self.far_size,
+                self.decay_width)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, NearPoints):
+            return NotImplemented
+        return self._key() == other._key()
+
+    def __hash__(self) -> int:
+        return hash(self._key())
+
+    def __repr__(self) -> str:
+        n, d = self.points.shape
+        return (f"NearPoints({n} points in {d}D [{self.digest}], "
+                f"size={self.size!r}, far_size={self.far_size!r}, "
+                f"decay_width={self.decay_width!r})")
+
+
+def near_curve(vertices: ArrayLike, size: float, far_size: float,
+               decay_width: float) -> NearPoints:
+    """Refine towards a polyline: NearPoints on a resampling of it.
+
+    `vertices` is (m, 2) or (m, 3), the polyline's vertices in order; a
+    closed curve repeats its first vertex at the end.  Every segment is
+    subdivided to chord spacing at most `size`, which keeps the ripple
+    in the distance to the sampled cloud inside the ramp's plateau,
+    where it changes no size, whatever the vertex spacing given.  The
+    other three arguments are NearPoints's.
+    """
+    v = np.asarray(vertices, dtype=float)
+    if v.ndim != 2 or v.shape[1] not in (2, 3) or v.shape[0] < 2:
+        raise ValueError(
+            "vertices must have shape (m, 2) or (m, 3) with m >= 2, got "
+            f"shape {v.shape}")
+    if not size > 0.0:
+        raise ValueError(f"size must be positive, got {size}")
+    points = [v[:1]]
+    for a, b in zip(v[:-1], v[1:]):
+        k = max(int(np.ceil(np.linalg.norm(b - a) / float(size))), 1)
+        t = (np.arange(1, k + 1) / k)[:, None]
+        points.append(a + t * (b - a))
+    return NearPoints(np.concatenate(points), size, far_size, decay_width)
 
 
 def optimise_methods(optimise: str | Sequence[str] | None) -> tuple[str, ...]:
@@ -174,6 +344,7 @@ class AngularResolution:
 
     def __call__(self, interfaces: Sequence[InterfaceInfo],
                  outer_radius: float) -> dict[int, InterfaceSizing]:
+        """One sizing per interface: size h_ref r / r_ref capped at h_far."""
         r_ref = float(outer_radius) if self.r_ref is None else float(self.r_ref)
         out = {}
         for face in interfaces:
@@ -197,6 +368,7 @@ class UniformInterfaces:
 
     def __call__(self, interfaces: Sequence[InterfaceInfo],
                  outer_radius: float) -> dict[int, InterfaceSizing]:
+        """The same sizing for every interface."""
         return {face.index: InterfaceSizing(self.h_min, self.h_max,
                                             self.decay_width)
                 for face in interfaces}
@@ -236,6 +408,7 @@ class CappedInterfaces:
 
     def __call__(self, interfaces: Sequence[InterfaceInfo],
                  outer_radius: float) -> dict[int, InterfaceSizing]:
+        """One sizing per interface, capped as the class describes."""
         faces = sorted(interfaces, key=lambda f: f.radius)
         radii = [f.radius for f in faces]
         out = {}
@@ -270,6 +443,7 @@ class PerInterface:
 
     def __call__(self, interfaces: Sequence[InterfaceInfo],
                  outer_radius: float) -> dict[int, InterfaceSizing]:
+        """The named sizings over the base rule's, every interface covered."""
         out = (dict(self.base(interfaces, outer_radius))
                if self.base is not None else {})
         by_name = {f.name: f.index for f in interfaces if f.name}
@@ -312,6 +486,9 @@ class MeshSpec:
     order: int = 2
     #: Shells appended outside the geometry, innermost first.
     shells: Sequence[Shell] = ()
+    #: Extra size fields composed into the sizing by minimum; each can
+    #: only refine, never coarsen.
+    refinements: Sequence[Refinement] = ()
     #: "free": the outer boundary of the computational domain may carry
     #: topography; "spherical": the mapping must be the identity on it.
     outer_boundary: str = "free"
@@ -349,6 +526,22 @@ class MeshSpec:
             if not isinstance(shell, Shell):
                 raise TypeError(
                     f"shells must be Shell instances, got {type(shell).__name__}")
+        object.__setattr__(self, "refinements", tuple(self.refinements))
+        for i, fine in enumerate(self.refinements):
+            if not callable(fine):
+                raise TypeError(
+                    f"refinements[{i}] is {type(fine).__name__}, not a callable "
+                    "size field")
+            for name in ("size", "far_size"):
+                value = getattr(fine, name, None)
+                if not isinstance(value, (int, float)) or not value > 0.0:
+                    raise ValueError(
+                        f"refinements[{i}] must carry a positive {name}, "
+                        f"got {value!r}")
+            if fine.far_size < fine.size:
+                raise ValueError(
+                    f"refinements[{i}] has far_size ({fine.far_size}) below its "
+                    f"size ({fine.size}): it would coarsen towards its target")
         inner = float(self.geometry.skeleton.boundaries[-1])
         for shell in self.shells:
             outer = shell.outer_radius(inner)
@@ -431,6 +624,7 @@ class ValidationReport:
 
     @property
     def ok(self) -> bool:
+        """Whether every check passed."""
         return not self.failures
 
     def raise_if_failed(self) -> "ValidationReport":

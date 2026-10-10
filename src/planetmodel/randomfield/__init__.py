@@ -14,8 +14,8 @@ every Sobolev metric and Matern covariance is a power; `SphericalBasis`
 holds the bases of degrees 0 ... lmax and fixes the order of their
 coefficients as one vector.  That is what a space, an operator and a
 Gaussian measure are made of.  `RadialGRF`, `SphericalGRF` and
-`LayeredGRF` are the first consumers: they sample fields of radius, of
-a shell and of the layers of a skeleton by Karhunen-Loeve expansion in
+`LayeredGRF` are the samplers built on them: fields of radius, of
+a shell and of the layers of a skeleton, by Karhunen-Loeve expansion in
 those bases, with an exact marginal standard deviation.  The shell
 fields are expanded in the real orthonormal harmonics of
 `planetmodel.harmonics`, whose grid synthesis needs the `harmonics`

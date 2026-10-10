@@ -7,10 +7,9 @@ no units: a discontinuity is two layers asked separately, and what the
 numbers mean is the model's business.
 
 `evaluate(r, theta, phi)` broadcasts its coordinates and returns float64
-(complex128 for a complex-valued field, as a model frozen at a frequency
-holds)
-of the broadcast shape followed by the character's Voigt shape for
-ranks 2 and 4, or its component shape otherwise.  Components are given
+— complex128 for a complex-valued field, such as a model frozen at a
+frequency holds — of the broadcast shape followed by the character's
+Voigt shape for ranks 2 and 4, or its component shape otherwise.  Components are given
 in the local spherical frame (e_r, e_theta, e_phi) at the point unless
 `frame="cartesian"` asks for Cartesian ones; a rank-1 field rotates as
 R v, a Voigt rank-2 as M v and a Voigt rank-4 as M C M^T with M the Bond
@@ -78,7 +77,10 @@ class Field(Protocol):
     name: str | None
 
     def evaluate(self, r: ArrayLike, theta: ArrayLike, phi: ArrayLike, *,
-                 frame: str = "spherical") -> np.ndarray: ...
+                 frame: str = "spherical") -> np.ndarray:
+        """The components at the broadcast coordinates, in `frame`:
+        the broadcast shape followed by the character's stored shape."""
+        ...
 
 
 def _interval(interval: tuple[float, float]) -> tuple[float, float]:
@@ -116,14 +118,17 @@ class FieldBase:
 
     @property
     def interval(self) -> tuple[float, float]:
+        """The (lo, hi) span of radius the field lives on."""
         return self._interval
 
     @property
     def character(self) -> Character:
+        """The field's law under a mapping: rank, weight, Voigt or not."""
         return self._character
 
     @property
     def name(self) -> str | None:
+        """The field's name, or None for an unnamed one."""
         return self._name
 
     @property
@@ -133,6 +138,7 @@ class FieldBase:
 
     @property
     def stored_shape(self) -> tuple[int, ...]:
+        """The trailing shape of the values: `stored_shape` of the character."""
         return stored_shape(self._character)
 
     # -- the question -------------------------------------------------------
@@ -425,6 +431,7 @@ class RadialField(FieldBase):
                          name=self._name)
 
     def renamed(self, name: str | None) -> "RadialField":
+        """The same field under `name`."""
         return self._map(lambda f: f, name=name)
 
     def __repr__(self) -> str:
@@ -490,6 +497,7 @@ class AnalyticField(FieldBase):
             rtol=self._rtol)
 
     def renamed(self, name: str | None) -> "AnalyticField":
+        """The same field under `name`."""
         return AnalyticField(self._interval, self._fn, character=self._character,
                              name=name, frame=self._frame, rtol=self._rtol)
 
@@ -562,10 +570,12 @@ class ComposedField(FieldBase):
 
     @property
     def fn(self) -> Callable[..., ArrayLike]:
+        """The pointwise function applied to the sources' values."""
         return self._fn
 
     @property
     def sources(self) -> tuple[Field, ...]:
+        """The fields whose values the function is applied to."""
         return self._sources
 
     def _values(self, r: np.ndarray, theta: np.ndarray | None,
@@ -575,6 +585,7 @@ class ComposedField(FieldBase):
         return to_stored(raw, r.shape, self._character, self)
 
     def on_interval(self, lo: float, hi: float) -> "ComposedField":
+        """The same composition with every source restated on (lo, hi)."""
         return ComposedField(self._fn, [s.on_interval(lo, hi) for s in self._sources],
                              character=self._character, name=self._name)
 
@@ -587,6 +598,7 @@ class ComposedField(FieldBase):
                              character=self._character, name=self._name)
 
     def renamed(self, name: str | None) -> "ComposedField":
+        """The same field under `name`."""
         return ComposedField(self._fn, self._sources, character=self._character,
                              name=name)
 

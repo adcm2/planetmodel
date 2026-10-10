@@ -36,7 +36,7 @@ from . import manifest
 from ._geometry import build_concentric
 from ._orient import orient_mesh, raise_order
 from ._session import session
-from ._sizing import (apply_mesh_options, apply_size_fields,
+from ._sizing import (apply_mesh_options, apply_refinements, apply_size_fields,
                       check_sizing_resolves_spans, check_sizing_scale)
 from ._tagging import apply_physical_groups, identify
 from ._validate import validate_mesh
@@ -124,7 +124,7 @@ def build_layered_mesh(spec: MeshSpec, path: str | Path, *, verbose: bool = Fals
     interface_names = [f.name for f in domain.interfaces]
 
     sizes = dict(spec.sizing(domain.interfaces, outer))
-    check_sizing_scale(outer, sizes)
+    check_sizing_scale(outer, sizes, refinements=spec.refinements)
     check_sizing_resolves_spans(boundaries, sizes)
 
     with session(name=path.stem or "planetmodel", verbose=verbose):
@@ -137,10 +137,12 @@ def build_layered_mesh(spec: MeshSpec, path: str | Path, *, verbose: bool = Fals
 
         t0 = clock()
         apply_size_fields(tagging, sizes)
+        apply_refinements(spec.refinements, dimension=d)
         apply_mesh_options(
             order=1, algorithm_2d=spec.algorithm_2d,
             algorithm_3d=spec.algorithm_3d,
-            size_min=min(s.size for s in sizes.values()),
+            size_min=min([s.size for s in sizes.values()]
+                         + [float(f.size) for f in spec.refinements]),
             size_max=max(s.far_size for s in sizes.values()))
         gmsh.model.mesh.generate(d)
         timings["mesh"] = clock() - t0
@@ -203,6 +205,9 @@ def _build_manifest(spec: MeshSpec, msh_path: Path) -> manifest.MeshManifest:
     interfaces = [manifest.InterfaceEntry.from_interface(
         face, attribute=k + 1, radius=face.radius)
         for k, face in enumerate(domain.interfaces)]
+    refinements = [manifest.RefinementEntry.from_refinement(
+        fine, name=policy_name(fine)) for fine in spec.refinements]
     return manifest.MeshManifest.from_build(
         mesh=manifest.mesh_block(msh_path, format="msh", nodes="reference"),
-        layers=layers, interfaces=interfaces, meta=spec.meta)
+        layers=layers, interfaces=interfaces, refinements=refinements,
+        meta=spec.meta)

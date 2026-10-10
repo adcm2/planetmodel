@@ -42,6 +42,7 @@ class ConcentricGeometry:
 
     @property
     def n_layers(self) -> int:
+        """The number of shells: one cell each."""
         return len(self.cells)
 
 
