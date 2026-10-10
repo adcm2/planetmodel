@@ -1,4 +1,4 @@
-# planetmodel: A Python library for working with spherical or aspherical planetary models
+# planetmodel: A library for spherical and aspherical planetary models
 
 [![CI](https://github.com/da380/planetmodel/actions/workflows/ci.yml/badge.svg)](https://github.com/da380/planetmodel/actions/workflows/ci.yml)
 [![PyPI version](https://img.shields.io/pypi/v/planetmodel.svg)](https://pypi.org/project/planetmodel/)
