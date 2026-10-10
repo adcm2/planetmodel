@@ -56,6 +56,23 @@ Every one of them runs headless in the test suite (`tests/test_tutorials.py`),
 the core ones with warnings as errors; a tutorial that starts failing is a
 test failure.
 
+## Documentation
+
+The API reference is built by Sphinx from the docstrings and published
+on Read the Docs, which builds every push from `.readthedocs.yaml`. To
+build it locally:
+
+```bash
+poetry install --with docs
+make -C docs html                        # the pages land in docs/build/html
+```
+
+`sphinx-apidoc` regenerates the per-module `.rst` stubs on every build
+(wired up in `docs/source/conf.py`), so the only sources under
+`docs/source/` are `conf.py` and `index.rst`; the stubs and the built
+pages are gitignored. The optional extras are not needed: `conf.py`
+mocks them for autodoc.
+
 ## Releasing
 
 1. Set the version in `pyproject.toml` and `src/planetmodel/__init__.py`

@@ -18,8 +18,11 @@ __pycache__/
 coverage.xml
 htmlcov/
 
-# Sphinx documentation build output
+# Sphinx documentation build output, including the .rst stubs that
+# sphinx-apidoc regenerates on every build (see docs/source/conf.py)
 docs/build/
+docs/source/modules.rst
+docs/source/planetmodel*.rst
 
 
 # outputs of examples and tests
