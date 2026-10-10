@@ -1,5 +1,10 @@
 # planetmodel: A Python library for working with spherical or aspherical planetary models
 
+[![CI](https://github.com/da380/planetmodel/actions/workflows/ci.yml/badge.svg)](https://github.com/da380/planetmodel/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/planetmodel.svg)](https://pypi.org/project/planetmodel/)
+[![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
+[![Documentation Status](https://readthedocs.org/projects/planetmodel/badge/?version=latest)](https://planetmodel.readthedocs.io/en/latest/?badge=latest)
+
 Spherically layered planetary models — a planet described as concentric
 layers with physical properties on each — and the meshes that hand such
 a model to a numerical solver.

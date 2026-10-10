@@ -42,9 +42,22 @@ dev = [
     "pre-commit (>=4)",
     "pytest-cov (>=6)",
 ]
+docs = [
+    # The lower bound: the apidoc template in docs/apidoc_templates is
+    # named package.rst.jinja, the name Sphinx looks for from 7.4
+    # onwards.  The upper: Sphinx 9's autodoc evaluates PEP 695 `type`
+    # aliases, which fails on the names imported under TYPE_CHECKING.
+    "sphinx>=7.4,<9",
+    "furo>=2024.8",
+]
 
 [tool.poetry]
 packages = [{include = "planetmodel", from = "src"}]
+
+# The docs group serves Read the Docs and local documentation builds
+# (`poetry install --with docs`); a plain install leaves it out.
+[tool.poetry.group.docs]
+optional = true
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
