@@ -1,4 +1,4 @@
-# planetmodel
+# planetmodel: A Python library for working with spherical or aspherical planetary models
 
 Spherically layered planetary models — a planet described as concentric
 layers with physical properties on each — and the meshes that hand such
