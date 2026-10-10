@@ -300,8 +300,8 @@ def test_the_json_is_flat_numbers_and_strings(tmp_path):
     path = sc.write(tmp_path / "flat", card_for(hollow_geometry()))
     data = json.loads(path.read_text())
     assert data["schema"] == sc.SCHEMA
-    assert set(data) == {"schema", "mesh", "layers", "interfaces", "fields",
-                         "scales", "constants", "meta"}
+    assert set(data) == {"schema", "mesh", "layers", "interfaces",
+                         "refinements", "fields", "scales", "constants", "meta"}
     assert isinstance(data["layers"][0]["r_inner"], float)
     assert data["fields"] == [] and data["scales"] is None
 

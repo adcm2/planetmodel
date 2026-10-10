@@ -1,75 +1,77 @@
 # planetmodel
 
-Spherically layered planetary models: a skeleton of boundary radii, a
-geometry that places it in the physical world through one continuous
-mapping, fields on each layer, and the meshes that hand a model to a
-solver.
+Spherically layered planetary models — a planet described as concentric
+layers with physical properties on each — and the meshes that hand such
+a model to a numerical solver.
 
-The library covers the skeleton, the geometry and its mappings; fields
-on one interval with an exact polynomial algebra; the model with its
-units, named model types (PREM from its polynomials, simple layered
-models, any mineos deck) and the mixins that complete them with moduli,
-velocities, gravity and linear rheologies; a radial spectral-element
-mesh; 2D and 3D meshes via gmsh with a manifest and export to MFEM; and
-a sub-package that consumes the radial mesh, `planetmodel.randomfield`,
-which draws Matern random fields on balls, annuli and layers. The Love
-numbers of a model, the loading and tidal problem solved on the radial
-mesh, are computed by [pyslfp](https://github.com/da380/pyslfp), which
-builds on this library. A netCDF file for 3D models is next.
+With this library you can build a model (PREM out of the box, simple
+layered models, any mineos deck file, or a model type of your own), ask
+it for its properties with the discontinuities treated honestly, deform
+it with ellipticity or surface topography, and mesh it: a
+spectral-element mesh along the radius, or a 2D or 3D finite-element
+mesh for [MFEM](https://mfem.org), refined where you need it. A
+sub-package, `planetmodel.randomfield`, draws Matérn random fields on
+balls, annuli and layers.
 
-## The ideas
+## Design
 
-**A skeleton.** A strictly increasing list of boundary radii, possibly
-starting above zero for a shell. It answers geometric questions
-(intervals, where a radius lies, with the two sides of a boundary left to
-the caller) and supports surgery: refine, truncate, hollow, extend,
-coarsen.
+**A skeleton.** The list of boundary radii, increasing, possibly
+starting above zero for a hollow shell. It answers geometric questions
+(which layer a radius lies in, the intervals between boundaries) and
+supports surgery: refine, truncate, hollow, extend, coarsen.
 
-**A geometry.** A skeleton, one mapping from the reference ball to the
-physical body, and the names of layers and interfaces. The mapping must
-be orientation-preserving, continuous, and kinked only on skeleton
-boundaries; a geometry checks those invariants when it is built. The
-shipped mapping is the radial stretch `m(X) = (r + h) e_r` driven by any
-callable `h(r, theta, phi)`, with closed forms for its deformation
-gradient, Jacobian, validity, inverse and linearisation; any object with
-`__call__`, `deformation_gradient` and `jacobian` is a mapping.
+**A geometry.** A skeleton placed in the physical world by one
+continuous mapping from the reference (spherical) body to the physical
+one, plus names for the layers and interfaces. Ellipticity or surface
+topography is therefore a property of the whole model, stated once,
+rather than something each field has to know about. The shipped mapping
+is the radial stretch `m(X) = (r + h) e_r` driven by any callable
+`h(r, theta, phi)`; any object with `__call__`,
+`deformation_gradient` and `jacobian` serves as a mapping, and a
+geometry checks the invariants (orientation preserved, continuous,
+kinked only on boundaries) when it is built.
 
-**A field on one interval.** Data on one layer: an interval, a character
-(the tensor rank and weight that say how it transforms), a name, and
+**A field on one layer.** An interval, a name, a character (the tensor
+rank and weight that say how the values transform), and
 `evaluate(r, theta, phi, *, frame)` giving components in the local
-spherical frame or in Cartesian ones. A discontinuity is two layers
-asked separately. Radial fields sit on layer functions whose algebra is
-exact on polynomials, so PREM's moduli `rho v^2` are exact polynomials;
-analytic formulas, pointwise compositions, and fields pushed forward
-through a mapping are fields too. A field may be complex-valued, which
+spherical frame or in Cartesian ones. A discontinuity is simply two
+layers: ask each side and get each side's answer. Radial fields sit on
+an algebra that is exact on polynomials — PREM's moduli `rho v^2` are
+exact polynomials, not fits — and fields may be complex-valued, which
 is what a model frozen at a frequency holds.
 
-**One model class.** A geometry with a bag of fields on every layer.
-What a name means comes from the shipped vocabulary or the specs a model
-is given. A model type (`PREM`, `LayeredIsotropicElastic`, `MineosModel`,
-or your own) is a class derived from `Model` alone; the mixins of
-`planetmodel.behaviours` add the shared derivations as methods, written
-once as free functions: the Love moduli beside the velocities, the
-elastic tensor and its Voigt average, gravity, and the constant-Q and
-Maxwell rheologies frozen at a frequency.
+**One model class.** A model is a geometry with named fields on every
+layer; what a name like `"rho"` means comes from the shipped vocabulary
+or from the specs the model is given. A model type (`PREM`,
+`LayeredIsotropicElastic`, `MineosModel`, or your own) derives from
+`Model` alone — there is no hierarchy of model types — and the mixins
+of `planetmodel.behaviours` add the standard derivations: the Love
+moduli beside the velocities, the elastic tensor and its Voigt average,
+gravity, and the constant-Q and Maxwell rheologies frozen at a
+frequency.
 
 **Units in one place.** The model's `Scales` say what one stored unit
-is in SI, and `converted` re-expresses the whole model by name, exactly
-for polynomials; `G` is read in the model's units. Nothing else names a
-unit: radii are numbers, every tolerance is relative, and the meshers
-hand the geometry's numbers to gmsh unchanged.
+of length, mass and time is in SI, and `converted` re-expresses the
+whole model, exactly for polynomials. Nothing else names a unit: radii
+are numbers, tolerances are relative, and the meshers hand the
+geometry's numbers to gmsh unchanged.
 
-**Two meshers.** `planetmodel.mesh1d` lays Gauss-Lobatto-Legendre
-elements along the radius with every skeleton boundary an element
-boundary, evaluates a model's fields and gravity on its nodes, and
-samples a model on an angular grid. `planetmodel.mesh3d` meshes a
-geometry, full or hollow, in 2D or 3D, with shells outside it, writes a
-JSON manifest saying what every attribute means, and exports the mesh,
-the mapping's displacement and the model's fields to MFEM.
+**Two meshers.** `planetmodel.mesh1d` lays Gauss–Lobatto–Legendre
+elements along the radius with every boundary an element boundary,
+evaluates a model's fields and gravity on the nodes, and samples a
+model on an angular grid.
+`planetmodel.mesh3d` meshes a geometry, full or hollow, in 2D or 3D,
+with buffer shells outside it when a far-field condition needs room;
+element sizes are controlled per interface, and refinements
+(`NearPoints`, `near_curve`, or any size function of your own) make the
+mesh finer towards a coastline, a source region or a station network
+without coarsening anything elsewhere. Every mesh comes with a JSON
+manifest saying what each attribute means, and exports to MFEM together
+with the mapping's displacement and the model's fields.
 
 **Executable contracts.** `planetmodel.testing` holds one `check_*`
-function per protocol; the shipped implementations and yours are held to
-the same call.
+function per protocol, and the shipped implementations and your own are
+held to the same call.
 
 ## Installing
 
@@ -85,22 +87,25 @@ pip install 'planetmodel[notebook]'         # ipykernel, to run tutorials cell b
 Python 3.12 or later. Nothing optional is imported by `import
 planetmodel`.
 
-## Twelve lines
+## A first look
 
 ```python
-import numpy as np
 from planetmodel import PREM, RadialMesh, flattening, gravity
 
-m = PREM()                                                  # exact polynomials, SI
-oc, mantle = m.layer("outer_core"), m.layer("lowermost_mantle")
-cmb = m.geometry.interface("cmb").radius
-print(oc["rho"](cmb), mantle["rho"](cmb), m.is_fluid("outer_core"))  # both sides
-print(m.elastic_moduli("lowermost_mantle")(cmb, 0.3, 0.0)[:3, :3] / 1e9)  # Voigt, GPa
-print(gravity(m, [cmb, 6371e3]), m.moduli_at("lower_mantle", 2 * np.pi / 3600)["L"](5e6))
+m = PREM()                              # exact polynomials, SI units
 
+# Fields live on layers, so a discontinuity gives two honest answers,
+# one from each side.
+r_cmb = m.geometry.interface("cmb").radius
+print(m.layer("outer_core")["rho"](r_cmb))         # density, core side
+print(m.layer("lowermost_mantle")["rho"](r_cmb))   # density, mantle side
+print(gravity(m, [r_cmb, 6371e3]))                 # gravity at the CMB and surface
+
+# Reshape the model: non-dimensionalise it, flatten it by 1/300, and
+# lay a radial spectral-element mesh over it.
 nd = m.nondimensionalised().stretched(flattening(1 / 300, rmax=1.0))
 mesh = RadialMesh(nd, ngll=5, drmax=0.05)
-print(nd.G, mesh.nodal(nd, "rho").shape, nd.geometry.validity())
+print(mesh.nodal(nd, "rho").shape)      # density at every mesh node
 ```
 
 ## Where to go next

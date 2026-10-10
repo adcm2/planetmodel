@@ -15,6 +15,7 @@ The schema is `planetmodel.mesh.manifest/5`, with these blocks:
                 "physical"), read_options, displacement
   layers[]      attribute, name, r_inner, r_outer, in_geometry, fluid
   interfaces[]  attribute, name, radius, between_layers, kind, values
+  refinements[] name, size, far_size, decay_width, points, digest
   fields[]      name, file, fe_space, vdim, ordering, rank, weight,
                 voigt, unit, layers, radial_degree
   scales        length, mass, time in SI; null until a model is exported
@@ -33,7 +34,10 @@ that reproduces a scalar field within each layer holding it.
 
 The layers and interfaces are the skeleton the mesh was built on, in
 the mesh's own lengths: the mesher neither scales nor normalises, so a
-radius here is a radius in the mesh.  Layers are numbered by
+radius here is a radius in the mesh.  `refinements` are the extra size
+fields the mesh was sized under, recorded for provenance and change
+detection — a point cloud by its count and digest, never the points
+themselves.  Layers are numbered by
 `attribute` 1..N from the centre and `between_layers` gives 0-based
 layer indices with -1 for the outside.  A field is a file beside the
 mesh, a finite-element space to read it into, a character (`rank`,
@@ -59,9 +63,11 @@ if TYPE_CHECKING:
     from ..character import Character
     from ..geometry import InterfaceInfo, LayerInfo
     from ..model import Model
+    from .spec import Refinement
 
 __all__ = ["SCHEMA", "FORMATS", "NODES", "KINDS", "MeshManifest", "LayerEntry",
-           "InterfaceEntry", "FieldEntry", "write", "read", "beside",
+           "InterfaceEntry", "RefinementEntry", "FieldEntry", "write", "read",
+           "beside",
            "mesh_block", "scales_block", "constants_block",
            "validate_structure", "validate_against"]
 
@@ -167,6 +173,47 @@ class InterfaceEntry:
 
 
 @dataclass
+class RefinementEntry:
+    """One `refinements[]` record: an extra size field the mesh was
+    sized under.
+
+    Provenance and change detection only: a consumer needs none of it
+    to open the mesh.  `size` and `far_size` are the floor and ceiling
+    of the sizes the refinement asked for; `decay_width`, `points` and
+    `digest` are what the shipped kinds expose and null for a bare
+    callable, with `points` a cloud's count and `digest` the identity
+    of its coordinates.
+    """
+
+    #: The refinement's class, or a function's name.
+    name: str
+    #: The smallest size it asked for.
+    size: float
+    #: The largest size it asked for.
+    far_size: float
+    _: KW_ONLY
+    #: The ramp width; null where the refinement exposes none.
+    decay_width: float | None = None
+    #: The number of points of a cloud; null where there is no cloud.
+    points: int | None = None
+    #: The digest identifying a cloud's coordinates; null without one.
+    digest: str | None = None
+
+    @classmethod
+    def from_refinement(cls, refinement: "Refinement", *,
+                        name: str) -> "RefinementEntry":
+        """The record of a refinement, reading what it exposes."""
+        decay = getattr(refinement, "decay_width", None)
+        cloud = getattr(refinement, "points", None)
+        digest = getattr(refinement, "digest", None)
+        return cls(name=str(name), size=float(refinement.size),
+                   far_size=float(refinement.far_size),
+                   decay_width=None if decay is None else float(decay),
+                   points=None if cloud is None else len(cloud),
+                   digest=None if digest is None else str(digest))
+
+
+@dataclass
 class FieldEntry:
     """One `fields[]` record: a file beside the mesh and what it holds.
 
@@ -217,7 +264,8 @@ class FieldEntry:
 _JSON_TYPES = {int: (int,), float: (int, float), bool: (bool,), str: (str,),
                list: (list,), dict: (dict,),
                int | None: (int, type(None)), bool | None: (bool, type(None)),
-               str | None: (str, type(None)), dict | None: (dict, type(None))}
+               str | None: (str, type(None)), dict | None: (dict, type(None)),
+               float | None: (int, float, type(None))}
 
 
 def _entry_types(cls: type) -> dict[str, tuple[type, ...]]:
@@ -269,6 +317,9 @@ class MeshManifest:
     mesh: dict[str, Any] = field(default_factory=dict)
     layers: list[dict[str, Any]] = field(default_factory=list)
     interfaces: list[dict[str, Any]] = field(default_factory=list)
+    #: One record per refinement the mesh was sized under; see
+    #: `RefinementEntry`.
+    refinements: list[dict[str, Any]] = field(default_factory=list)
     #: One record per field written beside the mesh; see `FieldEntry`.
     fields: list[dict[str, Any]] = field(default_factory=list)
     #: The scales the field values are in, or None until a model is exported.
@@ -282,6 +333,7 @@ class MeshManifest:
     @classmethod
     def from_build(cls, *, mesh: Mapping[str, Any], layers: Sequence[LayerEntry],
                    interfaces: Sequence[InterfaceEntry],
+                   refinements: Sequence[RefinementEntry] = (),
                    meta: Mapping[str, Any] | None = None) -> "MeshManifest":
         """A manifest from the mesh block and the typed entries.
 
@@ -290,6 +342,7 @@ class MeshManifest:
         """
         card = cls(mesh=dict(mesh), layers=[asdict(e) for e in layers],
                    interfaces=[asdict(e) for e in interfaces],
+                   refinements=[asdict(e) for e in refinements],
                    meta=dict(meta or {}))
         validate_structure(card)
         return card
@@ -366,6 +419,17 @@ class MeshManifest:
                  str(e.get("kind") or ""))
                 for e in self.interfaces]
         lines.extend(_table(rows))
+        if self.refinements:
+            lines.append("  refinements")
+            rows = [(str(e.get("name", "?")),
+                     f"size {_num(e.get('size'))} to {_num(e.get('far_size'))}"
+                     + (f" over {_num(e['decay_width'])}"
+                        if e.get("decay_width") is not None else ""),
+                     f"{e['points']} points" if e.get("points") is not None
+                     else "",
+                     str(e.get("digest") or ""))
+                    for e in self.refinements]
+            lines.extend(_table(rows, numbered=False))
         if self.fields:
             lines.append("  fields")
             rows = [(str(e.get("name", "?")), str(e.get("file", "?")),
@@ -500,6 +564,8 @@ def validate_structure(manifest: MeshManifest) -> None:
     for what, entries, cls in (("layers", manifest.layers, LayerEntry),
                                ("interfaces", manifest.interfaces,
                                 InterfaceEntry),
+                               ("refinements", manifest.refinements,
+                                RefinementEntry),
                                ("fields", manifest.fields, FieldEntry)):
         if not isinstance(entries, list):
             fail(f"{what} must be a list of objects")
@@ -540,6 +606,16 @@ def validate_structure(manifest: MeshManifest) -> None:
                                for v in pair)):
                 fail(f"interfaces[{i}].values[{key!r}] is {pair!r}, not "
                      "[below, above] as numbers or nulls")
+
+    for i, e in enumerate(manifest.refinements):
+        if not e["size"] > 0.0 or e["far_size"] < e["size"]:
+            fail(f"refinements[{i}] has size {e['size']} and far_size "
+                 f"{e['far_size']}, not 0 < size <= far_size")
+        if e["decay_width"] is not None and not e["decay_width"] > 0.0:
+            fail(f"refinements[{i}].decay_width is {e['decay_width']}, "
+                 "not positive")
+        if e["points"] is not None and e["points"] < 1:
+            fail(f"refinements[{i}].points is {e['points']}, not a count")
 
     names = [e["name"] for e in manifest.fields]
     if len(set(names)) != len(names):
