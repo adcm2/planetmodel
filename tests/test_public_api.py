@@ -125,3 +125,36 @@ def test_every_signature_is_annotated():
         if rows:
             offenders[str(path.relative_to(root))] = rows
     assert not offenders, f"unannotated signatures: {offenders}"
+
+
+# Every public module, class, function and method states what it is in a
+# docstring.  Read from the source so that modules needing gmsh are held
+# to it too; private names, anything nested inside a function, and
+# dunders other than __call__ are not held.
+def _undocumented(tree):
+    def walk(node, in_func):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.ClassDef)):
+                public = (child.name == "__call__"
+                          or not child.name.startswith("_"))
+                if not in_func and public and ast.get_docstring(child) is None:
+                    yield child.lineno, child.name
+                yield from walk(child, in_func or isinstance(
+                    child, (ast.FunctionDef, ast.AsyncFunctionDef)))
+            else:
+                yield from walk(child, in_func)
+    yield from walk(tree, False)
+
+
+def test_every_public_name_has_a_docstring():
+    root = Path(planetmodel.__file__).parent
+    offenders = {}
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        rows = list(_undocumented(tree))
+        if ast.get_docstring(tree) is None:
+            rows.insert(0, (1, "(module)"))
+        if rows:
+            offenders[str(path.relative_to(root))] = rows
+    assert not offenders, f"undocumented public names: {offenders}"

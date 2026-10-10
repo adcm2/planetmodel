@@ -146,10 +146,12 @@ class Deck:
 
     @property
     def names(self) -> tuple[str, ...]:
+        """The column names, in the deck's order."""
         return tuple(self.columns)
 
     @property
     def nknots(self) -> int:
+        """The number of knots, repeated radii counted twice."""
         return self.radius.size
 
     def __getitem__(self, name: str) -> np.ndarray:
@@ -189,6 +191,7 @@ class Deck:
 
     @property
     def nlayers(self) -> int:
+        """The number of layers the repeated radii cut the deck into."""
         return len(self.layers())
 
     def __repr__(self) -> str:

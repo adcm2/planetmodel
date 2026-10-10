@@ -311,6 +311,7 @@ class PulledBackField(FieldBase):
             name=self._name, rtol=self._rtol)
 
     def renamed(self, name: str | None) -> "PulledBackField":
+        """The same field under `name`."""
         return PulledBackField(self._interval, self._physical, self._mapping,
                                character=self._character, name=name,
                                rtol=self._rtol)

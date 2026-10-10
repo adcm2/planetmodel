@@ -77,6 +77,7 @@ class Dimensions:
 
     @property
     def is_dimensionless(self) -> bool:
+        """Whether every exponent is zero."""
         return self.mass == 0 and self.length == 0 and self.time == 0
 
     def __mul__(self, other: Dimensions) -> Dimensions:
@@ -187,6 +188,7 @@ class Scales:
 
     @property
     def is_si(self) -> bool:
+        """Whether one stored unit of each base dimension is one SI unit."""
         return self.length == 1.0 and self.mass == 1.0 and self.time == 1.0
 
     def factor(self, dims: Dimensions) -> float:

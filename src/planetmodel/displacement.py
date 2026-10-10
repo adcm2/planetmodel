@@ -63,7 +63,9 @@ class RadialDisplacement(Protocol):
     """
 
     def __call__(self, r: ArrayLike, theta: ArrayLike, phi: ArrayLike
-                 ) -> np.ndarray: ...
+                 ) -> np.ndarray:
+        """The displacement at the broadcast coordinates."""
+        ...
 
 
 def _broadcast(r: ArrayLike, theta: ArrayLike, phi: ArrayLike
@@ -80,19 +82,23 @@ class ZeroDisplacement:
     knots: tuple[float, ...] = ()
 
     def __call__(self, r: ArrayLike, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
+        """Zeros of the broadcast shape."""
         r, _, _ = _broadcast(r, theta, phi)
         return np.zeros(r.shape)
 
     def radial_derivative(self, r: ArrayLike, theta: ArrayLike,
                           phi: ArrayLike) -> np.ndarray:
+        """dh/dr: zeros of the broadcast shape."""
         return self(r, theta, phi)
 
     def angular_gradient(self, r: ArrayLike, theta: ArrayLike, phi: ArrayLike
                          ) -> tuple[np.ndarray, np.ndarray]:
+        """(dh/dtheta, dh/dphi): zeros of the broadcast shape."""
         z = self(r, theta, phi)
         return z, z.copy()
 
     def bounds(self) -> tuple[float, float]:
+        """(min h, max h): both zero."""
         return 0.0, 0.0
 
     def __repr__(self) -> str:
@@ -125,6 +131,7 @@ class CallableDisplacement:
         self.name = name
 
     def __call__(self, r: ArrayLike, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
+        """The wrapped callable at the broadcast coordinates."""
         r, theta, phi = _broadcast(r, theta, phi)
         return np.asarray(self._fn(r, theta, phi), dtype=float)
 
@@ -235,10 +242,12 @@ class LayerLinear:
 
     @property
     def boundaries(self) -> np.ndarray:
+        """The skeleton boundaries the reliefs sit on, innermost first."""
         return self._b
 
     @property
     def reliefs(self) -> tuple[Relief | None, ...]:
+        """One relief per boundary, None where a boundary carries none."""
         return tuple(self._reliefs)
 
     def _relief(self, j: int, theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
@@ -264,6 +273,7 @@ class LayerLinear:
         return r, theta, phi, lo, hi, below, above
 
     def __call__(self, r: ArrayLike, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
+        """The reliefs of the point's layer, interpolated linearly in r."""
         r, theta, phi, lo, hi, below, above = self._pieces(r, theta, phi)
         t = (r - lo) / (hi - lo)
         return (1.0 - t) * below + t * above

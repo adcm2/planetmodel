@@ -344,6 +344,7 @@ class AngularResolution:
 
     def __call__(self, interfaces: Sequence[InterfaceInfo],
                  outer_radius: float) -> dict[int, InterfaceSizing]:
+        """One sizing per interface: size h_ref r / r_ref capped at h_far."""
         r_ref = float(outer_radius) if self.r_ref is None else float(self.r_ref)
         out = {}
         for face in interfaces:
@@ -367,6 +368,7 @@ class UniformInterfaces:
 
     def __call__(self, interfaces: Sequence[InterfaceInfo],
                  outer_radius: float) -> dict[int, InterfaceSizing]:
+        """The same sizing for every interface."""
         return {face.index: InterfaceSizing(self.h_min, self.h_max,
                                             self.decay_width)
                 for face in interfaces}
@@ -406,6 +408,7 @@ class CappedInterfaces:
 
     def __call__(self, interfaces: Sequence[InterfaceInfo],
                  outer_radius: float) -> dict[int, InterfaceSizing]:
+        """One sizing per interface, capped as the class describes."""
         faces = sorted(interfaces, key=lambda f: f.radius)
         radii = [f.radius for f in faces]
         out = {}
@@ -440,6 +443,7 @@ class PerInterface:
 
     def __call__(self, interfaces: Sequence[InterfaceInfo],
                  outer_radius: float) -> dict[int, InterfaceSizing]:
+        """The named sizings over the base rule's, every interface covered."""
         out = (dict(self.base(interfaces, outer_radius))
                if self.base is not None else {})
         by_name = {f.name: f.index for f in interfaces if f.name}
@@ -620,6 +624,7 @@ class ValidationReport:
 
     @property
     def ok(self) -> bool:
+        """Whether every check passed."""
         return not self.failures
 
     def raise_if_failed(self) -> "ValidationReport":

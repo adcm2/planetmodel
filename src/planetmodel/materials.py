@@ -263,6 +263,7 @@ class ElasticField(FieldBase):
 
     @property
     def symmetry(self) -> Symmetry:
+        """The symmetry whose independent moduli are stored."""
         return self._symmetry
 
     @property
@@ -301,6 +302,7 @@ class ElasticField(FieldBase):
                           name=self._name)
 
     def renamed(self, name: str | None) -> "ElasticField":
+        """The same field under `name`."""
         return self._with(self._moduli, name=name)
 
     def as_symmetry(self, symmetry: Symmetry) -> "ElasticField":
