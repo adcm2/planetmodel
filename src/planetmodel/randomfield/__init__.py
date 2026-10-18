@@ -25,7 +25,7 @@ states the construction of the samplers, `basis` that of the bases.
     grf = RadialGRF(r1, r2, nu, lam, sigma=sigma)
     grf.to_field(grf.sample(rng=rng))              # a RadialField
     shell = SphericalGRF(r1, r2, nu, lam, lmax=24)
-    shell.to_field(shell.sample(rng=rng))          # an AnalyticField
+    shell.to_field(shell.sample(rng=rng))          # a HarmonicField
     shell.sample_grid(gauss_legendre(24), rng=rng)   # nodes x grid, ducc0
     LayeredGRF(model, nu, lam, layers=mantle).sample(rng=rng)
 

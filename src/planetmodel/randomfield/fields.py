@@ -42,8 +42,8 @@ artificial boundary, or explicitly.
 
 `SphericalGRF` samples are coefficient arrays with respect to the real
 orthonormal harmonics of `planetmodel.harmonics`, with a trailing radial
-axis over the physical nodes `r`; `to_field` wraps one as an
-`AnalyticField` on the shell, and `sample_grid` synthesises one on a
+axis over the physical nodes `r`; `to_field` wraps one as a
+`HarmonicField` on the shell, and `sample_grid` synthesises one on a
 grid of a shipped kind through ducc0 (the `harmonics` extra).
 `LayeredGRF` draws an independent `RadialGRF` on each chosen layer of a
 skeleton and returns one `RadialField` per layer.  All fields are real
@@ -60,8 +60,9 @@ from numpy.typing import ArrayLike
 from scipy.interpolate import PPoly
 
 from ..character import SCALAR, Character
-from ..fields import AnalyticField, RadialField
-from ..harmonics import real_harmonics, synthesise_grid
+from ..expansions import HarmonicField
+from ..fields import RadialField
+from ..harmonics import synthesise_grid
 from ..layerfunction import PolynomialLayer, constant_layer
 from ..mesh1d import Mesh1D
 from ..skeleton import Skeleton
@@ -377,21 +378,11 @@ class SphericalGRF:
                                   elements=self.restriction.elements)
 
     def to_field(self, coeffs: ArrayLike, *, character: Character = SCALAR,
-                 name: str | None = None) -> AnalyticField:
-        """A coefficient sample as an `AnalyticField` on [r1, r2],
-        synthesised from its harmonics at every point asked for."""
-        pp = self.coefficient_functions(coeffs)
-        L = self.lmax
-
-        def fn(r: ArrayLike, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
-            r, theta, phi = np.broadcast_arrays(np.asarray(r, dtype=float),
-                                                np.asarray(theta, dtype=float),
-                                                np.asarray(phi, dtype=float))
-            c = pp(np.clip(r, *self.interval))
-            Y = real_harmonics(L, theta, phi)
-            return np.einsum("...slm,slm...->...", c, Y)
-
-        return AnalyticField(self.interval, fn, character=character, name=name)
+                 name: str | None = None) -> HarmonicField:
+        """A coefficient sample as a `HarmonicField` on [r1, r2], its
+        coefficients the piecewise polynomials of `coefficient_functions`."""
+        return HarmonicField(self.interval, self.coefficient_functions(coeffs),
+                             character=character, name=name)
 
     def __repr__(self) -> str:
         r1, r2 = self.interval

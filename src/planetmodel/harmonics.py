@@ -33,7 +33,7 @@ and number anything from 2 lmax + 1 up, provided they are equally
 spaced.  `synthesise_points` is the fast counterpart of `synthesise` at
 arbitrary points, through ducc0's non-uniform synthesis, accurate to
 about `POINT_EPSILON` of the field's largest value rather than to
-rounding, and `synthesise_gradient` gives the two angular derivatives
+rounding, and `synthesise_points_gradient` gives the two angular derivatives
 there the same way.  ducc0 holds complex coefficients a_lm for m >= 0 in healpy's
 order, with the Condon-Shortley phase; the real ones here are
 
@@ -43,63 +43,153 @@ and that is the whole of the conversion.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import ModuleType
 from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike
-from scipy.special import sph_harm_y
+from scipy.special import sph_harm_y_all
 
 from .frames import wrapped
 
 if TYPE_CHECKING:
     from .sampling import AngularGrid
 
-__all__ = ["real_harmonics", "synthesise", "synthesise_grid", "analyse_grid",
-           "synthesise_points", "synthesise_gradient", "packing", "POINT_EPSILON"]
+__all__ = ["real_harmonics", "real_harmonics_gradient", "synthesise",
+           "synthesise_gradient", "synthesise_grid", "analyse_grid",
+           "synthesise_points", "synthesise_points_gradient", "packing",
+           "POINT_EPSILON"]
 
 #: The relative accuracy asked of ducc0's synthesis at arbitrary points.
 POINT_EPSILON = 1e-13
+
+#: A basis of the real harmonics: (lmax, theta, phi) -> (2, L + 1, L + 1) + points.
+type Basis = Callable[[int, np.ndarray, np.ndarray], np.ndarray]
+
+
+def _complex_basis(lmax: int, theta: np.ndarray, phi: np.ndarray, *,
+                   gradient: bool) -> tuple[np.ndarray, ...]:
+    """scipy's complex harmonics of orders 0 ... lmax, the Condon-Shortley
+    phase removed: (L + 1, L + 1) + points, with their (d/dtheta, d/dphi)
+    when `gradient` asks."""
+    m = np.arange(lmax + 1).reshape((1, -1) + (1,) * theta.ndim)
+    sign = (-1.0) ** m
+    if not gradient:
+        Y = sph_harm_y_all(lmax, lmax, theta, wrapped(phi))
+        return (sign * Y[:, :lmax + 1],)
+    Y, dY = sph_harm_y_all(lmax, lmax, theta, wrapped(phi), diff_n=1)
+    return (sign * Y[:, :lmax + 1], sign * dY[:, :lmax + 1, ..., 0],
+            sign * dY[:, :lmax + 1, ..., 1])
+
+
+def _real(y: np.ndarray, lmax: int) -> np.ndarray:
+    """The real basis (2, L + 1, L + 1) + points from the complex one."""
+    out = np.zeros((2,) + y.shape)
+    scale = np.full(lmax + 1, np.sqrt(2.0))
+    scale[0] = 1.0
+    scale = scale.reshape((1, -1) + (1,) * (y.ndim - 2))
+    out[0] = scale * y.real
+    out[1] = np.sqrt(2.0) * y.imag
+    out[1][:, 0] = 0.0
+    keep = np.arange(lmax + 1)[None, :] <= np.arange(lmax + 1)[:, None]
+    return out * keep.reshape(keep.shape + (1,) * (y.ndim - 2))
+
+
+def _points(lmax: int, theta: ArrayLike, phi: ArrayLike
+            ) -> tuple[int, np.ndarray, np.ndarray]:
+    """The degree and the points broadcast together, checked."""
+    lmax = int(lmax)
+    if lmax < 0:
+        raise ValueError("lmax must be non-negative")
+    theta, phi = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                     np.asarray(phi, dtype=float))
+    return lmax, theta, phi
 
 
 def real_harmonics(lmax: int, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
     """The basis up to degree `lmax` at colatitudes `theta` and longitudes
     `phi` (broadcast together): shape (2, lmax + 1, lmax + 1) + points."""
-    lmax = int(lmax)
-    if lmax < 0:
-        raise ValueError("lmax must be non-negative")
-    theta = np.asarray(theta, dtype=float)
-    phi = np.asarray(phi, dtype=float)
-    shape = np.broadcast_shapes(theta.shape, phi.shape)
-    theta = np.broadcast_to(theta, shape)
-    phi = np.broadcast_to(phi, shape)
-    out = np.zeros((2, lmax + 1, lmax + 1) + shape)
-    for l in range(lmax + 1):
-        m = np.arange(l + 1)
-        y = sph_harm_y(l, m.reshape((-1,) + (1,) * len(shape)), theta[None], phi[None])
-        sign = ((-1.0) ** m).reshape((-1,) + (1,) * len(shape))
-        y = y * sign
-        out[0, l, 0] = y[0].real
-        if l:
-            out[0, l, 1:l + 1] = np.sqrt(2.0) * y[1:].real
-            out[1, l, 1:l + 1] = np.sqrt(2.0) * y[1:].imag
+    lmax, theta, phi = _points(lmax, theta, phi)
+    return _real(_complex_basis(lmax, theta, phi, gradient=False)[0], lmax)
+
+
+def real_harmonics_gradient(lmax: int, theta: ArrayLike, phi: ArrayLike
+                            ) -> tuple[np.ndarray, np.ndarray]:
+    """(d/dtheta, d/dphi) of the basis up to degree `lmax`, each of the
+    shape `real_harmonics` gives, through scipy's derivatives of the
+    complex harmonics."""
+    lmax, theta, phi = _points(lmax, theta, phi)
+    _, dt, dp = _complex_basis(lmax, theta, phi, gradient=True)
+    return _real(dt, lmax), _real(dp, lmax)
+
+
+def _coefficients(coeffs: ArrayLike) -> np.ndarray:
+    """A coefficient array (2, L + 1, L + 1, ...) as floats, or the error."""
+    c = np.asarray(coeffs, dtype=float)
+    if c.ndim < 3 or c.shape[0] != 2 or c.shape[1] != c.shape[2]:
+        raise ValueError("coefficients must have shape (2, lmax + 1, lmax + 1, ...)")
+    return c
+
+
+def _contract(c: np.ndarray, theta: np.ndarray, phi: np.ndarray,
+              basis: Basis) -> np.ndarray:
+    """sum_slm c[slm] B_slm at flat points, a block of points at a time so
+    that the basis never holds more than `_BLOCK` entries; `c` is
+    (2, L + 1, L + 1), or that followed by one entry per point."""
+    L = c.shape[1] - 1
+    out = np.empty(theta.size)
+    step = max(1, _BLOCK // (2 * (L + 1) ** 2))
+    for i in range(0, theta.size, step):
+        block = slice(i, i + step)
+        B = basis(L, theta[block], phi[block])
+        if c.ndim == 3:
+            out[block] = np.einsum("slm,slmp->p", c, B)
+        else:
+            out[block] = np.einsum("slmp,slmp->p", c[..., block], B)
     return out
+
+
+#: The basis entries evaluated at once by a synthesis at points.
+_BLOCK = 1 << 22
+
+
+def synthesise_gradient(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """(d/dtheta, d/dphi) of sum_lm c_lm Y_lm at points, for coefficients
+    of shape (2, lmax + 1, lmax + 1): the derivatives of `synthesise`,
+    through scipy, a block of points at a time."""
+    c = _coefficients(coeffs)
+    if c.ndim != 3:
+        raise ValueError("coefficients must have shape (2, lmax + 1, lmax + 1)")
+    theta, phi = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                     np.asarray(phi, dtype=float))
+    t, p, L = theta.ravel(), phi.ravel(), c.shape[1] - 1
+    dt, dp = np.empty(t.size), np.empty(t.size)
+    step = max(1, _BLOCK // (4 * (L + 1) ** 2))
+    for i in range(0, t.size, step):
+        block = slice(i, i + step)
+        bt, bp = real_harmonics_gradient(L, t[block], p[block])
+        dt[block] = np.einsum("slm,slmp->p", c, bt)
+        dp[block] = np.einsum("slm,slmp->p", c, bp)
+    return dt.reshape(theta.shape), dp.reshape(theta.shape)
 
 
 def synthesise(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
     """sum_lm c_lm Y_lm(theta, phi) for coefficients of shape
     (2, lmax + 1, lmax + 1), or that shape followed by the points' shape
-    when the coefficients vary from point to point."""
-    c = np.asarray(coeffs, dtype=float)
-    if c.ndim < 3 or c.shape[0] != 2 or c.shape[1] != c.shape[2]:
-        raise ValueError("coefficients must have shape (2, lmax + 1, lmax + 1, ...)")
-    Y = real_harmonics(c.shape[1] - 1, theta, phi)
-    if c.ndim == 3:
-        c = np.broadcast_to(c.reshape(c.shape + (1,) * (Y.ndim - 3)), Y.shape)
-    if c.shape != Y.shape:
-        raise ValueError(f"coefficients of shape {c.shape} do not match points "
-                         f"of shape {Y.shape[3:]}")
-    return np.einsum("slm...,slm...->...", c, Y)
+    when the coefficients vary from point to point.  Through scipy, a
+    block of points at a time."""
+    c = _coefficients(coeffs)
+    theta, phi = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                     np.asarray(phi, dtype=float))
+    shape = theta.shape
+    if c.ndim > 3:
+        if c.shape[3:] != shape:
+            raise ValueError(f"coefficients of shape {c.shape} do not match points "
+                             f"of shape {shape}")
+        c = c.reshape(c.shape[:3] + (-1,))
+    return _contract(c, theta.ravel(), phi.ravel(), real_harmonics).reshape(shape)
 
 
 def packing(lmax: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -303,7 +393,7 @@ def synthesise_points(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike
     return out.reshape(extra + points)
 
 
-def synthesise_gradient(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike
+def synthesise_points_gradient(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike
                         ) -> tuple[np.ndarray, np.ndarray]:
     """(d/dtheta, d/dphi) of sum_lm c_lm Y_lm at arbitrary points, through
     ducc0, in the layout and to the accuracy of `synthesise_points`.

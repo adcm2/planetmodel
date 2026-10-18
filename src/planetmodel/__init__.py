@@ -57,6 +57,7 @@ from .displacement import (
     flattening,
     layer_linear,
 )
+from .expansions import HarmonicField, HarmonicFunction
 from .fields import (
     AnalyticField,
     ComposedField,
@@ -160,6 +161,8 @@ __all__ = [
     "constant_field",
     "GriddedField",
     "GriddedFunction",
+    "HarmonicField",
+    "HarmonicFunction",
     "ElasticField",
     "is_fluid",
     "moduli",

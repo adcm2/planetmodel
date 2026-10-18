@@ -1,20 +1,20 @@
 """The lateral rules: values between the nodes of an angular grid.
 
 The local rules interpolate the nodes and the polar values, read a
-longitude and its turns alike, and agree with scipy's FITPACK spline
-and linear grid interpolator on a padded grid built here from the rule
-as stated; they converge at second and fourth order on a smooth field.
+longitude and its turns alike, and agree with their statements built
+here independently through scipy's CubicSpline and linear grid
+interpolator; the bicubic rule is smooth across the seam and through the
+poles; they converge at second and fourth order on a smooth field.
 The harmonic rule is exact on a band-limited field.  The accuracy
-against oversampling is measured on the setup of the C++ figures that
-the stage plan records, with a scalar field.
+against oversampling is measured on a field of band 16.
 """
 import numpy as np
 import pytest
-from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
+from scipy.interpolate import CubicSpline, RegularGridInterpolator
 
 from planetmodel import (AngularGrid, driscoll_healy, equiangular, gauss_legendre,
                          synthesise)
-from planetmodel.lateral import (GHOSTS, METHODS, LateralInterpolant, interpolate,
+from planetmodel.lateral import (METHODS, LateralInterpolant, interpolate,
                                  polar_values)
 
 LOCAL = ("linear", "cubic")
@@ -72,15 +72,10 @@ def test_a_longitude_and_its_turns_read_alike(grid, method):
 
 def pad_as_stated(v, grid, poles):
     """The padded grid built from the rule in its own words: the wrap
-    column, g = min(3, n - 1) ghost columns a period away at each end,
-    and a constant row at every pole the grid lacks."""
-    theta, phi = list(grid.colatitudes), list(grid.longitudes)
-    n = len(phi)
-    g = min(3, n - 1)
-    cols = ([phi[j] - 2 * np.pi for j in range(n - g, n)] + phi
-            + [phi[j] + 2 * np.pi for j in range(g + 1)])
-    idx = list(range(n - g, n)) + list(range(n)) + list(range(g + 1))
-    rows = v[:, idx]
+    column, and a constant row at every pole the grid lacks."""
+    theta, cols = list(grid.colatitudes), list(grid.longitudes) + [
+        grid.longitudes[0] + 2 * np.pi]
+    rows = np.hstack([v, v[:, :1]])
     if not grid.pole_nodes[0]:
         theta = [0.0] + theta
         rows = np.vstack([np.full(len(cols), poles[0]), rows])
@@ -90,21 +85,67 @@ def pad_as_stated(v, grid, poles):
     return np.array(theta), np.array(cols), rows
 
 
+def bicubic_as_stated(v, grid, poles, t, p):
+    """The bicubic rule from its statement, through scipy's CubicSpline,
+    one point at a time: each meridian through a column clamped at the
+    poles to the first harmonic fitted to its not-a-knot slopes, read at
+    the point's colatitude; then the periodic spline through those values
+    and the wrap, read at its longitude."""
+    T, P, V = pad_as_stated(v, grid, poles)
+    n = grid.nphi
+    free = [CubicSpline(T, V[:, j], bc_type="not-a-knot") for j in range(n)]
+    A = np.stack([np.cos(P[:n]), np.sin(P[:n])], -1)
+    slopes = []
+    for pole in (0.0, np.pi):
+        s = np.array([f(pole, 1) for f in free])
+        slopes.append(A @ np.linalg.lstsq(A, s, rcond=None)[0])
+    out = []
+    for tq, pq in zip(t, p):
+        g = [CubicSpline(T, V[:, j], bc_type=((1, slopes[0][j]), (1, slopes[1][j])))(tq)
+             for j in range(n)]
+        ring = CubicSpline(P, g + [g[0]], bc_type="periodic")
+        out.append(ring(P[0] + np.mod(pq - P[0], 2 * np.pi)))
+    return np.array(out)
+
+
 @pytest.mark.parametrize("grid", GRIDS, ids=repr)
-def test_the_rules_are_scipys_splines_on_the_padded_grid(grid):
-    assert GHOSTS == 3
+def test_the_rules_are_their_statements(grid):
     v, poles = on(grid)
     T, P, V = pad_as_stated(v, grid, poles)
     rng = np.random.default_rng(2)
-    t = rng.uniform(0, np.pi, 300)
-    p = rng.uniform(0, 2 * np.pi, 300)
+    t = rng.uniform(0, np.pi, 40)
+    p = rng.uniform(-2 * np.pi, 4 * np.pi, 40)
     q = grid.longitudes[0] + np.mod(p - grid.longitudes[0], 2 * np.pi)
-    cubic = RectBivariateSpline(T, P, V, kx=3, ky=3, s=0).ev(t, q)
     linear = RegularGridInterpolator((T, P), V)(np.stack([t, q], -1))
-    assert np.allclose(interpolate(v, grid, t, p, method="cubic", poles=poles), cubic,
-                       rtol=0, atol=1e-12)
     assert np.allclose(interpolate(v, grid, t, p, method="linear", poles=poles),
                        linear, rtol=0, atol=1e-13)
+    assert np.allclose(interpolate(v, grid, t, p, method="cubic", poles=poles),
+                       bicubic_as_stated(v, grid, poles, t, p), rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("grid", GRIDS, ids=repr)
+def test_the_bicubic_rule_is_smooth_across_the_seam_and_through_the_poles(grid):
+    """Continuous first derivatives across the seam at phi_0, and at each
+    pole slopes leaving it of the form a cos phi + b sin phi, so that the
+    interpolant has a gradient there."""
+    v, poles = on(grid)
+    f = LateralInterpolant(v, grid, method="cubic", poles=poles)
+    t = np.linspace(0.2, 2.9, 9)
+    phi0, eps = grid.longitudes[0], 1e-9
+    left, right = f.gradient(t, phi0 - eps), f.gradient(t, phi0 + eps)
+    assert np.allclose(left[0], right[0], atol=1e-7)
+    assert np.allclose(left[1], right[1], atol=1e-7)
+    # between the columns the slopes are the periodic spline of first
+    # harmonic samples, so a first harmonic to that spline's accuracy
+    ring = np.linspace(0.0, 2 * np.pi, 64, endpoint=False)
+    A = np.stack([np.cos(ring), np.sin(ring)], -1)
+    P = np.append(grid.longitudes, grid.longitudes[0] + 2 * np.pi)
+    cs = CubicSpline(P, np.cos(P), bc_type="periodic")
+    accuracy = np.abs(cs(P[0] + np.mod(ring - P[0], 2 * np.pi)) - np.cos(ring)).max()
+    for pole in (0.0, np.pi):
+        s = f.gradient(pole, ring)[0]
+        fit = A @ np.linalg.lstsq(A, s, rcond=None)[0]
+        assert np.abs(s - fit).max() <= 2.0 * accuracy * np.abs(s).max() + 1e-12
 
 
 @pytest.mark.parametrize("method, order", [("linear", 2), ("cubic", 4)])
@@ -125,7 +166,7 @@ def test_local_rules_converge_at_their_orders(method, order):
 
 
 def band16_field():
-    """The setup of the C++ figures: band 16, coefficients N(0, 1) / (l + 1)."""
+    """A field of band 16, its coefficients N(0, 1) / (l + 1)."""
     L = 16
     c = np.random.default_rng(11).standard_normal((2, L + 1, L + 1))
     c /= (np.arange(L + 1) + 1.0)[None, :, None]
@@ -136,19 +177,17 @@ def band16_field():
     return c
 
 
-def test_accuracy_against_oversampling_beside_the_cpp_figures():
+def test_accuracy_against_oversampling():
     """The largest error at 4000 random points relative to the largest
     value, on Gauss-Legendre grids of 1, 4 and 8 times the band.  Measured
-    here for a scalar field (linear, cubic): 2.8e-1, 9.4e-2; 2.3e-2,
-    4.6e-4; 5.2e-3, 3.4e-5.  The C++ figures for the bicubic rule on a
-    spin-2 field: 13%, 7e-4, 4e-5."""
+    here (linear, cubic): 2.8e-1, 9.2e-2; 2.3e-2, 1.9e-4; 5.2e-3, 1.0e-5."""
     c = band16_field()
     rng = np.random.default_rng(20260824)
     t, p = rng.uniform(0, np.pi, 4000), rng.uniform(0, 2 * np.pi, 4000)
     ref = synthesise(c, t, p)
     scale = np.abs(ref).max()
     poles = synthesise(c, np.array([0.0, np.pi]), np.zeros(2))
-    bounds = {1: (0.35, 0.12), 4: (3e-2, 6e-4), 8: (7e-3, 5e-5)}
+    bounds = {1: (0.35, 0.12), 4: (3e-2, 2.5e-4), 8: (7e-3, 1.5e-5)}
     for f, (lin, cub) in bounds.items():
         g = gauss_legendre(16 * f)
         v = synthesise(c, g.colatitudes[:, None], g.longitudes[None, :])

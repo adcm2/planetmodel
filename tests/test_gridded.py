@@ -211,15 +211,23 @@ def bump_gradient(t, p):
             -0.06 * st ** 3 * np.sin(3 * p) - 0.005 * st * np.sin(p - 0.4))
 
 
-def test_a_gridded_function_is_a_relief():
-    gf = GriddedFunction.sampled(bump, gauss_legendre(24))
-    assert gf.lateral == "cubic" and gf.values.shape == (25, 49)
+@pytest.mark.parametrize("grid", [gauss_legendre(24), driscoll_healy(16),
+                                  equiangular(25, 48, poles=True),
+                                  equiangular(24, 48)], ids=repr)
+def test_a_gridded_function_is_a_relief_whose_geometry_holds(grid):
+    """The bicubic rule is smooth across the seam and through the poles,
+    so the mapping's deformation gradient is single-valued there and the
+    geometry's contract holds on the polar axis too."""
+    gf = GriddedFunction.sampled(bump, grid)
+    assert gf.lateral == "cubic" and gf.values.shape == (grid.ntheta, grid.nphi)
     assert np.allclose(gf.poles, [0.01, -0.01])
     sk = Skeleton([0.0, 0.5, 1.0])
-    check_displacement(layer_linear(sk, [None, gf, gf]), sk)
+    h = layer_linear(sk, [None, gf, gf])
+    check_displacement(h, sk)
+    check_geometry(Geometry(sk, mapping=RadialStretch(h, rmax=1.0)))
     rng = np.random.default_rng(4)
     t, p = rng.uniform(0, np.pi, 200), rng.uniform(0, 2 * np.pi, 200)
-    assert np.allclose(gf(t, p), bump(t, p), atol=1e-6)
+    assert np.allclose(gf(t, p), bump(t, p), atol=1e-5)
 
 
 @pytest.mark.harmonics

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from planetmodel import PREM, Skeleton, real_harmonics, synthesise, testing
+from planetmodel.expansions import HarmonicField
 from planetmodel.randomfield import LayeredGRF, RadialGRF, SphericalGRF
 
 
@@ -162,6 +163,7 @@ def test_shell_as_a_field():
     assert np.max(np.abs(pp(g.r[j]) - c[..., j])) < 1e-12
     field = g.to_field(c, name="dv")
     testing.check_field(field)
+    assert isinstance(field, HarmonicField) and field.lmax == 8
     assert field.name == "dv" and field.interval == (0.7, 1.0)
     r = np.array([0.75, 0.9])
     theta = np.array([0.3, 1.2])

@@ -134,7 +134,9 @@ for x in r:
 # scaled so that the standard deviation at any point of the truncated
 # field is exactly `sigma`. A horizontal length scale `lam_h`, different
 # from the radial one, gives structure that is correlated over a
-# different distance horizontally than radially. The example is on a
+# different distance horizontally than radially. `to_field` turns a
+# sample into a `HarmonicField`, the sum of the harmonics with those
+# coefficients, exact at every point. The example is on a
 # shell of unit outer radius so that the picture is easy to read. The
 # standard deviation of a map at one radius is close to the requested
 # value of 1, as one draw from the field should be.

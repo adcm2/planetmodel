@@ -6,7 +6,7 @@ here and in every reader of the library's files:
 
     linear     bilinear in (theta, phi) on the padded grid
     cubic      the tensor-product cubic spline on the padded grid,
-               not-a-knot at its four edges
+               periodic in longitude and clamped at the poles
     harmonic   analysis on the grid and synthesis at the point, exact
                for a field band-limited to the grid's band (to the
                accuracy of `harmonics.synthesise_points`); only on a
@@ -16,19 +16,27 @@ here and in every reader of the library's files:
 **The padded grid.**  The local rules are rules on a rectangle of
 (theta, phi), so the sphere is first laid out as one.  The longitudes
 phi_0 < ... < phi_{n-1} gain the wrap column phi_0 + 2 pi, a copy of the
-first, and g = min(3, n - 1) ghost columns beyond each end, copies of
-the columns a period away: phi_{n-g} - 2 pi ... phi_{n-1} - 2 pi before
-and phi_1 + 2 pi ... phi_g + 2 pi after.  The end conditions of the
-spline in longitude then act at least g cells from any point that is
-read, and the interpolant is periodic to that extent, though not
-exactly.  The colatitudes gain a row at each pole the grid lacks as a
+first, and the colatitudes gain a row at each pole the grid lacks as a
 node, holding the field's value at that pole across every column; a
-pole that is a node keeps its own row.  No rows are added beyond the
-poles, so the not-a-knot conditions in colatitude act at the poles
-themselves.  A point is read at its colatitude, which must lie in
-[0, pi], and at its longitude reduced into [phi_0, phi_0 + 2 pi).  The
-bilinear rule is the tensor-product spline of degree one on the same
-grid, so both local rules interpolate the nodes and the polar values.
+pole that is a node keeps its own row.  A point is read at its
+colatitude, which must lie in [0, pi], and at its longitude reduced
+into [phi_0, phi_0 + 2 pi).  The bilinear rule is the tensor-product
+spline of degree one on that grid.  The bicubic rule is the
+tensor-product cubic spline on it with these end conditions:
+
+- in longitude, periodic, so that the interpolant and its first two
+  derivatives are continuous across the seam at phi_0;
+- in colatitude, clamped at each pole to a slope s(phi) = a cos phi +
+  b sin phi, with (a, b) fitted by least squares, over the grid's
+  longitudes, to the slopes that the not-a-knot spline through each
+  meridian's values has at that pole.  A function with a gradient at a
+  pole has exactly such slopes leaving it, the gradient's two
+  components; with them the interpolant has a gradient there too, to
+  the accuracy of the spline in longitude between the grid's columns.
+
+Both local rules interpolate the nodes and the polar values, and both
+are linear in the values, the bicubic one through the fitted slopes as
+well.
 
 **The polar values** have one source each.  A pole that is a node of
 the grid is its own row, which must hold one value, constant along the
@@ -51,15 +59,16 @@ it checks `poles` like any rule but does not use them.
 **Accuracy.**  A local rule wants an oversampled grid.  For a field of
 band 16 with coefficients falling as 1/(l + 1), on Gauss-Legendre
 grids, the largest error relative to the field's largest value is
-about 0.09 for the bicubic rule at the field's own band, 5e-4 at four
-times it and 3e-5 at eight, and 0.3, 2e-2 and 5e-3 for the bilinear
+about 0.09 for the bicubic rule at the field's own band, 2e-4 at four
+times it and 1e-5 at eight, and 0.3, 2e-2 and 5e-3 for the bilinear
 one: fourth order against second (the cases of
 `tests/test_lateral.py`).  Analysis on an oversampled grid is still
 exact to the field's band, so a grid of about four times the band
-serves a local reader and a spectral one alike.  Two improvements wait
-for a use: a periodic spline condition in longitude in place of the
-ghost columns, and smoothness through a pole, where the meridian
-splines end and the gradient of the interpolant has a small kink.
+serves a local reader and a spectral one alike.  The bicubic rule is
+continuously differentiable everywhere, so a relief read by it gives a
+mapping whose deformation gradient is single-valued on the polar axis
+and on the seam; its second derivatives may still jump at a pole, and
+smoothness of that order waits for a use.
 
 `LateralInterpolant` builds a rule once over any array whose two
 trailing axes are a grid's, and gives its values and its two angular
@@ -75,23 +84,16 @@ from numpy.typing import ArrayLike
 from scipy.interpolate import NdBSpline, make_interp_spline
 
 from .frames import wrapped
-from .harmonics import (analyse_grid, real_harmonics, synthesise_gradient,
+from .harmonics import (analyse_grid, real_harmonics, synthesise_points_gradient,
                         synthesise_points)
 
 if TYPE_CHECKING:
     from .sampling import AngularGrid
 
-__all__ = ["METHODS", "GHOSTS", "LateralInterpolant", "interpolate",
-           "polar_values"]
+__all__ = ["METHODS", "LateralInterpolant", "interpolate", "polar_values"]
 
 #: The lateral rules, in the order of the module docstring.
 METHODS = ("linear", "cubic", "harmonic")
-
-#: The ghost columns added beyond each end of the longitudes, at most.
-GHOSTS = 3
-
-#: The degree of the tensor-product spline of each local rule.
-_DEGREE = {"linear": 1, "cubic": 3}
 
 #: The poles in the order of every (..., 2) array of polar values.
 _POLES = ("north", "south")
@@ -192,14 +194,11 @@ def polar_values(values: ArrayLike, grid: AngularGrid, *,
 def _padded(v: np.ndarray, grid: AngularGrid, poles: np.ndarray
             ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(colatitudes, longitudes, values) of the padded grid of the module
-    docstring, the values of shape (..., rows, columns)."""
+    docstring, the values of shape (..., rows, columns), the wrap column
+    last."""
     theta, phi = grid.colatitudes, grid.longitudes
-    n = phi.size
-    g = min(GHOSTS, n - 1)
-    two_pi = 2.0 * np.pi
-    phi_p = np.concatenate([phi[n - g:] - two_pi, phi, phi[:1] + two_pi,
-                            phi[1:g + 1] + two_pi])
-    v = np.concatenate([v[..., n - g:], v, v[..., :1], v[..., 1:g + 1]], axis=-1)
+    phi_p = np.append(phi, phi[0] + 2.0 * np.pi)
+    v = np.concatenate([v, v[..., :1]], axis=-1)
     north, south = grid.pole_nodes
     theta_p, rows = [theta], [v]
     if not north:
@@ -211,6 +210,21 @@ def _padded(v: np.ndarray, grid: AngularGrid, poles: np.ndarray
         rows.append(np.broadcast_to(poles[..., 1, None, None],
                                     v.shape[:-2] + (1, phi_p.size)))
     return np.concatenate(theta_p), phi_p, np.concatenate(rows, axis=-2)
+
+
+def _pole_slopes(theta: np.ndarray, phi: np.ndarray, V: np.ndarray
+                 ) -> list[np.ndarray]:
+    """The clamped slopes at the north and south poles, each of the shape
+    of one row of V (columns first): a cos phi + b sin phi fitted to the
+    slopes of the not-a-knot spline through every column."""
+    d = make_interp_spline(theta, V, k=3, axis=0).derivative()
+    A = np.stack([np.cos(phi), np.sin(phi)], axis=-1)
+    out = []
+    for pole in (0.0, np.pi):
+        s = d(pole)
+        ab = np.linalg.lstsq(A, s.reshape(phi.size, -1), rcond=None)[0]
+        out.append((A @ ab).reshape(s.shape))
+    return out
 
 
 class LateralInterpolant:
@@ -240,15 +254,29 @@ class LateralInterpolant:
             return
         P = polar_values(v, grid, poles=poles, rtol=rtol)
         theta_p, phi_p, V = _padded(v, grid, P)
-        k = _DEGREE[method]
-        if theta_p.size <= k or phi_p.size <= k:
-            raise ValueError(
-                f"the {method} rule needs at least {k + 1} rows and columns on "
-                f"the padded grid; this one has {theta_p.size} x {phi_p.size}")
-        V = np.moveaxis(V, (-2, -1), (0, 1))
-        along_theta = make_interp_spline(theta_p, V, k=k, axis=0)
-        along_phi = make_interp_spline(phi_p, np.swapaxes(along_theta.c, 0, 1),
-                                       k=k, axis=0)
+        V = np.moveaxis(V, (-2, -1), (0, 1))            # (rows, columns, ...)
+        if method == "linear":
+            along_theta = make_interp_spline(theta_p, V, k=1, axis=0)
+            along_phi = make_interp_spline(
+                phi_p, np.swapaxes(along_theta.c, 0, 1), k=1, axis=0)
+            k = 1
+        else:
+            if theta_p.size < 4 or grid.nphi < 3:
+                raise ValueError(
+                    f"the cubic rule needs at least 4 rows on the padded grid and "
+                    f"3 longitudes; this grid gives {theta_p.size} rows and has "
+                    f"{grid.nphi} longitudes")
+            # the meridians through the grid's columns, clamped at the
+            # poles; then the periodic spline through the columns and the
+            # wrap, which repeats the first
+            V = V[:, :-1]
+            north, south = _pole_slopes(theta_p, grid.longitudes, V)
+            along_theta = make_interp_spline(theta_p, V, k=3, axis=0,
+                                             bc_type=([(1, north)], [(1, south)]))
+            C = np.swapaxes(along_theta.c, 0, 1)
+            along_phi = make_interp_spline(phi_p, np.concatenate([C, C[:1]]), k=3,
+                                           axis=0, bc_type="periodic")
+            k = 3
         self._spline = NdBSpline((along_theta.t, along_phi.t),
                                  np.swapaxes(along_phi.c, 0, 1), k)
 
@@ -302,7 +330,7 @@ class LateralInterpolant:
         constant for the bilinear rule, or of the expansion."""
         t, p, points = self._points(theta, phi)
         if self._method == "harmonic":
-            dt, dp = synthesise_gradient(self._coeffs, t, p)
+            dt, dp = synthesise_points_gradient(self._coeffs, t, p)
         else:
             dt, dp = self._local(t, p, (1, 0)), self._local(t, p, (0, 1))
         return dt.reshape(self._shape + points), dp.reshape(self._shape + points)
