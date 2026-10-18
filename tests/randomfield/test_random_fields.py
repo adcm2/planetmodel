@@ -41,7 +41,9 @@ def test_radial_grf_normalisation_and_stats():
 
 def test_a_batch_is_successive_draws():
     """For the sampler and both white noises, a batch of `size` is `size`
-    successive single draws from one generator."""
+    successive single draws from one generator: the same normals, so the
+    same samples to the rounding of the matrix product, which differs
+    between a product with a vector and one with a matrix."""
     from planetmodel.randomfield import RadialOperatorFamily, SpectralBasis, padded_mesh
     g = RadialGRF(0.5, 1.0, 1.0, 0.1)
     fam = RadialOperatorFamily(padded_mesh(0.5, 1.0, pad=0.3, weight="r2", ngll=5,
@@ -55,8 +57,8 @@ def test_a_batch_is_successive_draws():
     for single, batch in cases:
         rng = np.random.default_rng(4)
         each = np.array([single(rng) for _ in range(3)])
-        assert np.allclose(batch(np.random.default_rng(4)), each, rtol=1e-14,
-                           atol=0.0)
+        assert np.allclose(batch(np.random.default_rng(4)), each, rtol=0.0,
+                           atol=1e-13 * np.abs(each).max())
 
 
 def test_the_samplers_are_built_on_their_bases():

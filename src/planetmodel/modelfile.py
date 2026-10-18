@@ -1243,4 +1243,3 @@ def read_model(path: str | os.PathLike[str], *,
                   scales=data.scales, specs=_specs(data), name=data.name,
                   constants=data.declared)
     return model if scales is None else model.converted(scales)
-

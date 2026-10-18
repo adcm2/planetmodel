@@ -408,4 +408,3 @@ def _updated(current: tuple[str | None, ...], new: Renames) -> tuple[str | None,
             out[i] = None if value is None else str(value)
         return tuple(out)
     return tuple(new)
-
