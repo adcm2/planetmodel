@@ -46,9 +46,9 @@ the data.  A pole the grid lacks takes its value from `poles` (north
 then south), as a model file stores it, evaluated exactly by the
 writer; `poles` always has both entries, the one for a pole that is a
 node either agreeing with its row or NaN, meaning not given.  Without
-`poles`, a grid with a band takes the values from its own expansion,
-those of the field band-limited to the grid, and any other grid
-lacking a pole is refused, so that no polar value is ever guessed.
+`poles`, a grid of a shipped kind takes the values from its own
+expansion, those of the field band-limited to the grid, and any other
+grid lacking a pole is refused, so that no polar value is ever guessed.
 `polar_values` is that rule.  A scalar has one value at a pole; a
 field with components is interpolated component by component in the
 Cartesian frame, where it too is single-valued at a pole, and the
@@ -67,8 +67,7 @@ exact to the field's band, so a grid of about four times the band
 serves a local reader and a spectral one alike.  The bicubic rule is
 continuously differentiable everywhere, so a relief read by it gives a
 mapping whose deformation gradient is single-valued on the polar axis
-and on the seam; its second derivatives may still jump at a pole, and
-smoothness of that order waits for a use.
+and on the seam; its second derivatives may jump at a pole.
 
 `LateralInterpolant` builds a rule once over any array whose two
 trailing axes are a grid's, and gives its values and its two angular
@@ -96,10 +95,30 @@ from .harmonics import (analyse_grid, real_harmonics, synthesise_points_gradient
 if TYPE_CHECKING:
     from .sampling import AngularGrid
 
-__all__ = ["METHODS", "LateralInterpolant", "interpolate", "polar_values"]
+__all__ = ["METHODS", "LateralInterpolant", "interpolate", "polar_values",
+           "check_rule"]
 
 #: The lateral rules, in the order of the module docstring.
 METHODS = ("linear", "cubic", "harmonic")
+
+
+def check_rule(grid: AngularGrid, method: str) -> None:
+    """Refuse, by name, a rule the grid cannot carry: an unknown method;
+    the harmonic rule on a grid that is not of a shipped kind with a
+    band; the cubic rule on fewer than four rows once the poles the grid
+    lacks are added, or fewer than three longitudes."""
+    if method not in METHODS:
+        raise ValueError(f"method must be one of {METHODS}, got {method!r}")
+    if method == "harmonic" and (grid.kind == "custom" or grid.lmax is None):
+        raise ValueError("the harmonic rule needs a grid of a shipped kind, "
+                         f"whose transforms analyse it; this grid is {grid.kind}")
+    if method == "cubic":
+        rows = grid.ntheta + sum(not node for node in grid.pole_nodes)
+        if rows < 4 or grid.nphi < 3:
+            raise ValueError(
+                f"the cubic rule needs at least 4 rows on the padded grid and "
+                f"3 longitudes; this grid gives {rows} rows and has "
+                f"{grid.nphi} longitudes")
 
 #: The poles in the order of every (..., 2) array of polar values.
 _POLES = ("north", "south")
@@ -182,8 +201,9 @@ def polar_values(values: ArrayLike, grid: AngularGrid, *,
     elif poles is None:
         if grid.kind == "custom" or grid.lmax is None:
             raise ValueError(
-                "the grid lacks a pole among its nodes and has no band to find "
-                "the field there from, so the polar values must be given: pass "
+                "the grid lacks a pole among its nodes and is not of a shipped "
+                "kind, whose expansion would find the field there, so the polar "
+                "values must be given: pass "
                 f"poles=, the values at the north and south poles, shape {lead + (2,)}")
         found = _from_expansion(v, grid)
         for k, is_node in enumerate(nodes):
@@ -264,8 +284,7 @@ class LateralInterpolant:
 
     def __init__(self, values: ArrayLike, grid: AngularGrid, *, method: str,
                  poles: ArrayLike | None = None, rtol: float = 1e-9) -> None:
-        if method not in METHODS:
-            raise ValueError(f"method must be one of {METHODS}, got {method!r}")
+        check_rule(grid, method)
         if poles is not None and np.iscomplexobj(poles):
             raise TypeError("the lateral rules take real values")
         v = _grid_values(values, grid)
@@ -284,11 +303,6 @@ class LateralInterpolant:
                 phi_p, np.swapaxes(along_theta.c, 0, 1), k=1, axis=0)
             k = 1
         else:
-            if theta_p.size < 4 or grid.nphi < 3:
-                raise ValueError(
-                    f"the cubic rule needs at least 4 rows on the padded grid and "
-                    f"3 longitudes; this grid gives {theta_p.size} rows and has "
-                    f"{grid.nphi} longitudes")
             # the meridians through the grid's columns, clamped at the
             # poles; then the periodic spline through the columns and the
             # wrap, which repeats the first

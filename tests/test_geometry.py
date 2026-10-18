@@ -77,8 +77,12 @@ def test_a_valid_mapping_with_a_kink_on_a_boundary_is_accepted():
 
 
 def test_invariant_refusals():
-    with pytest.raises(ValueError, match="kink at r = 0.7"):
-        Geometry(SK, mapping=stretch(knot=0.7))
+    assert Geometry(SK, mapping=stretch(knot=0.7)).knots() == (0.7,)
+    # a knot beyond the skeleton is the mapping's business, not the body's
+    assert Geometry(SK, mapping=stretch(knot=1.7)).knots() == ()
+    truncated = Geometry(SK, mapping=stretch(knot=0.8)).truncated(0.7)
+    assert truncated.knots() == ()
+    testing.check_geometry(truncated)
     with pytest.raises(ValueError, match="does not preserve orientation"):
         Geometry(SK, mapping=stretch(amp=-3.0))
     with pytest.raises(TypeError, match="not a Mapping"):
@@ -180,3 +184,39 @@ def test_extended_and_coarsened_need_the_identity():
         deformed.extended([1.2])
     with pytest.raises(ValueError, match="only be coarsened while"):
         deformed.coarsened(drop=[0])
+
+
+# -- knots anywhere ---------------------------------------------------------------
+
+def test_a_relief_inside_a_layer_declares_a_knot_the_geometry_admits():
+    """Reliefs on surfaces that are no boundary of the model: a layer_linear
+    on a finer skeleton, its knots inside the model's layers."""
+    from planetmodel import RadialMesh, RadialStretch, layer_linear
+
+    fine = Skeleton([0.0, 0.25, 0.4, 0.6, 0.8, 1.0])
+
+    def tilt(t, p):
+        return 0.01 * np.sin(t) * np.cos(p) + 0.005 * np.cos(t)
+
+    h = layer_linear(fine, [None, tilt, None, tilt, None, tilt])
+    assert set(h.knots) == {0.25, 0.4, 0.6, 0.8}
+    testing.check_displacement(h, SK)
+    g = Geometry(SK, mapping=RadialStretch(h, rmax=1.0), **NAMES)
+    assert set(g.knots()) == {0.25, 0.4, 0.6, 0.8}
+    testing.check_geometry(g)
+    mesh = RadialMesh(g, ngll=3, drmax=0.3)
+    edges = np.append(mesh.left, mesh.right[-1])
+    for k in (0.25, 0.6):
+        assert np.min(np.abs(edges - k)) < 1e-12        # a knot is an element edge
+
+
+def test_an_undeclared_kink_is_still_caught():
+    from planetmodel import CallableDisplacement
+    kinked = CallableDisplacement(
+        lambda r, t, p: 0.05 * np.maximum(r - 0.6, 0.0) * np.cos(t) + 0.0 * p)
+    with pytest.raises(AssertionError, match="not declared as a knot"):
+        testing.check_displacement(kinked, SK)
+    declared = CallableDisplacement(
+        lambda r, t, p: 0.05 * np.maximum(r - 0.6, 0.0) * np.cos(t) + 0.0 * p,
+        knots=[0.6])
+    testing.check_displacement(declared, SK)

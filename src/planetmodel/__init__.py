@@ -21,6 +21,7 @@ Modules reached by name, one level down:
   deck         tabulated models: decks, their formats, fields by interpolation
   sampling     a model on a radial mesh times an angular grid
   lateral      values between the nodes of an angular grid: the lateral rules
+  modelfile    the model file: a model in one netCDF file (netCDF4, optional)
   harmonics    real spherical harmonics; grid transforms via ducc0 (optional)
   plotting     radial profiles drawn one way, radius upward (matplotlib, optional)
   mesh1d       radial spectral-element meshes (GLL), nodal values, gravity
@@ -41,6 +42,7 @@ from .behaviours import (
 from .catalogue import PREM, LayeredIsotropicElastic, MineosModel
 from .character import DENSITY, ELASTIC, SCALAR, STRESS, VECTOR, Character, Symmetry
 from .deck import (
+    GIA,
     MINEOS,
     Deck,
     DeckFormat,
@@ -68,7 +70,7 @@ from .fields import (
 )
 from .frames import from_geographic, geographic
 from .geometry import Geometry, InterfaceInfo, LayerInfo
-from .gridded import GriddedField, GriddedFunction
+from .gridded import GriddedDisplacement, GriddedField, GriddedFunction
 from .harmonics import real_harmonics, synthesise
 from .layerfunction import (
     LayerFunction,
@@ -163,6 +165,7 @@ __all__ = [
     "constant_field",
     "GriddedField",
     "GriddedFunction",
+    "GriddedDisplacement",
     "HarmonicField",
     "HarmonicFunction",
     "PerturbedField",
@@ -207,6 +210,7 @@ __all__ = [
     "Deck",
     "DeckFormat",
     "MINEOS",
+    "GIA",
     "read_deck",
     "write_deck",
     "deck_layers",

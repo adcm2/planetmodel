@@ -137,7 +137,7 @@ def build_layered_mesh(spec: MeshSpec, path: str | Path, *, verbose: bool = Fals
 
         t0 = clock()
         apply_size_fields(tagging, sizes)
-        apply_refinements(spec.refinements, dimension=d)
+        refined = apply_refinements(spec.refinements, dimension=d)
         apply_mesh_options(
             order=1, algorithm_2d=spec.algorithm_2d,
             algorithm_3d=spec.algorithm_3d,
@@ -145,6 +145,7 @@ def build_layered_mesh(spec: MeshSpec, path: str | Path, *, verbose: bool = Fals
                          + [float(f.size) for f in spec.refinements]),
             size_max=max(s.far_size for s in sizes.values()))
         gmsh.model.mesh.generate(d)
+        refined()
         timings["mesh"] = clock() - t0
 
         if d == 3 and spec.optimise:

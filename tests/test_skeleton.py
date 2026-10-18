@@ -94,7 +94,12 @@ def test_hollowed(sk):
     assert inner.is_hollow
     assert np.array_equal(inner.boundaries, [0.5, 1.0, 2.0, 3.0])
     assert np.array_equal(sk.hollowed(1.0).boundaries, [1.0, 2.0, 3.0])
-    assert np.array_equal(sk.hollowed(0.0).boundaries, sk.boundaries)
+    with pytest.raises(ValueError, match="inner boundary is positive"):
+        sk.hollowed(0.0)
+    assert np.array_equal(sk.hollowed(1.0 + 1e-12).boundaries, [1.0, 2.0, 3.0])
+    assert np.array_equal(sk.truncated(2.0 - 1e-12).boundaries, [0.0, 1.0, 2.0])
+    with pytest.raises(ValueError, match="already a boundary"):
+        sk.refined([1.0 + 1e-12])
     with pytest.raises(ValueError, match="at or above"):
         sk.hollowed(3.0)
     with pytest.raises(ValueError, match="below the innermost"):
@@ -123,3 +128,14 @@ def test_equality_and_repr(sk):
     assert sk == Skeleton([0, 1, 2, 3])
     assert sk != Skeleton([0, 1, 3])
     assert "3 layers" in repr(sk)
+
+
+def test_radii_are_finite_and_a_skeleton_hashes():
+    with pytest.raises(ValueError, match="finite"):
+        Skeleton([0.0, 1.0, np.inf])
+    with pytest.raises(ValueError, match="outside"):
+        Skeleton([0.0, 1.0]).locate(np.nan)
+    a, b = Skeleton([0.0, 1.0, 2.0]), Skeleton([0.0, 1.0, 2.0])
+    assert a == b and hash(a) == hash(b) and len({a, b}) == 1
+    coarse, cmap = a.coarsened(drop=[0])
+    hash(cmap)

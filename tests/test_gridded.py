@@ -278,3 +278,85 @@ def test_a_gridded_function_refuses_what_it_cannot_hold():
         GriddedFunction(grid, np.ones((grid.ntheta, grid.nphi)) + 0j, poles=[1, 1])
     assert "cubic" in repr(GriddedFunction(grid, np.ones((grid.ntheta, grid.nphi)),
                                            poles=[1.0, 1.0]))
+
+
+# -- GriddedDisplacement --------------------------------------------------------
+
+def relief_mapping(sk):
+    from planetmodel import RadialStretch
+    return RadialStretch(layer_linear(sk, [None, bump, bump]), rmax=1.0)
+
+
+def test_a_gridded_displacement_reproduces_the_mapping_it_samples():
+    from planetmodel import GriddedDisplacement, RadialMesh
+    from planetmodel.frames import cartesian_points
+    from planetmodel.testing import check_mapping
+    sk = Skeleton([0.0, 0.5, 1.0])
+    src = relief_mapping(sk)
+    mesh = RadialMesh(Geometry(sk, mapping=src), ngll=4, drmax=0.25)
+    gd = GriddedDisplacement.sampled(src, mesh, gauss_legendre(24))
+    assert gd.knots == (0.25, 0.5, 0.75)             # every element boundary
+    assert len(gd.fields) == 2 and gd.skeleton is sk
+    rng = np.random.default_rng(7)
+    X = cartesian_points(rng.uniform(0.05, 1.0, 300), rng.uniform(0, np.pi, 300),
+                         rng.uniform(0, 2 * np.pi, 300))
+    assert np.abs(gd(X) - src(X)).max() < 1e-5
+    assert np.abs(gd.deformation_gradient(X) - src.deformation_gradient(X)).max() < 5e-4
+    assert np.allclose(gd.jacobian(X), np.linalg.det(gd.deformation_gradient(X)))
+    # at the nodes and on the polar axis it is exact
+    axis = np.array([[0.0, 0.0, 0.75], [0.0, 0.0, -0.75]])
+    assert np.allclose(gd(axis), src(axis), atol=1e-14)
+    check_mapping(gd, X[:50])
+    g = Geometry(sk, mapping=gd)
+    check_geometry(g)
+
+
+def test_a_gridded_displacement_refuses_what_does_not_fit():
+    from planetmodel import GriddedDisplacement
+    sk = Skeleton([0.0, 0.5, 1.0])
+    grid = gauss_legendre(4)
+    vec = GriddedField.sampled(smooth_for(VECTOR), grid, ngll=2)       # on [0.5, 1]
+    sca = GriddedField.sampled(smooth_for(SCALAR), grid, ngll=2)
+    with pytest.raises(ValueError, match="2 layers need 2"):
+        GriddedDisplacement(sk, [vec])
+    with pytest.raises(ValueError, match="not a gridded vector field"):
+        GriddedDisplacement(sk, [sca, sca])
+    with pytest.raises(ValueError, match="its layer"):
+        GriddedDisplacement(sk, [vec, vec])
+
+
+def test_a_gridded_perturbation_over_several_layers_converts_and_is_written(tmp_path):
+    """Restated per layer by `perturbed`, it keeps its pieces to each layer,
+    and a unit conversion rebuilds it on its own breaks."""
+    from planetmodel import gauss_legendre, perturbed
+
+    R = 6371e3
+    m = LayeredIsotropicElastic([0.0, 3480e3, 5701e3, R], rho=[10e3, 5e3, 4e3],
+                                vp=[8e3, 12e3, 9e3], vs=[0.0, 6e3, 5e3])
+    dlnvs = AnalyticField((3480e3, R), lambda r, t, p: 0.01 * np.cos(t) * r / R)
+    g = GriddedField.sampled(dlnvs, gauss_legendre(6), breaks=[3480e3, 4500e3, R],
+                             ngll=3)
+    mp = perturbed(m, "vs", g, kind="relative")
+    f = mp.layer(1)["vs"]
+    breaks, _ = f.perturbation.radial_pieces()
+    assert np.array_equal(breaks, [3480e3, 4500e3, 5701e3])
+    nd = mp.nondimensionalised()
+    x = (5000e3, 0.3, 0.2)
+    assert np.isclose(nd.layer(1)["vs"](x[0] / R, *x[1:]) * nd.scales.factor(
+        nd.spec("vs").dimensions), f(*x), rtol=1e-12)
+    pytest.importorskip("netCDF4")
+    from planetmodel.modelfile import read_model, write_model
+    G1, G2 = gauss_legendre(6), gauss_legendre(8)
+    path = write_model(tmp_path / "m.nc", mp, grid={0: G1, 1: G1, 2: G2})
+    assert np.isclose(read_model(path).layer(1)["vs"](*x), f(*x), rtol=1e-12)
+
+
+def test_a_rule_the_grid_cannot_carry_is_refused_at_construction():
+    from planetmodel import gauss_legendre
+
+    custom = AngularGrid(np.linspace(0.2, 2.9, 6), np.linspace(0.0, 6.0, 8))
+    f = AnalyticField((0.5, 1.0), lambda r, t, p: r * np.cos(t))
+    with pytest.raises(ValueError, match="shipped kind"):
+        GriddedField.sampled(f, custom, lateral="harmonic")
+    with pytest.raises(ValueError, match="at least 4 rows"):
+        GriddedField.sampled(f, gauss_legendre(0), lateral="cubic")

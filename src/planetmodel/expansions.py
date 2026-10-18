@@ -16,12 +16,13 @@ so that it serves as a relief of `layer_linear` and as a surface
 quantity.
 
 Both evaluate through scipy's harmonics (`harmonics.synthesise`), a
-block of points at a time, at a cost of order (lmax + 1)^2 a point; on
-the nodes of a grid of a shipped kind the grid transforms of
-`planetmodel.harmonics` are the fast route, through the `harmonics`
-extra.  Entries of a coefficient array that belong to no harmonic (the
-sine slot of order zero, orders above the degree) must be zero.
-Everything is numbers.
+block of points at a time, at a cost of order (lmax + 1)^2 a point and
+with the coefficients held once for each distinct radius; on the nodes
+of a grid, `on_grid` takes ducc0's grid transforms (a shipped kind of
+band at least lmax) or its synthesis at points (any other grid), the
+fast routes of the `harmonics` extra.  Entries of a coefficient array
+that belong to no harmonic (the sine slot of order zero, orders above
+the degree) must be zero.  Everything is numbers.
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ from numpy.typing import ArrayLike
 from scipy.interpolate import BSpline, PPoly
 
 from .character import SCALAR, Character
-from .fields import FieldBase, RadialField
+from .fields import FieldBase, RadialField, radial_pieces_of
 from .harmonics import synthesise, synthesise_gradient
 from .layerfunction import PolynomialLayer, as_interval
 
@@ -125,6 +126,41 @@ class HarmonicField(FieldBase):
         """The highest degree of the expansion."""
         return self._lmax
 
+    #: The rules a harmonic field states for itself: exact pieces in
+    #: radius and the expansion between nodes.
+    radial = "polynomial"
+    lateral = "harmonic"
+
+    def radial_pieces(self) -> tuple[np.ndarray, int]:
+        """The coefficients' breakpoints in the interval, its ends included,
+        and their degree."""
+        return radial_pieces_of(self._interval, [self])
+
+    @property
+    def ppoly(self) -> PPoly:
+        """The coefficients' piecewise polynomial, as `radial_pieces_of`
+        reads a layer function."""
+        return self._pp
+
+    def on_grid(self, r: ArrayLike, grid: AngularGrid) -> np.ndarray:
+        """The values at radii `r`, within the interval, on the nodes of
+        `grid`, (r.size, ntheta, nphi): through ducc0 where it is
+        installed (its grid transforms on a shipped kind of band at least
+        `lmax`, its synthesis at points otherwise), through scipy's
+        harmonics point by point without it."""
+        r, _, _ = self._points(np.asarray(r, dtype=float).ravel(), 0.0, 0.0)
+        c = self.coefficients_at(r)
+        try:
+            from .harmonics import synthesise_grid, synthesise_points
+            if (grid.kind != "custom" and grid.lmax is not None
+                    and grid.lmax >= self._lmax):
+                return synthesise_grid(c, grid)
+            return synthesise_points(c, grid.colatitudes[:, None],
+                                     grid.longitudes[None, :])
+        except ImportError:
+            return self.evaluate(r[:, None, None], grid.colatitudes[None, :, None],
+                                 grid.longitudes[None, None, :])
+
     def coefficients_at(self, r: ArrayLike) -> np.ndarray:
         """c_lm at the radii `r`: shape (2, lmax + 1, lmax + 1) + r's shape."""
         r = np.asarray(r, dtype=float)
@@ -133,7 +169,9 @@ class HarmonicField(FieldBase):
 
     def _values(self, r: np.ndarray, theta: np.ndarray | None,
                 phi: np.ndarray | None) -> np.ndarray:
-        return synthesise(self.coefficients_at(r), theta, phi)
+        radii, index = np.unique(r, return_inverse=True)
+        return synthesise(self.coefficients_at(radii), theta, phi,
+                          index=index.reshape(r.shape))
 
     def spherical_mean(self, *, grid: AngularGrid | None = None) -> RadialField:
         """c_00(r) / sqrt(4 pi), exact polynomial pieces; `grid` is not

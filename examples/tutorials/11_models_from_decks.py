@@ -9,7 +9,8 @@
 # with the mineos normal-mode code are published.
 #
 # What the columns are called and what the header lines mean is a
-# `DeckFormat`; `MINEOS` is the format of mineos and PREM decks.
+# `DeckFormat`; `MINEOS` is the format of mineos and PREM decks, and
+# `GIA` that of a viscoelastic model with a viscosity column.
 # `read_deck` turns a file into a `Deck`, which is the numbers and the
 # header and nothing else. `deck_layers` interpolates every column,
 # layer by layer, with a piecewise polynomial through the knots, so the
@@ -32,9 +33,9 @@ from pathlib import Path
 
 import numpy as np
 
-from planetmodel import (PREM, Deck, DeckFormat, Elastic, Geometry, MINEOS,
-                         MineosModel, Model, SelfGravitating, Tabulated, Viscoelastic,
-                         deck_layers, gravity, read_deck, testing, write_deck)
+from planetmodel import (GIA, PREM, Deck, Elastic, Geometry, MINEOS, MineosModel,
+                         Model, SelfGravitating, Tabulated, Viscoelastic, deck_layers,
+                         gravity, read_deck, testing, write_deck)
 from planetmodel.deck import deck_knots
 
 DATA = Path(__file__).resolve().parent.parent / "data"
@@ -105,10 +106,12 @@ for x in (3480e3, 6371e3):
 # ## A deck of your own
 #
 # A format is a set of column names and a description of the header.
-# The format here has seven columns after the radius, PREM's elastic
-# fields and a viscosity, and a header of two lines: a title, and the
-# column names. Its two functions say how the header lines are read
-# into a mapping and written back from one.
+# The library ships one for glacial isostatic adjustment, `GIA`: seven
+# columns after the radius, PREM's elastic fields and a viscosity, and a
+# header of two lines, a title and the column names. A format of your
+# own is a `DeckFormat` given its column names, the number of header
+# lines and, if you want the header read into a mapping, the two
+# functions that read it and write it back.
 #
 # The deck itself is built from PREM's elastic part, with no attenuation
 # and no ocean, sampled on eight knots per layer. The viscosity column
@@ -118,13 +121,6 @@ for x in (3480e3, 6371e3):
 # layers do not have.
 
 # %%
-GIA = DeckFormat(
-    ("rho", "vpv", "vsv", "vph", "vsh", "eta", "viscosity"), name="gia",
-    header_lines=2,
-    parse_header=lambda lines: {"title": lines[0].strip(),
-                                "columns": tuple(lines[1].split()[1:])},
-    write_header=lambda d: [d.header["title"], "r " + " ".join(d.names)])
-
 elastic = prem.elastic().truncated(6368e3, name="surface")   # no Q, no ocean
 viscosity = {"lower_mantle": 1e22, "upper_lower_mantle": 1e22,
              "lowermost_mantle": 1e22, "inner_core": 1e21}

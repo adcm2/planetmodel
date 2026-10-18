@@ -23,7 +23,7 @@ import gmsh
 import numpy as np
 from numpy.typing import ArrayLike
 
-from ._geometry import ConcentricGeometry, entity_radius, outer_face_of
+from ._geometry import ConcentricGeometry, default_atol, entity_radius, outer_face_of
 
 __all__ = ["Tagging", "identify", "apply_physical_groups",
            "mean_radius_of_entity", "default_atol"]
@@ -49,22 +49,6 @@ class Tagging:
     def __repr__(self) -> str:
         return (f"Tagging({len(self.cells)} layers, "
                 f"radii {[round(r, 6) for r in self.radii]})")
-
-
-#: OCC pads every bounding box by roughly this much, absolutely: the
-#: same 1e-7 whether the radius is 0.2 or 6e6.  A matching tolerance
-#: must clear it, so a purely relative one would be too tight for a
-#: domain of radius near one.
-_OCC_BBOX_PAD = 1e-7
-
-
-def default_atol(r_outer: float) -> float:
-    """The matching tolerance for a domain of the given outer radius.
-
-    Generous against OCC's absolute bounding-box padding, and still far
-    tighter than any interface separation worth meshing.
-    """
-    return max(10.0 * _OCC_BBOX_PAD, 1e-9 * float(r_outer))
 
 
 def identify(geometry: ConcentricGeometry, expected_radii: ArrayLike, *,

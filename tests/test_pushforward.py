@@ -429,3 +429,21 @@ def test_rescaled_round_trips_through_the_scaled_mapping(cls):
     assert relerr(g.evaluate(k * r, th, ph), v * f.evaluate(r, th, ph)) < 1e-12
     back = g.rescaled(k=1.0 / k, v=1.0 / v)
     assert relerr(back.evaluate(r, th, ph), f.evaluate(r, th, ph)) < 1e-12
+
+
+def test_under_the_identity_the_pushed_field_is_its_source_on_the_axis():
+    """The frame at m(X) on the polar axis, or at the centre, is the
+    reference point's own."""
+    from planetmodel import AnalyticField, IdentityMapping, VECTOR
+    from planetmodel.pushforward import PushedForwardField
+
+    def east(r, t, p):
+        r, t, p = np.broadcast_arrays(r, t, p)
+        return np.stack([np.ones(r.shape), 0.0 * r, 0.0 * r], axis=-1)
+
+    source = AnalyticField((0.0, 1.0), east, character=VECTOR, frame="cartesian")
+    pushed = PushedForwardField(source, IdentityMapping())
+    r = np.array([0.5, 0.5, 0.0, 0.3])
+    t = np.array([0.0, np.pi, 0.7, 1.0])
+    p = np.array([np.pi / 2, 2.0, 1.1, 0.4])
+    assert np.allclose(pushed(r, t, p), source(r, t, p), atol=1e-14)

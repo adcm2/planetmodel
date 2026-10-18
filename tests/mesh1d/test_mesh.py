@@ -172,3 +172,53 @@ def test_truncation_rule():
     with pytest.raises(ValueError, match="non-negative"):
         m.truncation_radius(-1)
     assert "RadialMesh" in repr(m)
+
+
+def _kinked(knots):
+    from planetmodel.displacement import CallableDisplacement
+    from planetmodel.mapping import RadialStretch
+
+    def h(r, theta, phi):
+        out = 0.0 * r
+        for k in knots:
+            out = out + 0.01 * np.maximum(r - k, 0.0) * np.cos(theta)
+        return out
+
+    return RadialStretch(CallableDisplacement(h, knots=knots), rmax=1.0)
+
+
+def test_the_knots_of_a_model_are_pinned_as_of_its_geometry():
+    from planetmodel import Model
+
+    sk = Skeleton([0.0, 0.5, 1.0])
+    g = Geometry(sk, mapping=_kinked((0.7, 0.8)))
+    m = Model(g, [{}, {}])
+    for source in (g, m):
+        mesh = RadialMesh(source, drmax=0.25)
+        assert {0.5, 0.7, 0.8} <= set(mesh.left.tolist())
+
+
+def test_a_boundary_wins_over_a_knot_within_the_tolerance():
+    sk = Skeleton([0.0, 0.5, 1.0])
+    near = float(np.nextafter(0.5, 0.0))
+    mesh = RadialMesh(Geometry(sk, mapping=_kinked((near,))), drmax=0.25)
+    assert 0.5 in mesh.left and near not in mesh.left
+
+
+def test_edges_are_held_to_the_skeleton_to_the_tolerance():
+    sk = Skeleton([0.0, 0.5, 1.0])
+    mesh = RadialMesh(sk, edges=[0.0, 0.5, float(np.nextafter(1.0, 2.0))])
+    assert mesh.right[-1] == 1.0
+    with pytest.raises(ValueError, match="within the skeleton"):
+        RadialMesh(sk, edges=[0.0, 0.5, 1.01])
+
+
+def test_to_ppoly_keeps_complex_values():
+    mesh = Mesh1D([0.0, 0.5, 1.0], ngll=5)
+    u = (1.0 + 2.0j) * mesh.r ** 2
+    x = np.array([0.3, 0.8])
+    for method in ("polynomial", "linear"):
+        element, w = mesh.interpolation_weights(x, method=method)
+        direct = np.einsum("...i,...i->...", w, u[element])
+        assert np.allclose(mesh.to_ppoly(u, method=method)(x), direct, rtol=1e-12)
+    assert np.allclose(mesh.to_ppoly(u)(x), (1.0 + 2.0j) * x ** 2, rtol=1e-12)

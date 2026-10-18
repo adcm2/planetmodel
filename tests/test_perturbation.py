@@ -177,3 +177,12 @@ def test_a_perturbed_model_samples(prem):
     s = sample(m, gauss_legendre(3), fields=["vsv", "L", "rho"], ngll=3, drmax=1e6)
     check_sample(s, m)
     assert s.fields["vsv"].ndim == 3 and s.fields["rho"].ndim == 1
+
+
+def test_a_perturbed_field_is_not_perturbed_again():
+    from planetmodel import constant_field
+
+    ref = constant_field((0.0, 1.0), 2.0)
+    once = PerturbedField(ref, constant_field((0.0, 1.0), 0.1), kind="relative")
+    with pytest.raises(ValueError, match="perturbed once"):
+        PerturbedField(once, constant_field((0.0, 1.0), 0.1), kind="relative")

@@ -172,3 +172,57 @@ def test_layer_linear_refusals():
         layer_linear(SK, [None, None])
     with pytest.raises(TypeError, match="callable"):
         layer_linear(SK, [None, 1.0, None])
+
+
+def test_differences_stay_on_the_sphere_and_above_the_centre():
+    """A relief and a displacement that refuse points off their domain are
+    differenced at the poles and at the centre without leaving it."""
+    from planetmodel import AnalyticField, GriddedFunction, gauss_legendre, testing
+    from planetmodel.displacement import angular_difference, layer_linear
+    from planetmodel.geometry import Geometry
+    from planetmodel.mapping import RadialStretch
+
+    def strict(theta, phi):
+        theta = np.asarray(theta)
+        if np.any((theta < 0.0) | (theta > np.pi)):
+            raise ValueError("colatitudes must lie in [0, pi]")
+        return 0.002 * np.cos(theta) ** 2 + 0.001 * np.sin(theta) * np.cos(phi)
+
+    t = np.array([0.0, 1e-7, 1.0, np.pi])
+    p = np.array([0.3, 0.3, 2.0, 5.0])
+    dt, dp = angular_difference(strict, t, p, step=1e-6)
+    exact_t = (-0.004 * np.cos(t) * np.sin(t) + 0.001 * np.cos(t) * np.cos(p))
+    assert np.allclose(dt, exact_t, atol=1e-9)
+    assert np.allclose(dp, -0.001 * np.sin(t) * np.sin(p), atol=1e-9)
+
+    sk = Skeleton([0.0, 0.5, 1.0])
+    gridded = GriddedFunction.sampled(
+        lambda th, ph: 0.003 * np.sin(th) ** 2 * np.cos(2 * ph), gauss_legendre(12),
+        lateral="cubic")
+    g = Geometry(sk, mapping=RadialStretch(layer_linear(sk, [None, strict, gridded]),
+                                           rmax=1.0))
+    assert np.all(g.mapping.jacobian(np.array([[0.0, 0.0, 0.9], [0.0, 0.0, -0.4]])) > 0)
+    testing.check_geometry(g)
+
+    field = AnalyticField((0.0, 1.0), lambda r, th, ph: 0.01 * r ** 2 * np.cos(th))
+    h = CallableDisplacement(lambda r, th, ph: field(r, th, ph))
+    assert np.allclose(h.radial_derivative(0.0, 0.3, 0.0), 0.0, atol=1e-9)
+    assert np.allclose(h.radial_derivative(0.5, 0.3, 0.0), 0.01 * np.cos(0.3),
+                       rtol=1e-6)
+
+
+def test_a_wrapped_object_keeps_its_knots_and_bounds():
+    class Kinked:
+        knots = (0.5,)
+
+        def __call__(self, r, t, p):
+            return 0.01 * np.maximum(np.asarray(r) - 0.5, 0.0) + 0.0 * t
+
+        def radial_derivative(self, r, t, p):
+            return 0.01 * (np.asarray(r) > 0.5) + 0.0 * t
+
+        def bounds(self):
+            return 0.0, 0.005
+
+    h = as_displacement(Kinked())
+    assert h.knots == (0.5,) and h.bounds() == (0.0, 0.005)

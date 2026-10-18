@@ -150,11 +150,17 @@ def frozen(model: Model, omega: float, *,
     """The model frozen at angular frequency `omega`: every viscoelastic
     layer carries its complex moduli under A, C, F, L, N, and the
     constant `omega` records the frequency.  A model with no
-    viscoelastic layer comes back as a copy with the constant alone.
+    viscoelastic layer comes back as a copy with the constant alone; a
+    model that already carries `omega` is refused, since its moduli are
+    no longer the elastic ones the dispersion starts from.
     `reference_omega` defaults to the model's, see `reference_omega`."""
     omega = float(omega)
     if not omega > 0.0:
         raise ValueError(f"omega must be positive, got {omega:g}")
+    if "omega" in model.constants:
+        raise ValueError("the model is already frozen, at omega = "
+                         f"{float(model.constant('omega')):g}; freeze the elastic "
+                         "model it came from")
     factor = model.scales.factor(FREQUENCY)
     if reference_omega is None:
         reference_omega = _model_reference_omega(model)

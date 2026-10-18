@@ -267,3 +267,78 @@ def test_a_custom_format_and_a_model_type_of_ones_own(tmp_path):
     back = m.to_deck(columns=["rho", "viscosity"])
     assert np.isnan(back["viscosity"]).sum() == 8
     assert np.allclose(back["rho"], deck["rho"])
+
+
+def test_the_gia_format_round_trips(tmp_path):
+    from planetmodel import GIA, PREM
+    from planetmodel.deck import GIA_COLUMNS
+    elastic = PREM().elastic().truncated(6368e3, name="surface")
+    radii, columns = [], {name: [] for name in GIA_COLUMNS}
+    for layer in elastic.layers:
+        lo, hi = layer.interval
+        r = np.linspace(lo, hi, 5)
+        radii.append(r)
+        for name in GIA_COLUMNS:
+            if name == "viscosity":
+                eta = np.nan if elastic.is_fluid(layer.index) else 1e21
+                columns[name].append(np.full(r.size, eta))
+            else:
+                columns[name].append(layer[name](r))
+    deck = Deck(np.concatenate(radii),
+                {n: np.concatenate(v) for n, v in columns.items()},
+                header={"title": "PREM with a viscosity"})
+    path = write_deck(tmp_path / "gia.deck", deck, GIA)
+    lines = path.read_text().splitlines()
+    assert lines[0] == "PREM with a viscosity"
+    assert lines[1].split() == ["r", *GIA_COLUMNS]
+    back = read_deck(path, GIA)
+    assert back.header["title"] == "PREM with a viscosity"
+    assert np.allclose(back.radius, deck.radius)
+    for name in GIA_COLUMNS:
+        assert np.allclose(back.columns[name], deck.columns[name], equal_nan=True)
+    _, layers = deck_layers(back)
+    assert "viscosity" not in layers[1] and "viscosity" in layers[2]
+    bad = tmp_path / "bad.deck"
+    bad.write_text("title\nr rho vp vs\n" + "\n".join(lines[2:]) + "\n")
+    with pytest.raises(ValueError, match="names its columns"):
+        read_deck(bad, GIA)
+
+
+def test_a_converted_deck_model_writes_its_deck_in_si(mineos, deck):
+    """The knots follow the model's length unit, and a deck is in SI."""
+    from planetmodel.units import Scales
+
+    nd = mineos.nondimensionalised()
+    assert np.isclose(nd.knots[-1][-1], 1.0)
+    for model in (nd, mineos.converted(Scales(mass=1000.0))):
+        back = model.to_deck()
+        for name in deck.names:
+            assert np.allclose(back[name], deck[name], rtol=1e-9, atol=1e-6)
+        assert np.allclose(back.radius, deck.radius, rtol=1e-12)
+
+
+def test_to_deck_holds_the_layering_to_a_relative_tolerance(mineos):
+    with pytest.raises(ValueError, match="no longer matches"):
+        mineos.truncated(6371e3 - 50.0).to_deck()
+
+
+def test_the_mineos_header_round_trips_its_trailing_tokens(deck, tmp_path):
+    path = write_deck(tmp_path / "again.200", deck, MINEOS)
+    lines = path.read_text().splitlines()
+    original = PREM_DECK.read_text().splitlines()
+    for ours, theirs in zip(lines[1:3], original[1:3]):
+        assert [float(x) for x in ours.split()] == [float(x) for x in theirs.split()]
+
+
+def test_a_header_without_an_inner_core_is_not_warned_about():
+    import warnings
+
+    radius = [3480e3, 4000e3, 4000e3, 6371e3]
+    from planetmodel.deck import MINEOS_COLUMNS
+
+    columns = {name: np.ones(4) for name in MINEOS_COLUMNS}
+    d = Deck(radius, columns, header={"nic": 0, "noc": 0})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        layers, faces = mineos_names(d)
+    assert layers == [None, None] and faces[-1] == "surface"

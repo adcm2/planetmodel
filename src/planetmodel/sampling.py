@@ -68,6 +68,7 @@ own longitude's meridian: the columns differ while the vector does not.
 """
 from __future__ import annotations
 
+import numbers
 from collections import abc
 from collections.abc import Iterable
 from dataclasses import KW_ONLY, dataclass
@@ -105,7 +106,7 @@ def _readonly(a: ArrayLike, *, name: str) -> np.ndarray:
     return a
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class AngularGrid:
     """A product angular node set: colatitudes times longitudes.
 
@@ -116,8 +117,10 @@ class AngularGrid:
     when it is that kind of grid; `weights`, when present, are
     colatitude weights in the convention of the module docstring.
     `gauss_legendre`, `driscoll_healy` and `equiangular` build the
-    shipped families; anything else is a `custom` grid, and nothing
-    downstream treats one differently.
+    shipped families; anything else is a `custom` grid, which the
+    spherical-harmonic transforms (and so the harmonic lateral rule)
+    refuse.  Two grids are equal when their nodes, kind, band and
+    weights are.
     """
 
     colatitudes: np.ndarray
@@ -130,6 +133,8 @@ class AngularGrid:
     def __post_init__(self) -> None:
         theta = _readonly(self.colatitudes, name="colatitudes")
         phi = _readonly(self.longitudes, name="longitudes")
+        if not (np.all(np.isfinite(theta)) and np.all(np.isfinite(phi))):
+            raise ValueError("the nodes must be finite")
         if not np.all(np.diff(theta) > 0.0):
             raise ValueError("colatitudes must be strictly increasing")
         if theta[0] < 0.0 or theta[-1] > np.pi:
@@ -142,6 +147,8 @@ class AngularGrid:
             raise ValueError(f"kind must be one of {KINDS}, got {self.kind!r}")
         lmax = self.lmax
         if lmax is not None:
+            if not isinstance(lmax, numbers.Integral) or isinstance(lmax, bool):
+                raise TypeError(f"lmax must be an integer, got {lmax!r}")
             lmax = int(lmax)
             if lmax < 0:
                 raise ValueError(f"lmax must be non-negative, got {lmax}")
@@ -151,10 +158,30 @@ class AngularGrid:
             if w.shape != theta.shape:
                 raise ValueError(f"weights must have one entry per colatitude, "
                                  f"{theta.size}, got {w.size}")
+            if not np.all(np.isfinite(w)):
+                raise ValueError("weights must be finite")
         object.__setattr__(self, "colatitudes", theta)
         object.__setattr__(self, "longitudes", phi)
         object.__setattr__(self, "lmax", lmax)
         object.__setattr__(self, "weights", w)
+
+    def __eq__(self, other: object) -> bool:
+        """Equal nodes, kind, band and weights."""
+        if not isinstance(other, AngularGrid):
+            return NotImplemented
+        if self is other:
+            return True
+        same_weights = (self.weights is None and other.weights is None) or (
+            self.weights is not None and other.weights is not None
+            and np.array_equal(self.weights, other.weights))
+        return (self.kind == other.kind and self.lmax == other.lmax and same_weights
+                and np.array_equal(self.colatitudes, other.colatitudes)
+                and np.array_equal(self.longitudes, other.longitudes))
+
+    def __hash__(self) -> int:
+        """The hash of the nodes, the kind and the band."""
+        return hash((self.kind, self.lmax, self.colatitudes.tobytes(),
+                     self.longitudes.tobytes()))
 
     @property
     def ntheta(self) -> int:
@@ -335,7 +362,8 @@ class Sample:
     3)`, or None for an identity geometry.  `characters` and
     `dimensions` say what each array is, `scales` what its numbers are
     in, and `layer_names` names the layers the nodes refer to.  Every
-    array and mapping is read-only.
+    array and mapping the sample holds or hands out is read-only; the
+    radial mesh is the mesh's own.
     """
 
     radial: RadialMesh
@@ -366,13 +394,17 @@ class Sample:
 
     @property
     def element_layer(self) -> np.ndarray:
-        """The skeleton layer of every element, shape (nspec,)."""
-        return self.radial.layer
+        """The skeleton layer of every element, shape (nspec,), read-only."""
+        out = self.radial.layer.view()
+        out.setflags(write=False)
+        return out
 
     @property
     def node_layer(self) -> np.ndarray:
-        """The skeleton layer of every flat node, shape (nnode,)."""
-        return np.repeat(self.radial.layer, self.radial.ngll)
+        """The skeleton layer of every flat node, shape (nnode,), read-only."""
+        out = np.repeat(self.radial.layer, self.radial.ngll)
+        out.setflags(write=False)
+        return out
 
     def stored_shape(self, name: str) -> tuple[int, ...]:
         """The trailing axes a field's array carries beyond the nodes."""

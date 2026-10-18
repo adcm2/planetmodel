@@ -152,3 +152,23 @@ def test_a_harmonic_function_is_a_relief_whose_geometry_holds():
     h = layer_linear(sk, [None, rel, rel])
     check_displacement(h, sk)
     check_geometry(Geometry(sk, mapping=RadialStretch(h, rmax=1.0)))
+
+
+def test_on_grid_holds_the_radius_and_takes_ducc0_on_any_grid():
+    pytest.importorskip("ducc0")
+    from planetmodel import AngularGrid, gauss_legendre
+
+    L = 6
+    rng = np.random.default_rng(3)
+    c = rng.standard_normal((2, L + 1, L + 1))
+    c[:, np.arange(L + 1)[:, None] < np.arange(L + 1)[None, :]] = 0.0
+    c[1, :, 0] = 0.0
+    h = HarmonicField((0.5, 1.0), c)
+    with pytest.raises(ValueError, match="outside the interval"):
+        h.on_grid([5.0], gauss_legendre(L))
+    custom = AngularGrid(np.linspace(0.1, 3.0, 7), np.linspace(0.0, 6.0, 9))
+    for grid in (gauss_legendre(L), gauss_legendre(2), custom):
+        want = h.evaluate(np.array([0.7])[:, None, None],
+                          grid.colatitudes[None, :, None],
+                          grid.longitudes[None, None, :])
+        assert np.allclose(h.on_grid([0.7], grid), want, atol=1e-11)

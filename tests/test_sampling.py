@@ -571,3 +571,19 @@ def test_check_sample_catches_a_wrong_displacement(stretched, plain):
                      three_layers())
     with pytest.raises(AssertionError, match="writable"):
         check_sample(dataclasses.replace(s, displacement=u), m)
+
+
+def test_grids_compare_by_value_and_refuse_what_is_not_a_grid():
+    from planetmodel import AngularGrid, gauss_legendre
+
+    assert gauss_legendre(2) == gauss_legendre(2) != gauss_legendre(3)
+    assert hash(gauss_legendre(2)) == hash(gauss_legendre(2))
+    assert gauss_legendre(2) in [gauss_legendre(4), gauss_legendre(2)]
+    g = gauss_legendre(2)
+    assert AngularGrid(g.colatitudes, g.longitudes) != g          # kind and band
+    with pytest.raises(ValueError, match="finite"):
+        AngularGrid([np.nan], [0.0])
+    with pytest.raises(ValueError, match="finite"):
+        AngularGrid([0.5, 1.0], [0.0], weights=[1.0, np.inf])
+    with pytest.raises(TypeError, match="integer"):
+        AngularGrid([0.5, 1.0], [0.0], lmax=2.7)

@@ -33,8 +33,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 import numpy as np
 from numpy.typing import ArrayLike
 
-from .displacement import (RadialDisplacement, SphericalFunction, ZeroDisplacement,
-                           as_displacement)
+from .displacement import (CallableDisplacement, RadialDisplacement, SphericalFunction,
+                           ZeroDisplacement, as_displacement)
 from .frames import cartesian_points, spherical_coordinates
 
 if TYPE_CHECKING:
@@ -45,6 +45,7 @@ __all__ = [
     "Mapping", "MappingBase", "IdentityMapping", "RadialStretch",
     "ScaledMapping", "ValidityReport", "MappingPerturbation",
     "validity_lattice", "outer_radius_of", "SphericalSample",
+    "R_FLOOR_FRACTION", "SIN_FLOOR", "validity",
 ]
 
 #: A set of points given as (r, theta, phi) arrays that broadcast against
@@ -54,11 +55,11 @@ type SphericalSample = tuple[ArrayLike, ArrayLike, ArrayLike]
 
 #: A point closer to the origin than this fraction of `rmax` is treated as
 #: the origin, where the radial frame is undefined.
-_R_FLOOR_FRACTION = 1e-9
+R_FLOOR_FRACTION = 1e-9
 
 #: sin(theta) below this is the polar axis, where the 1/(r sin theta)
 #: entry of F is taken as its limit along the meridian.
-_SIN_FLOOR = 1e-12
+SIN_FLOOR = 1e-12
 
 
 def _per_sin(h: RadialDisplacement, r: np.ndarray, theta: np.ndarray,
@@ -70,8 +71,8 @@ def _per_sin(h: RadialDisplacement, r: np.ndarray, theta: np.ndarray,
     e_theta."""
     dph = np.asarray(dph, dtype=float)
     sin_t = np.sin(theta)
-    out = dph / np.maximum(sin_t, _SIN_FLOOR)
-    axis = sin_t < _SIN_FLOOR
+    out = dph / np.maximum(sin_t, SIN_FLOOR)
+    axis = sin_t < SIN_FLOOR
     if np.any(axis):
         rr, tt, pp = (np.broadcast_to(a, axis.shape)[axis] for a in (r, theta, phi))
         quarter = np.asarray(h.angular_gradient(rr, tt, pp + 0.5 * np.pi)[0],
@@ -144,13 +145,14 @@ def validity_lattice(skeleton: Skeleton, *, n_r: int = 8, n_theta: int = 25,
     """A (r, theta, phi) sample covering a skeleton, for `is_valid(sample=...)`.
 
     `n_r` radii are laid strictly inside every layer of the skeleton, so
-    a thin layer is sampled as densely as a thick one; theta covers
-    [0, pi] including both poles and phi covers [-pi, pi).  Returns
-    broadcastable arrays of shapes (nlayers*n_r, 1, 1), (1, n_theta, 1)
-    and (1, 1, n_phi).
+    a thin layer is sampled as densely as a thick one, and the centre is
+    sampled where the skeleton holds it; theta covers [0, pi] including
+    both poles and phi covers [-pi, pi).  Returns broadcastable arrays of
+    shapes (n, 1, 1), (1, n_theta, 1) and (1, 1, n_phi), n being
+    nlayers*n_r, one more for the centre.
     """
     b = np.asarray(skeleton.boundaries, dtype=float)
-    rs = []
+    rs = [np.zeros(1)] if b[0] == 0.0 else []
     for lo, hi in zip(b[:-1], b[1:]):
         inset = 1e-6 * (hi - lo)
         rs.append(np.linspace(lo + inset, hi - inset, n_r))
@@ -179,6 +181,15 @@ def _points_or_sample(X: ArrayLike | None, sample: SphericalSample | None
     if X is None:
         raise ValueError("give either points X or a (r, theta, phi) sample")
     return np.asarray(X, dtype=float)
+
+
+def validity(m: Mapping, *, X: ArrayLike | None = None,
+             sample: SphericalSample | None = None) -> ValidityReport:
+    """A mapping's verdict on the points or sample: its own `is_valid`
+    where it has one, else J > 0 there (`MappingBase.is_valid`)."""
+    if hasattr(m, "is_valid"):
+        return m.is_valid(X=X, sample=sample)
+    return MappingBase.is_valid(m, X=X, sample=sample)
 
 
 class MappingBase:
@@ -314,7 +325,12 @@ class RadialStretch(MappingBase):
         return tuple(getattr(self.h, "knots", ()))
 
     def _floor(self) -> float:
-        return _R_FLOOR_FRACTION * self.rmax
+        return R_FLOOR_FRACTION * self.rmax
+
+    def _ratio(self, r: np.ndarray, h: np.ndarray, dr: np.ndarray) -> np.ndarray:
+        """h / r, and its limit dh/dr at the centre, below the floor."""
+        floor = self._floor()
+        return np.where(r > floor, h / np.maximum(r, floor), dr)
 
     def _parts(self, X: ArrayLike) -> tuple[np.ndarray, ...]:
         """(r, theta, phi, R, h, dh/dr, dh/dtheta, dh/dphi) at X."""
@@ -330,16 +346,17 @@ class RadialStretch(MappingBase):
         X = np.asarray(X, dtype=float)
         r, theta, phi, _ = spherical_coordinates(X)
         h = np.asarray(self.h(r, theta, phi), dtype=float)
-        floor = self._floor()
-        scale = np.where(r > floor, (r + h) / np.maximum(r, floor), 1.0)
-        return X * scale[..., None]
+        if np.any(r <= self._floor()):
+            dr = np.asarray(self.h.radial_derivative(r, theta, phi), dtype=float)
+            return X * (1.0 + self._ratio(r, h, dr))[..., None]
+        return X * (1.0 + h / r)[..., None]
 
     def deformation_gradient_spherical(self, X: ArrayLike) -> np.ndarray:
         """F in the local (e_r, e_theta, e_phi) frame, shape (..., 3, 3)."""
         r, theta, phi, R, h, dr, dth, dph = self._parts(X)
         rs = np.maximum(r, self._floor())
         F = np.zeros(np.shape(r) + (3, 3))
-        stretch = 1.0 + h / rs
+        stretch = 1.0 + self._ratio(r, h, dr)
         F[..., 0, 0] = 1.0 + dr
         F[..., 0, 1] = dth / rs
         F[..., 0, 2] = _per_sin(self.h, r, theta, phi, dph) / rs
@@ -356,8 +373,7 @@ class RadialStretch(MappingBase):
     def jacobian(self, X: ArrayLike) -> np.ndarray:
         """J = (1 + dh/dr)(1 + h/r)^2."""
         r, theta, phi, _, h, dr, _, _ = self._parts(X)
-        rs = np.maximum(r, self._floor())
-        return (1.0 + dr) * (1.0 + h / rs) ** 2
+        return (1.0 + dr) * (1.0 + self._ratio(r, h, dr)) ** 2
 
     def is_valid(self, *, X: ArrayLike | None = None,
                  sample: SphericalSample | None = None) -> ValidityReport:
@@ -387,8 +403,7 @@ class RadialStretch(MappingBase):
                     float(np.ravel(phi)[k]))
 
         radial = 1.0 + dr
-        ratio = np.where(r > floor, h / np.maximum(r, floor), dr)
-        tangential = 1.0 + ratio
+        tangential = 1.0 + self._ratio(r, h, dr)
 
         centre = (r <= floor) & (np.abs(h) > floor)
         if np.any(centre):
@@ -473,16 +488,17 @@ class RadialStretch(MappingBase):
         d = np.asarray(dh(r, theta, phi), dtype=float)
         ddr = np.asarray(dh.radial_derivative(r, theta, phi), dtype=float)
         dth, dph = dh.angular_gradient(r, theta, phi)
+        stretch, dstretch = 1.0 + self._ratio(r, h, dr), self._ratio(r, d, ddr)
 
         dF = np.zeros(np.shape(r) + (3, 3))
         dF[..., 0, 0] = ddr
         dF[..., 0, 1] = np.asarray(dth, dtype=float) / rs
         dF[..., 0, 2] = _per_sin(dh, r, theta, phi, dph) / rs
-        dF[..., 1, 1] = d / rs
-        dF[..., 2, 2] = d / rs
+        dF[..., 1, 1] = dstretch
+        dF[..., 2, 2] = dstretch
         dF_cart = np.einsum("...ik,...kl,...jl->...ij", R, dF, R)
 
-        dJ = ddr * (1.0 + h / rs) ** 2 + 2.0 * (1.0 + dr) * (1.0 + h / rs) * d / rs
+        dJ = ddr * stretch ** 2 + 2.0 * (1.0 + dr) * stretch * dstretch
         return MappingPerturbation(dF_cart, dJ)
 
     @property
@@ -500,8 +516,10 @@ class ScaledMapping(MappingBase):
 
     Points of the scaled body are divided by k, mapped, and multiplied
     back.  F and J pass through unchanged, since both are dimensionless;
-    `knots` are multiplied by k.  `is_valid` and `inverse` delegate to
-    the underlying mapping in its own coordinates.
+    `knots` are multiplied by k.  `is_valid` is the underlying mapping's
+    `validity` in its own coordinates; `inverse` and `linearise` are its
+    own where it has them (a perturbation delta of the scaled body is
+    delta(k r) / k to it), refused otherwise.
     """
 
     def __init__(self, mapping: Mapping, k: float) -> None:
@@ -527,17 +545,40 @@ class ScaledMapping(MappingBase):
                  sample: SphericalSample | None = None) -> ValidityReport:
         """The underlying mapping's verdict, in its own coordinates."""
         if X is not None:
-            return self.mapping.is_valid(X=np.asarray(X, dtype=float) / self.k)
+            return validity(self.mapping, X=np.asarray(X, dtype=float) / self.k)
         if sample is not None:
             r, theta, phi = sample
-            return self.mapping.is_valid(
-                sample=(np.asarray(r, dtype=float) / self.k, theta, phi))
+            return validity(self.mapping,
+                            sample=(np.asarray(r, dtype=float) / self.k, theta, phi))
         raise ValueError("give either points X or a (r, theta, phi) sample")
 
     def inverse(self, x: ArrayLike) -> np.ndarray:
         """k m^-1(x / k), where the underlying mapping inverts itself."""
+        if not hasattr(self.mapping, "inverse"):
+            return MappingBase.inverse(self, x)
         return self.k * np.asarray(
             self.mapping.inverse(np.asarray(x, dtype=float) / self.k), dtype=float)
+
+    def linearise(self, delta: RadialDisplacement | SphericalFunction, *,
+                  X: ArrayLike) -> MappingPerturbation:
+        """The underlying mapping's dF and dJ at X / k, for delta(k r) / k."""
+        inner = getattr(self.mapping, "linearise", None)
+        if inner is None:
+            return MappingBase.linearise(self, delta, X=X)
+        d, k = as_displacement(delta), self.k
+
+        def gradient(r: np.ndarray, theta: np.ndarray, phi: np.ndarray
+                     ) -> tuple[np.ndarray, np.ndarray]:
+            gt, gp = d.angular_gradient(k * r, theta, phi)
+            return np.asarray(gt, dtype=float) / k, np.asarray(gp, dtype=float) / k
+
+        scaled = CallableDisplacement(
+            lambda r, theta, phi: np.asarray(d(k * r, theta, phi), dtype=float) / k,
+            radial_derivative=lambda r, theta, phi: d.radial_derivative(
+                k * r, theta, phi),
+            angular_gradient=gradient,
+            knots=[x / k for x in getattr(d, "knots", ())])
+        return inner(scaled, X=np.asarray(X, dtype=float) / k)
 
     @property
     def knots(self) -> tuple[float, ...]:

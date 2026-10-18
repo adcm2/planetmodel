@@ -8,6 +8,7 @@ imports of the rest of the package happen inside the functions.
 """
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 __all__ = ["check_displacement", "check_mapping", "check_geometry",
            "check_layer_function", "check_field", "check_model",
            "check_refinement", "check_sample", "check_spectral_basis",
-           "check_spherical_basis"]
+           "check_spherical_basis", "check_model_file"]
 
 
 def _rel(a: ArrayLike, b: ArrayLike, *, rtol: float, floor: float = 1.0) -> bool:
@@ -68,7 +69,7 @@ def check_displacement(h: RadialDisplacement, skeleton: Skeleton, *,
             f"h is not single-valued at the pole theta = {pole:.3g}: it varies "
             "with phi there")
 
-    knots = tuple(getattr(h, "knots", ()))
+    knots = tuple(sorted(float(k) for k in getattr(h, "knots", ())))
     eps = 1e-6 * span
     for k in knots:
         if not lo < k < hi:
@@ -176,7 +177,8 @@ def check_geometry(geometry: Geometry) -> None:
     checks on), that names are unique, that the interfaces sit on the
     skeleton's boundaries with consistent `between`, that `scaled(k)`
     round-trips, and that the mapping passes `check_mapping` on the
-    validity lattice.
+    validity lattice's angles, at radii inside every span between the
+    boundaries and the declared knots.
     """
     from .frames import cartesian_points
     from .geometry import Geometry
@@ -206,11 +208,14 @@ def check_geometry(geometry: Geometry) -> None:
     twice = geometry.scaled(k).scaled(1.0 / k)
     assert np.allclose(twice.skeleton.boundaries, b, rtol=1e-12), (
         "scaled(k).scaled(1/k) does not restore the skeleton")
-    # points well inside every layer, away from the boundaries where the
-    # mapping's gradient may jump
+    # points well inside every span between the boundaries and the
+    # declared knots, where the mapping's gradient may jump
     _, theta, phi = validity_lattice(sk, n_theta=5, n_phi=4)
+    tol = geometry.rtol * sk.span
+    cuts = np.unique(np.concatenate([b, np.asarray(geometry.knots(), dtype=float)]))
+    cuts = cuts[np.concatenate([[True], np.diff(cuts) > tol])]
     r = np.concatenate([lo + (hi - lo) * np.array([0.25, 0.5, 0.75])
-                        for lo, hi in zip(b[:-1], b[1:])])[:, None, None]
+                        for lo, hi in zip(cuts[:-1], cuts[1:])])[:, None, None]
     X = cartesian_points(r, theta, phi)
     assert np.allclose(twice.mapping(X), geometry.mapping(X), rtol=1e-10,
                        atol=1e-10 * max(1.0, float(sk.span))), (
@@ -490,7 +495,8 @@ def check_model(model: Model, *, rng: np.random.Generator | None = None) -> None
                       and model.spec(n).dimensions is not None for n in names)
     if convertible:
         other = Scales(length=3.0 * model.scales.length,
-                       mass=0.5 * model.scales.mass, time=2.0 * model.scales.time)
+                       mass=0.5 * model.scales.mass, time=2.0 * model.scales.time,
+                       temperature=1.5 * model.scales.temperature)
         back = model.converted(other).converted(model.scales)
         assert np.allclose(back.skeleton.boundaries, model.skeleton.boundaries,
                            rtol=1e-12), "conversion does not restore the skeleton"
@@ -875,3 +881,126 @@ def check_spherical_basis(basis: SphericalBasis, *,
     junk[~seen] = 1.0
     assert np.array_equal(basis.analyse(junk), basis.analyse(full)), (
         "analyse reads entries that belong to no harmonic")
+
+
+def check_model_file(path: str | os.PathLike[str], model: Model, *,
+                     rng: np.random.Generator | None = None, n: int = 48,
+                     rtol: float = 1e-12) -> None:
+    """Hold a model file to the model it was written from.
+
+    Checks the structure (`validate_structure`); the skeleton, the layer
+    and interface names and the scales; that every variable is held on
+    the layers its `layers` attribute names, NaN elsewhere, by fields of
+    the model of the stated character; that its values at `n` random
+    entries of the file's own nodes are the model's there, the
+    reference and the perturbation of a perturbed field apart, and so
+    are its polar values; that the geometry group holds the mapping's
+    reliefs at its nodes, and a displacement variable the mapping's
+    displacement; and that the model read back from the file takes the
+    stored values at those nodes, for every variable read by a local
+    rule.  Tolerances are `rtol` of a variable's largest value.  netCDF4
+    is imported here.
+    """
+    from .frames import cartesian_points, spherical_frame
+    from .modelfile import read_model, read_model_file, validate_structure
+
+    rng = np.random.default_rng(0) if rng is None else rng
+    validate_structure(path)
+    data = read_model_file(path)
+    assert np.allclose(data.skeleton.boundaries, model.skeleton.boundaries,
+                       rtol=1e-15), "the file's skeleton is not the model's"
+    assert data.layer_names == tuple(lay.name for lay in model.geometry.layers), (
+        "the file's layer names are not the model's")
+    assert data.interface_names == tuple(f.name for f in model.geometry.interfaces), (
+        "the file's interface names are not the model's")
+    assert data.scales == model.scales, (
+        f"the file is in {data.scales!r}, the model in {model.scales!r}")
+    back = read_model(path)
+
+    def stored_against(values: np.ndarray, want: np.ndarray, what: str) -> None:
+        scale = max(float(np.nanmax(np.abs(values))) if values.size else 0.0, 1e-300)
+        assert np.allclose(values, want, rtol=0.0, atol=rtol * scale), (
+            f"{what}: the file's values are not the model's at its nodes")
+
+    for k, part in enumerate(data.parts):
+        mesh, grid = part.mesh, part.grid
+        r_all = mesh.r.ravel()
+        node_layer = np.repeat(mesh.layer, mesh.ngll)
+        for name, var in part.variables.items():
+            if name.endswith(("_poles", "_perturbation")) or name == "displacement":
+                continue
+            holders = [int(i) for i in np.atleast_1d(var.attributes["layers"])]
+            values = var.values
+            for i in part.layers:
+                on = node_layer == i
+                if i not in holders:
+                    assert np.all(np.isnan(values[on])), (
+                        f"part_{k}/{name} is not NaN on layer {i}, which lacks it")
+                    continue
+                field = model.layer(i)[name]
+                c = field.character
+                stated = (int(var.attributes["rank"]), int(var.attributes["weight"]),
+                          bool(var.attributes["voigt"]))
+                assert stated == (c.rank, c.weight, bool(c.voigt)), (
+                    f"part_{k}/{name} states the character {stated}, the model's "
+                    f"field on layer {i} is {c}")
+                pert_name = var.attributes.get("perturbation")
+                reference = getattr(field, "reference", None)
+                source = reference if (pert_name and reference is not None) else field
+                idx = rng.choice(np.flatnonzero(on), size=min(n, int(on.sum())),
+                                 replace=False)
+                r = r_all[idx]
+                if values.ndim == 1 + len(source.stored_shape):
+                    th = np.full(r.shape, 0.5 * np.pi)
+                    want = source.evaluate(r, th, np.zeros_like(r))
+                    stored_against(values[idx], want, f"part_{k}/{name}")
+                    got = back.layer(i)[name]
+                    got = getattr(got, "reference", got)
+                    stored_against(values[idx], got.evaluate(r, th, np.zeros_like(r)),
+                                   f"part_{k}/{name} read back")
+                else:
+                    it = rng.integers(grid.ntheta, size=idx.size)
+                    ip = rng.integers(grid.nphi, size=idx.size)
+                    t, p = grid.colatitudes[it], grid.longitudes[ip]
+                    stored_against(values[idx, it, ip], source.evaluate(r, t, p),
+                                   f"part_{k}/{name}")
+                    if var.attributes.get("lateral_interpolation") != "harmonic":
+                        stored_against(values[idx, it, ip],
+                                       back.layer(i)[name].evaluate(r, t, p),
+                                       f"part_{k}/{name} read back")
+                poles = part.variables.get(f"{name}_poles")
+                if poles is not None:
+                    want = source.evaluate(r[:, None], np.array([0.0, np.pi]),
+                                           np.zeros(2), frame="cartesian")
+                    stored_against(poles.values[idx], want, f"part_{k}/{name}_poles")
+                if pert_name and reference is not None:
+                    pv = part.variables[pert_name]
+                    d = field.perturbation
+                    if pv.values.ndim == 1:
+                        want = d.evaluate(r, np.full(r.shape, 0.5 * np.pi),
+                                          np.zeros_like(r))
+                        stored_against(pv.values[idx], want, f"part_{k}/{pert_name}")
+                    else:
+                        it = rng.integers(grid.ntheta, size=idx.size)
+                        ip = rng.integers(grid.nphi, size=idx.size)
+                        t, p = grid.colatitudes[it], grid.longitudes[ip]
+                        stored_against(pv.values[idx, it, ip], d.evaluate(r, t, p),
+                                       f"part_{k}/{pert_name}")
+        disp = part.variables.get("displacement")
+        if disp is not None:
+            it = rng.integers(grid.ntheta, size=n)
+            ip = rng.integers(grid.nphi, size=n)
+            idx = rng.integers(r_all.size, size=n)
+            X = cartesian_points(r_all[idx], grid.colatitudes[it], grid.longitudes[ip])
+            R = spherical_frame(grid.colatitudes[it], grid.longitudes[ip])
+            u = np.einsum("pji,pj->pi", R, model.geometry.mapping(X) - X)
+            stored_against(disp.values[idx, it, ip], u, f"part_{k}/displacement")
+    if data.geometry is not None:
+        g = data.geometry
+        h = model.geometry.mapping.h
+        theta = g.grid.colatitudes[:, None]
+        phi = g.grid.longitudes[None, :]
+        for j, radius in enumerate(g.radii):
+            want = np.broadcast_to(h(np.full(theta.shape, radius), theta, phi),
+                                   g.values[j].shape)
+            stored_against(g.values[j], want, f"geometry/boundary_displacement[{j}]")

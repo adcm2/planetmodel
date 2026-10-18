@@ -51,12 +51,22 @@ def _shell_masses(model: Model) -> tuple[list[Field], np.ndarray]:
     return fields, np.asarray(masses)
 
 
+def _within(model: Model, r: np.ndarray) -> np.ndarray:
+    """Radii held to the model to the geometry's tolerance and clipped
+    onto it; a radius beyond that, or NaN, is refused."""
+    b = model.skeleton.boundaries
+    tol = model.geometry.rtol * (b[-1] - b[0])
+    if r.size and (np.isnan(r).any() or np.any(r < b[0] - tol)
+                   or np.any(r > b[-1] + tol)):
+        raise ValueError(f"radii must lie in the model [{b[0]:g}, {b[-1]:g}]")
+    return np.clip(r, b[0], b[-1])
+
+
 def mass(model: Model, *, radius: float | None = None) -> float:
     """The mass inside `radius`, the outer boundary by default."""
     b = model.skeleton.boundaries
     r = float(b[-1]) if radius is None else float(radius)
-    if not b[0] <= r <= b[-1]:
-        raise ValueError(f"radius {r:g} is outside the model [{b[0]:g}, {b[-1]:g}]")
+    r = float(_within(model, np.array(r)))
     fields, masses = _shell_masses(model)
     total = 0.0
     for i, f in enumerate(fields):
@@ -71,13 +81,13 @@ def mass(model: Model, *, radius: float | None = None) -> float:
 def gravity(model: Model, radii: ArrayLike) -> np.ndarray:
     """g(r) = G M(r) / r^2 at `radii`, in the model's units.
 
-    `radii` broadcast to any shape and must lie in the model; g is zero
-    at the centre and on the inner boundary of a hollow model.
+    `radii` broadcast to any shape and must lie in the model, to the
+    geometry's tolerance; g is zero at the centre and on the inner
+    boundary of a hollow model.  M(r) is the antiderivative of each
+    layer's `rho s^2`, as `gravity_fields` has it.
     """
-    r = np.asarray(radii, dtype=float)
+    r = _within(model, np.asarray(radii, dtype=float))
     b = model.skeleton.boundaries
-    if r.size and (np.any(r < b[0]) or np.any(r > b[-1])):
-        raise ValueError(f"radii must lie in the model [{b[0]:g}, {b[-1]:g}]")
     fields, masses = _shell_masses(model)
     below = np.concatenate(([0.0], np.cumsum(masses)))
     flat = r.reshape(-1)
@@ -86,8 +96,7 @@ def gravity(model: Model, radii: ArrayLike) -> np.ndarray:
     for i in np.unique(idx):
         m = idx == i
         lo, hi = fields[i].interval
-        part = np.array([fields[i].integrate(lo, min(x, hi)) for x in flat[m]])
-        M[m] = below[i] + 4.0 * np.pi * part
+        M[m] = below[i] + _cumulative_mass(fields[i], lo)(np.minimum(flat[m], hi))
     g = np.zeros(flat.shape)
     positive = flat > 0.0
     g[positive] = model.G * M[positive] / flat[positive] ** 2

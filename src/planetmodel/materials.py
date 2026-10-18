@@ -51,8 +51,7 @@ A layer holding `elastic_moduli` itself is answered with that field by
 `elastic_moduli`, whatever its symmetry; `moduli`, the five, and the
 Voigt average through them are the transversely isotropic reading and
 refuse such a layer by name.  A fully anisotropic medium is therefore
-stored as its tensor, and the general Voigt average waits for the first
-model that needs it.
+stored as its tensor.
 """
 from __future__ import annotations
 
@@ -74,7 +73,7 @@ __all__ = ["moduli_from_velocities", "velocities_from_moduli",
            "kappa_mu_from_moduli", "voigt_matrix", "ElasticField",
            "is_fluid", "moduli", "elastic_moduli", "kappa_mu", "named",
            "independent_moduli", "LayerLike", "Operand", "MODULI_NAMES",
-           "SHEAR_NAMES", "ELASTIC_NAMES"]
+           "VELOCITY_NAMES", "SHEAR_NAMES", "ELASTIC_NAMES"]
 
 #: What the functions of a layer accept: a model's `Layer`, or any mapping
 #: of field name to field.
@@ -94,9 +93,13 @@ SHEAR_NAMES = ("vs", "vsv", "vsh", "mu", "L", "N")
 #: The five transversely isotropic velocities beside rho.
 _TI_VELOCITIES = ("vpv", "vph", "vsv", "vsh", "eta")
 
+#: The velocity names an elastic description may be given in, beside
+#: rho: the isotropic two and the transversely isotropic five.
+VELOCITY_NAMES = ("vp", "vs") + _TI_VELOCITIES
+
 #: Every name that describes the elastic medium beside rho: what
 #: `moduli` reads from, and what an isotropic re-description replaces.
-ELASTIC_NAMES = ("vp", "vs") + _TI_VELOCITIES + MODULI_NAMES[Symmetry.ISOTROPIC] \
+ELASTIC_NAMES = VELOCITY_NAMES + MODULI_NAMES[Symmetry.ISOTROPIC] \
     + MODULI_NAMES[Symmetry.VTI] + ("elastic_moduli",)
 
 
@@ -106,8 +109,12 @@ def _unknown_symmetry(symmetry: object) -> ValueError:
 
 
 def _operand(x: Operand) -> Field | np.ndarray:
-    """x as it is when it is a field, else as a float64 array."""
-    return x if isinstance(x, Field) else np.asarray(x, dtype=float)
+    """x as it is when it is a field, else as an array of float64, or of
+    complex128 where x is complex."""
+    if isinstance(x, Field):
+        return x
+    x = np.asarray(x)
+    return x.astype(np.result_type(x.dtype, np.float64), copy=False)
 
 
 def moduli_from_velocities(rho: Operand, vpv: Operand, vsv: Operand, *,

@@ -24,7 +24,7 @@ options gmsh applies in an order of its own.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 import gmsh
 import numpy as np
@@ -88,28 +88,45 @@ def _distance_to_sphere(centre: ArrayLike, radius: float) -> str:
 
 
 def apply_refinements(refinements: Sequence[Refinement], *,
-                      dimension: int) -> None:
-    """Register the refinements as gmsh's size callback.
+                      dimension: int) -> Callable[[], None]:
+    """Register the refinements as gmsh's size callback, and return the
+    check to call after meshing.
 
     gmsh computes a size from its other sources — here the background
     field, every competing option being off — and hands it to the
     callback as `lc`; what the callback returns is the size used.  The
     callback takes the minimum of `lc` and every refinement at the
-    point, so a refinement can only refine.  With no refinements no
-    callback is registered and meshing is untouched; a registered one
-    lives until its session closes.
+    point, so a refinement can only refine.  gmsh reports an exception
+    raised in the callback and meshes on, so the callback keeps the
+    first one and returns `lc`, and the returned check raises it.  With
+    no refinements no callback is registered and meshing is untouched;
+    a registered one lives until its session closes.
     """
     refinements = tuple(refinements)
+    failures: list[Exception] = []
+
+    def check() -> None:
+        if failures:
+            raise RuntimeError("a refinement failed while gmsh meshed; the mesh "
+                               "is not the one asked for") from failures[0]
+
     if not refinements:
-        return
+        return check
     d = int(dimension)
 
     def size_at(dim: int, tag: int, x: float, y: float, z: float,
                 lc: float) -> float:
+        if failures:
+            return lc
         point = np.array([(x, y, z)[:d]])
-        return min(lc, *(float(fine(point)[0]) for fine in refinements))
+        try:
+            return min(lc, *(float(fine(point)[0]) for fine in refinements))
+        except Exception as error:
+            failures.append(error)
+            return lc
 
     gmsh.model.mesh.setSizeCallback(size_at)
+    return check
 
 
 def apply_mesh_options(*, order: int, algorithm_2d: int, algorithm_3d: int,

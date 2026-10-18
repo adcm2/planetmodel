@@ -252,9 +252,10 @@ class PolynomialLayer:
                     ) -> "PolynomialLayer | NumericLayer":
         if _is_number(other):
             return self * (1.0 / as_scalar(other))
-        if isinstance(other, PolynomialLayer):
+        if _is_layer_function(other):
             interval = _require_same_interval(self, other)
-            return NumericLayer(interval, lambda r: self(r) / other(r))
+            return NumericLayer(interval,
+                                lambda r: self(r) / as_values(other(r)))
         return NotImplemented
 
     def __pow__(self, n: int) -> "PolynomialLayer":
@@ -318,6 +319,50 @@ def _mul_c(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return out
 
 
+def _stencil(offsets: np.ndarray, nu: int) -> np.ndarray:
+    """The weights w with sum_k w_k f(x + o_k h) = h^nu f^(nu)(x) to the
+    order the offsets allow: the nu-th derivative of the interpolating
+    polynomial."""
+    n = offsets.size
+    V = offsets[None, :] ** np.arange(n)[:, None]
+    rhs = np.zeros(n)
+    rhs[nu] = float(np.prod(np.arange(1, nu + 1)))
+    return np.linalg.solve(V, rhs)
+
+
+def _differenced(fn: Callable[[np.ndarray], ArrayLike], lo: float, hi: float,
+                 h: float, nu: int) -> Callable[[np.ndarray], np.ndarray]:
+    """d^nu fn / dr^nu by finite differences of step h on nu + 2 points
+    (nu + 3 for even nu, so that the central stencil is symmetric),
+    centred where the stencil fits in [lo, hi] and slid inward where it
+    would not, so that every evaluation lies in it."""
+    n = nu + 2 + (nu + 1) % 2
+    half = (n - 1) // 2
+
+    def f(x: np.ndarray) -> np.ndarray:
+        return np.broadcast_to(as_values(fn(x)), x.shape)
+
+    def d(r: np.ndarray) -> np.ndarray:
+        r = np.asarray(r, dtype=float)
+        start = np.full(r.shape, -half)
+        start = np.maximum(start, np.ceil((lo - r) / h))
+        start = np.minimum(start, np.floor((hi - r) / h) - (n - 1)).astype(int)
+        parts = []
+        for s in np.unique(start):
+            mask = start == s
+            offsets = np.arange(s, s + n, dtype=float)
+            w = _stencil(offsets, nu)
+            x = r[mask]
+            parts.append((mask, sum(wk * f(x + ok * h) for wk, ok in zip(w, offsets))
+                          / h ** nu))
+        out = np.empty(r.shape, dtype=np.result_type(*(v for _, v in parts))
+                       if parts else float)
+        for mask, values in parts:
+            out[mask] = values
+        return out
+    return d
+
+
 class NumericLayer:
     """Any callable of the radius on one interval, with honest calculus.
 
@@ -355,35 +400,40 @@ class NumericLayer:
         return np.broadcast_to(out, r.shape).copy() if out.shape != r.shape else out
 
     def derivative(self, *, nu: int = 1) -> "NumericLayer":
-        """The nu-th derivative: the supplied one, else a central
-        difference with a step relative to the interval's width."""
+        """The nu-th derivative: the supplied first derivative and then
+        differences of it, else a finite-difference stencil for the nu-th
+        derivative, centred inside the interval and slid inward near its
+        ends, so that no evaluation leaves it.  The step is `dstep`, or
+        eps^(1 / (nu + 2)) where that is larger, times the width: the
+        balance of truncation and rounding for a nu-th difference."""
         if nu < 0:
             raise ValueError("nu must be non-negative")
         if nu == 0:
             return self
         if self._d is not None:
             first = NumericLayer(self._interval, self._d, dstep=self._dstep)
-        else:
-            h = self._dstep * (self._interval[1] - self._interval[0])
-            fn = self._fn
-            first = NumericLayer(self._interval,
-                                 lambda r: (as_values(fn(r + h))
-                                            - as_values(fn(r - h))) / (2.0 * h),
-                                 dstep=self._dstep)
-        return first.derivative(nu=nu - 1)
+            return first.derivative(nu=nu - 1)
+        lo, hi = self._interval
+        h = max(self._dstep, float(np.finfo(float).eps) ** (1.0 / (nu + 2))) \
+            * (hi - lo)
+        return NumericLayer(self._interval, _differenced(self._fn, lo, hi, h, nu),
+                            dstep=self._dstep)
 
     def integrate(self, a: float, b: float) -> float | complex:
-        """The signed integral from a to b by adaptive quadrature; the real
-        and imaginary parts of a complex function separately."""
+        """The signed integral from a to b by adaptive quadrature, to a
+        relative tolerance of 1e-10 of the integral of |f| as a few
+        samples estimate it; the real and imaginary parts of a complex
+        function separately."""
+        a, b = float(a), float(b)
+        probe = np.abs(self(np.linspace(a, b, 9))) if a != b else np.zeros(1)
+        floor = 1e-14 * float(np.max(probe)) * abs(b - a)
+        kw = {"limit": 200, "epsrel": 1e-10, "epsabs": floor}
         lo, hi = self._interval
         if np.iscomplexobj(self(np.array(0.5 * (lo + hi)))):
-            re, _ = quad(lambda x: float(self(np.array(x)).real), float(a),
-                         float(b), limit=200)
-            im, _ = quad(lambda x: float(self(np.array(x)).imag), float(a),
-                         float(b), limit=200)
+            re, _ = quad(lambda x: float(self(np.array(x)).real), a, b, **kw)
+            im, _ = quad(lambda x: float(self(np.array(x)).imag), a, b, **kw)
             return complex(re, im)
-        val, _ = quad(lambda x: float(self(np.array(x))), float(a), float(b),
-                      limit=200)
+        val, _ = quad(lambda x: float(self(np.array(x))), a, b, **kw)
         return float(val)
 
     def on_interval(self, lo: float, hi: float) -> "NumericLayer":
@@ -442,7 +492,7 @@ class NumericLayer:
 
     def __rtruediv__(self, other: float | complex) -> "NumericLayer":
         if _is_number(other):
-            c = float(other)
+            c = as_scalar(other)
             return NumericLayer(self._interval, lambda r: c / self(r),
                                 dstep=self._dstep)
         return NotImplemented
@@ -520,5 +570,10 @@ def polynomial_fit(interval: tuple[float, float],
     t = np.cos(np.pi * (np.arange(n) + 0.5) / n)
     r = 0.5 * (lo + hi) + 0.5 * (hi - lo) * t
     y = as_values(fn(r))
-    p = Polynomial.fit(r, y, degree, domain=[lo, hi]).convert()
-    return polynomial_layer((lo, hi), p.coef)
+    # coefficients in (r - lo), as PPoly holds them: monomials about the
+    # centre would lose (lo / width)^degree of the digits on a thin shell
+    p = Polynomial.fit(r, y, degree, domain=[lo, hi]).convert(
+        domain=[lo, hi], window=[0.0, hi - lo])
+    coef = np.zeros(degree + 1, dtype=p.coef.dtype)
+    coef[:p.coef.size] = p.coef
+    return PolynomialLayer((lo, hi), PPoly(coef[::-1][:, None], [lo, hi]))

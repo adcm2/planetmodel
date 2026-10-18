@@ -48,7 +48,7 @@ __all__ = ["layer_method", "with_moduli", "with_velocities", "Elastic", "Constan
            "SelfGravitating", "Viscoelastic", "ELASTIC_FAMILIES", "elastic_family"]
 
 #: The velocity names an elastic description may be given in.
-VELOCITY_NAMES = ("vp", "vs", "vpv", "vph", "vsv", "vsh", "eta")
+VELOCITY_NAMES = materials.VELOCITY_NAMES
 
 #: The ways a layer describes its elastic medium, each a family of names
 #: that is complete on its own: the velocities beside rho, the isotropic
@@ -160,8 +160,7 @@ class Elastic:
     vanishing of shear, and `isotropic()` the model re-described by its
     Voigt average, kappa and mu with the five and the velocities
     recomputed from them.  A layer holding a general anisotropic tensor
-    is refused by the three that read the five, until the general Voigt
-    average is written.
+    is refused by the three that read the five.
 
     The derived fields are kept in step by `with_field`: replacing an
     elastic field on a layer makes the family it belongs to (rho with
@@ -192,16 +191,21 @@ class Elastic:
 
         Replacing an elastic field makes its family the layer's
         description and derives the other elastic fields from it again;
-        a field added beside the existing ones, or a family too
-        incomplete to describe the medium, is attached as it is.
+        replacing rho on a layer holding velocities makes the velocities
+        the description, so the moduli follow the new density.  A field
+        added beside the existing ones, or a family too incomplete to
+        describe the medium, is attached as it is.
         """
         from .model import Model
         out = Model.with_field(self, which, name, field, replace=replace)
-        if not replace or name not in materials.ELASTIC_NAMES:
-            return out
         i = self.layer(which).index
+        if name == "rho" and any(n in out.layer(i) for n in VELOCITY_NAMES):
+            keep = VELOCITY_NAMES
+        elif not replace or name not in materials.ELASTIC_NAMES:
+            return out
+        else:
+            keep = elastic_family(name)
         layers = [dict(layer.fields) for layer in out.layers]
-        keep = elastic_family(name)
         fields = {k: f for k, f in layers[i].items()
                   if k not in materials.ELASTIC_NAMES or k in keep}
         try:

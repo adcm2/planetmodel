@@ -123,10 +123,13 @@ def test_validity_reports_the_failing_factor():
     fold = RadialStretch(kinked_h(-12.0), rmax=A).is_valid(sample=lattice)
     assert not fold and "folds radially" in fold.reason
     assert fold.worst_point is not None and fold.worst_point[0] > 0.8
+    # with h(0) = 0, 1 + dh/dr > 0 implies 1 + h/r > 0: shells cross only
+    # in a hollow body, or after a tear at the centre
     crossing = RadialStretch(CallableDisplacement(lambda r, t, p: -0.3 * (1.0 - r)),
                              rmax=A)
-    report = crossing.is_valid(sample=lattice)
+    report = crossing.is_valid(sample=validity_lattice(Skeleton([0.1, A])))
     assert not report and "cross through the origin" in report.reason
+    assert not crossing.is_valid(sample=lattice)              # torn at the centre
     centre = RadialStretch(CallableDisplacement(lambda r, t, p: 0.1 + 0.0 * r), rmax=A)
     report = centre.is_valid(X=np.zeros((1, 3)))
     assert not report and "at the centre" in report.reason
@@ -188,10 +191,75 @@ def test_scaled_mapping():
 
 def test_validity_lattice_covers_every_layer_and_both_poles():
     r, theta, phi = validity_lattice(SK, n_r=3, n_theta=5, n_phi=4)
-    assert r.shape == (9, 1, 1) and theta.shape == (1, 5, 1) and phi.shape == (1, 1, 4)
+    assert r.shape == (10, 1, 1) and theta.shape == (1, 5, 1) and phi.shape == (1, 1, 4)
+    assert r.ravel()[0] == 0.0                                  # the centre
+    assert validity_lattice(Skeleton([0.5, 1.0]), n_r=3)[0].shape == (3, 1, 1)
     assert theta[0, 0, 0] == 0.0 and theta[0, -1, 0] == np.pi
     for lo, hi in zip(SK.boundaries[:-1], SK.boundaries[1:]):
         inside = (r.ravel() > lo) & (r.ravel() < hi)
         assert inside.sum() == 3
     X = cartesian_points(r, theta, phi)
-    assert X.shape == (9, 5, 4, 3)
+    assert X.shape == (10, 5, 4, 3)
+
+
+def test_a_stretch_at_the_centre_takes_its_radial_limit():
+    """h = 0.1 r is the uniform dilation by 1.1, at the centre too."""
+    m = RadialStretch(CallableDisplacement(lambda r, t, p: 0.1 * r), rmax=A)
+    X = np.array([[0.0, 0.0, 0.0], [5e-10, 0.0, 0.0], [0.3, 0.2, 0.1]])
+    assert np.allclose(m(X), 1.1 * X, rtol=1e-12, atol=0.0)
+    assert np.allclose(m.deformation_gradient(X), 1.1 * np.eye(3), rtol=1e-9)
+    assert np.allclose(m.jacobian(X), 1.1 ** 3, rtol=1e-9)
+    dF = m.linearise(lambda r, t, p: 0.01 * r, X=X).dF
+    assert np.allclose(dF, 0.01 * np.eye(3), rtol=1e-6, atol=1e-12)
+
+
+def test_a_uniform_uplift_tears_the_centre_and_is_refused():
+    uplift = RadialStretch(CallableDisplacement(lambda r, t, p: 0.01 + 0.0 * r),
+                           rmax=A)
+    with pytest.raises(ValueError, match="at the centre"):
+        Geometry(SK, mapping=uplift)
+    Geometry(Skeleton([0.5, 1.0]), mapping=uplift)        # a hollow body has none
+
+
+class Shear:
+    """A bare mapping: the protocol's three methods and nothing else."""
+
+    def __call__(self, X):
+        X = np.asarray(X, dtype=float)
+        return X + 0.1 * X[..., [1]] * np.array([1.0, 0.0, 0.0])
+
+    def deformation_gradient(self, X):
+        F = np.broadcast_to(np.eye(3), np.shape(X)[:-1] + (3, 3)).copy()
+        F[..., 0, 1] = 0.1
+        return F
+
+    def jacobian(self, X):
+        return np.ones(np.shape(X)[:-1])
+
+
+def test_a_scaled_mapping_asks_what_the_mapping_has():
+    scaled = ScaledMapping(Shear(), 2.0)
+    assert scaled.is_valid(sample=validity_lattice(SK))
+    assert Geometry(SK, mapping=Shear()).scaled(2.0).validity()
+    with pytest.raises(NotImplementedError):
+        scaled.inverse(np.zeros((1, 3)))
+    with pytest.raises(NotImplementedError):
+        scaled.linearise(lambda r, t, p: 0.0 * r, X=np.ones((1, 3)))
+
+
+def test_a_scaled_stretch_linearises_as_the_stretch_of_the_scaled_displacement():
+    k = 3.0
+
+    def h(r, t, p):
+        return 0.02 * r ** 2 * np.cos(t)
+
+    def delta(r, t, p):
+        return 0.01 * r * np.sin(t) * np.cos(p)
+
+    scaled = ScaledMapping(RadialStretch(CallableDisplacement(h), rmax=1.0), k)
+    direct = RadialStretch(CallableDisplacement(lambda r, t, p: k * h(r / k, t, p)),
+                           rmax=k)
+    X = k * points()[:20]
+    a, b = scaled.linearise(delta, X=X), direct.linearise(delta, X=X)
+    assert np.allclose(a.dF, b.dF, rtol=1e-6, atol=1e-9)
+    assert np.allclose(a.dJ, b.dJ, rtol=1e-6, atol=1e-9)

@@ -40,3 +40,12 @@ def test_lagrange_basis_interpolates():
     f = x ** 3 - 0.5 * x
     assert np.allclose(L @ f, pts ** 3 - 0.5 * pts)
     assert np.allclose(L.sum(axis=1), 1.0)
+
+
+def test_lagrange_basis_next_to_a_node_at_zero():
+    from planetmodel.mesh1d.gll import gll_points_weights, lagrange_basis
+
+    xi, _ = gll_points_weights(5)
+    L = lagrange_basis(xi, [1e-310, -1e-310, 0.0])
+    assert np.all(np.isfinite(L))
+    assert np.allclose(L, np.eye(5)[[2, 2, 2]])

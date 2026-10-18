@@ -42,3 +42,6 @@ docs/**/*.md
 
 # nothing built lands in the repository root
 /*.json
+
+# fixtures for the C++ readers, written by cpp/tests/make_fixtures.py
+cpp/tests/fixtures/

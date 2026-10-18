@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Field", "FieldBase", "RadialField", "AnalyticField",
            "ComposedField", "constant_field", "FRAMES", "check_frame",
-           "stored_shape", "to_stored", "rotate_stored"]
+           "stored_shape", "to_stored", "rotate_stored", "radial_pieces_of"]
 
 #: The frames a field can present its components in.
 FRAMES = ("spherical", "cartesian")
@@ -85,6 +85,23 @@ class Field(Protocol):
         """The components at the broadcast coordinates, in `frame`:
         the broadcast shape followed by the character's stored shape."""
         ...
+
+
+def radial_pieces_of(interval: tuple[float, float],
+                     functions: Iterable[object]) -> tuple[np.ndarray, int] | None:
+    """The breakpoints inside `interval`, its ends included, and the highest
+    degree of a set of layer functions that are all piecewise polynomials
+    (each with a `ppoly`), or None when one is not."""
+    lo, hi = interval
+    breaks, degree = [np.array([lo, hi])], 0
+    for fn in functions:
+        pp = getattr(fn, "ppoly", None)
+        if pp is None:
+            return None
+        x = np.asarray(pp.x, dtype=float)
+        breaks.append(x[(x > lo) & (x < hi)])
+        degree = max(degree, int(pp.c.shape[0]) - 1)
+    return np.unique(np.concatenate(breaks)), degree
 
 
 def rotate_stored(values: np.ndarray, R: np.ndarray, character: Character
@@ -306,7 +323,9 @@ def _combine(fields: tuple[Field, Field], op: Callable[..., ArrayLike],
              character: Character) -> Field:
     if all(isinstance(f, RadialField) for f in fields):
         a, b = fields
-        return RadialField(a.interval, _elementwise(op, a._fs, b._fs),
+        fb = b._fs if b.interval == a.interval else _elementwise(
+            lambda f: f.on_interval(*a.interval), b._fs)
+        return RadialField(a.interval, _elementwise(op, a._fs, fb),
                            character=character, rtol=a.rtol)
     return ComposedField(op, fields, character=character)
 
@@ -426,6 +445,12 @@ class RadialField(FieldBase):
         lo, hi = as_interval((lo, hi))
         return self._map(lambda f: f.on_interval(lo, hi), interval=(lo, hi),
                          name=self._name)
+
+    def radial_pieces(self) -> tuple[np.ndarray, int] | None:
+        """The breakpoints in the interval, its ends included, and the
+        highest degree of an exact piecewise-polynomial description of
+        every component, or None when a component is not polynomial."""
+        return radial_pieces_of(self._interval, self._fs.ravel())
 
     def spherical_mean(self, *, grid: AngularGrid | None = None) -> "RadialField":
         """A radial field of rank 0 is its own spherical mean; `grid` is not

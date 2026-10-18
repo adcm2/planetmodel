@@ -141,6 +141,17 @@ def _reduce(values: np.ndarray, character: Character) -> np.ndarray:
     return values
 
 
+def _frame_at(x: np.ndarray, theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
+    """The spherical frame at the physical points x; on the polar axis,
+    where x fixes no longitude, the reference point's longitude, and at
+    the centre the reference point's angles."""
+    _, tx, px, _ = spherical_coordinates(x)
+    on_axis = np.hypot(x[..., 0], x[..., 1]) == 0.0
+    px = np.where(on_axis, phi, px)
+    tx = np.where(np.linalg.norm(x, axis=-1) == 0.0, theta, tx)
+    return spherical_frame(tx, px)
+
+
 class PushedForwardField(FieldBase):
     """The image of a referential field under a mapping, asked at reference points.
 
@@ -192,8 +203,8 @@ class PushedForwardField(FieldBase):
                 phi: np.ndarray | None) -> np.ndarray:
         out, x = self._physical(r, theta, phi)
         if self._character.rank:
-            _, _, _, R = spherical_coordinates(x)
-            out = rotate_slots(out, np.swapaxes(R, -1, -2), self._character.rank)
+            out = rotate_slots(out, np.swapaxes(_frame_at(x, theta, phi), -1, -2),
+                               self._character.rank)
         return _reduce(out, self._character)
 
     def evaluate(self, r: ArrayLike, theta: ArrayLike | None, phi: ArrayLike | None,

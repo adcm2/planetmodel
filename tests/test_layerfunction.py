@@ -279,3 +279,47 @@ def test_same_interval_is_relative():
 ])
 def test_shipped_layer_functions_pass_the_contract(fn):
     check_layer_function(fn)
+
+
+def test_a_fit_on_a_thin_shell_far_from_the_centre_keeps_its_digits():
+    """The coefficients are held about the shell's inner radius."""
+    from planetmodel.layerfunction import polynomial_fit
+
+    lo, hi = 6346.6e3, 6356e3
+
+    def f(r):
+        return 3.0 + 0.5 * np.tanh((r - 6351e3) / 2e3)
+
+    r = np.linspace(lo, hi, 101)
+    n = 64
+    rc = 0.5 * (lo + hi) + 0.5 * (hi - lo) * np.cos(np.pi * (np.arange(n) + 0.5) / n)
+    for degree in (5, 7, 9):
+        fit = polynomial_fit((lo, hi), f, degree=degree, n=n)
+        # the same least squares, evaluated in the scaled window
+        same = np.polynomial.Polynomial.fit(rc, f(rc), degree, domain=[lo, hi])
+        assert np.max(np.abs(fit(r) - same(r))) < 1e-10
+
+
+def test_numeric_derivatives_stay_in_the_interval_and_scale_their_step():
+    def strict(r):
+        r = np.asarray(r)
+        if np.any((r < 0.0) | (r > 1.0)):
+            raise ValueError("outside")
+        return np.sin(r)
+
+    f = NumericLayer((0.0, 1.0), strict)
+    r = np.array([0.0, 0.5, 1.0])
+    assert np.allclose(f.derivative()(r), np.cos(r), atol=1e-8)
+    assert np.allclose(f.derivative(nu=2)(r), -np.sin(r), atol=1e-6)
+    assert np.allclose(f.derivative(nu=3)(r), -np.cos(r), atol=1e-4)
+
+
+def test_division_with_numeric_layers_and_a_relative_quadrature():
+    p = polynomial_layer((0.0, 1.0), [1.0, 2.0])
+    n = NumericLayer((0.0, 1.0), lambda r: 1.0 + np.asarray(r) ** 2)
+    assert np.isclose((p / n)(0.5), 2.0 / 1.25)
+    assert np.isclose((1j / n)(0.5), 1j / 1.25)
+    tiny = NumericLayer((0.0, 1.0), lambda r: 1e-12 * np.exp(-((np.asarray(r) - 0.5)
+                                                               / 0.01) ** 2))
+    exact = 1e-12 * 0.01 * np.sqrt(np.pi)
+    assert np.isclose(tiny.integrate(0.0, 1.0), exact, rtol=1e-8)

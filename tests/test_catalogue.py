@@ -8,6 +8,8 @@ from planetmodel.layerfunction import PolynomialLayer
 from planetmodel import testing
 from planetmodel.materials import elastic_moduli, is_fluid, kappa_mu, moduli
 from planetmodel.mesh1d.gravity import gravity, mass
+from planetmodel.geometry import Geometry
+from planetmodel.skeleton import Skeleton
 from planetmodel.testing import check_model
 from planetmodel.units import Scales
 
@@ -400,3 +402,32 @@ def test_coarsening_across_the_cmb_is_refused():
         bare = bare.without_field(name)
     with pytest.raises(ValueError, match="elastic description"):
         bare.coarsened(drop=[0])
+
+
+def test_replacing_rho_makes_the_velocities_the_description():
+    """The moduli follow a new density at the velocities held, on a layer
+    given velocities and on one given kappa and mu."""
+    from planetmodel import Model, constant_field
+    from planetmodel.behaviours import Elastic
+
+    m = LayeredIsotropicElastic([0.0, 1.0], rho=[1.0], vp=[2.0], vs=[1.0])
+    heavy = m.with_field(0, "rho", constant_field((0.0, 1.0), 4.0, character=DENSITY),
+                         replace=True)
+    lay = heavy.layer(0)
+    assert np.isclose(lay["L"](0.5), 4.0) and np.isclose(lay["C"](0.5), 16.0)
+    assert np.isclose(lay["vs"](0.5), 1.0)
+
+    class ByModuli(Elastic, Model):
+        pass
+
+    iv = (0.0, 1.0)
+    km = ByModuli(Geometry(Skeleton([0.0, 1.0])), [{
+        "rho": constant_field(iv, 1.0, character=DENSITY),
+        "kappa": constant_field(iv, 3.0, character=DENSITY),
+        "mu": constant_field(iv, 1.0, character=DENSITY)}])
+    heavy = km.with_field(0, "rho", constant_field(iv, 4.0, character=DENSITY),
+                          replace=True)
+    lay = heavy.layer(0)
+    assert np.isclose(lay["vs"](0.5), 1.0) and np.isclose(lay["L"](0.5), 4.0)
+    assert "mu" not in lay and "kappa" not in lay      # the other families go
+    testing.check_model(heavy)

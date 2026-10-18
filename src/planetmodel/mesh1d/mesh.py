@@ -129,10 +129,16 @@ class Mesh1D:
         straight line between each pair of consecutive nodes.
         Discontinuous data is representable; at a shared breakpoint the
         upper element's piece is evaluated, and beyond the ends the end
-        pieces continue.
+        pieces continue.  Complex values stay complex.  The pieces are
+        in the local monomial form PPoly holds, which loses digits as
+        the order grows on data that is rough on the element (about
+        1e-11 of the data at ngll 9, 1e-8 at ngll 13), where
+        `interpolation_weights` stays at rounding; smooth data is held
+        to rounding at every order used.
         """
         _check_method(method)
-        nodal = np.asarray(nodal, dtype=float)
+        nodal = np.asarray(nodal)
+        nodal = nodal.astype(np.result_type(nodal.dtype, np.float64), copy=False)
         if nodal.shape[:2] != (self.nspec, self.ngll):
             raise ValueError(f"nodal values must have shape "
                              f"{(self.nspec, self.ngll)}, or that followed by a "
@@ -165,8 +171,8 @@ class Mesh1D:
         x = np.concatenate((self.left[e0:e1], self.right[e1 - 1:e1]))
         return PPoly(C, x)
 
-    def interpolation_weights(self, x: ArrayLike, *, method: str = "polynomial"
-                              ) -> tuple[np.ndarray, np.ndarray]:
+    def interpolation_weights(self, x: ArrayLike, *, method: str = "polynomial",
+                              nu: int = 0) -> tuple[np.ndarray, np.ndarray]:
         """The element of each point, and the weights of that element's nodes.
 
         Returns `(element, weights)`, `element` of the shape of `x` and
@@ -178,9 +184,14 @@ class Mesh1D:
         one beyond the mesh, whose piece continues there.  Under
         `"polynomial"` the weights are the Lagrange basis of the
         element's GLL nodes; under `"linear"` the two hat functions of
-        the nodes bracketing x, zero elsewhere.
+        the nodes bracketing x, zero elsewhere.  With `nu=1` they are the
+        weights of the first derivative in x instead: the derivatives of
+        the Lagrange basis, a polynomial of lower degree written in the
+        same basis, or the slope of the bracketing segment.
         """
         _check_method(method)
+        if nu not in (0, 1):
+            raise ValueError(f"nu must be 0 or 1, got {nu}")
         x = np.asarray(x, dtype=float)
         flat = x.ravel()
         e = np.clip(np.searchsorted(self.left, flat, side="right") - 1, 0,
@@ -188,14 +199,22 @@ class Mesh1D:
         xi = (flat - self.left[e]) / self.jac[e] - 1.0
         if method == "polynomial":
             W = lagrange_basis(self.xi, xi)
+            if nu:
+                W = (W @ self.deriv) / self.jac[e][:, None]
         else:
             k = np.clip(np.searchsorted(self.xi, xi, side="right") - 1, 0,
                         self.ngll - 2)
-            t = (xi - self.xi[k]) / (self.xi[k + 1] - self.xi[k])
+            width = self.xi[k + 1] - self.xi[k]
+            t = (xi - self.xi[k]) / width
             W = np.zeros((flat.size, self.ngll))
             rows = np.arange(flat.size)
-            W[rows, k] = 1.0 - t
-            W[rows, k + 1] = t
+            if nu:
+                slope = 1.0 / (width * self.jac[e])
+                W[rows, k] = -slope
+                W[rows, k + 1] = slope
+            else:
+                W[rows, k] = 1.0 - t
+                W[rows, k + 1] = t
         return e.reshape(x.shape), W.reshape(x.shape + (self.ngll,))
 
     def __repr__(self) -> str:
@@ -209,13 +228,16 @@ class RadialMesh(Mesh1D):
 
     Exactly one of `drmax`, `lmax` and `edges` sizes the mesh.  With
     `drmax` or `lmax` the element boundaries are every skeleton boundary
-    strictly inside the range plus a uniform subdivision no coarser than
-    `drmax`, where `lmax` sets `drmax = 0.1 rmax / (lmax + 1)`; `rmin`
-    and `rmax` default to the skeleton's ends.  With `edges` the element
+    strictly inside the range, and every knot a Geometry's mapping
+    declares there, plus a uniform subdivision no coarser than `drmax`,
+    where `lmax` sets `drmax = 0.1 rmax / (lmax + 1)`; `rmin` and `rmax`
+    default to the skeleton's ends.  With `edges` the element
     boundaries are taken as given, must lie inside the skeleton, and no
     element may straddle a skeleton boundary (to `rtol` of the range).
-    `layer` records the skeleton layer of every element.  A Geometry is
-    accepted in place of a skeleton.
+    A pin within that tolerance of a skeleton boundary is the boundary.
+    `layer` records the skeleton layer of every element.  A Geometry or
+    a Model is accepted in place of a skeleton, and the knots of its
+    mapping are pinned.
     """
 
     def __init__(self, skeleton: Skeleton | Geometry, *, ngll: int = 5,
@@ -224,8 +246,9 @@ class RadialMesh(Mesh1D):
                  edges: ArrayLike | None = None, rtol: float = 1e-9) -> None:
         sk = getattr(skeleton, "skeleton", skeleton)
         if not isinstance(sk, Skeleton):
-            raise TypeError(f"expected a Skeleton or a Geometry, got "
+            raise TypeError(f"expected a Skeleton, a Geometry or a Model, got "
                             f"{type(skeleton).__name__}")
+        geometry = getattr(skeleton, "geometry", skeleton)
         given = sum(x is not None for x in (drmax, lmax, edges))
         if given != 1:
             raise ValueError("give exactly one of drmax, lmax and edges")
@@ -239,8 +262,10 @@ class RadialMesh(Mesh1D):
             if e.ndim != 1 or e.size < 2:
                 raise ValueError("edges must be a 1-d array of at least two "
                                  "element boundaries")
-            if not (b[0] <= e[0] < e[-1] <= b[-1]):
+            slack = rtol * (b[-1] - b[0])
+            if not (b[0] - slack <= e[0] < e[-1] <= b[-1] + slack):
                 raise ValueError("mesh range must lie within the skeleton")
+            e[0], e[-1] = max(e[0], b[0]), min(e[-1], b[-1])
             tol = rtol * (e[-1] - e[0])
             for lo, hi in zip(e[:-1], e[1:]):
                 inside = b[(b > lo + tol) & (b < hi - tol)]
@@ -260,7 +285,17 @@ class RadialMesh(Mesh1D):
                 drmax = 0.1 * r1 / (lmax + 1)
             if drmax <= 0.0:
                 raise ValueError("drmax must be positive")
-            inner = b[(b > r0) & (b < r1)]
+            knots = np.asarray(geometry.knots() if hasattr(geometry, "mapping")
+                               else (), dtype=float)
+            tol = rtol * (r1 - r0)
+            inner = b[(b > r0 + tol) & (b < r1 - tol)]
+            fixed = np.concatenate(([r0, r1], inner))
+            knots = np.unique(knots[(knots > r0 + tol) & (knots < r1 - tol)])
+            if knots.size:
+                apart = np.abs(knots[:, None] - fixed[None, :]).min(axis=1) > tol
+                knots = knots[apart]
+                knots = knots[np.diff(knots, prepend=-np.inf) > tol]
+            inner = np.unique(np.concatenate([inner, knots]))
             super().__init__(np.concatenate(([r0], inner, [r1])),
                              ngll=ngll, drmax=drmax)
 

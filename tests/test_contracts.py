@@ -29,7 +29,10 @@ def test_displacements(h):
 def test_mappings(m):
     k = 3.0 if isinstance(m, ScaledMapping) else 1.0
     X = k * cartesian_points(*validity_lattice(SK, n_r=2, n_theta=4, n_phi=3))
-    testing.check_mapping(m, X.reshape(-1, 3))
+    X = X.reshape(-1, 3)
+    # off the centre, where a stretch whose dh/dr depends on direction is
+    # not differentiable and F is the limit along the radius
+    testing.check_mapping(m, X[np.linalg.norm(X, axis=-1) > 0.0])
 
 
 @pytest.mark.parametrize("sk", [SK, HOLLOW])

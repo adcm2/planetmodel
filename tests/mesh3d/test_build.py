@@ -304,3 +304,42 @@ def test_other_element_orders_build(order, tmp_path):
     res = build_layered_mesh(spec, tmp_path / f"o{order}")
     assert res.validation.ok
     assert res.spec.order == order
+
+
+@pytest.mark.parametrize("dimension", [2, 3])
+def test_a_small_hollow_domain_meshes(dimension, tmp_path):
+    """The hole is found to a tolerance that clears OCC's absolute padding."""
+    s = 0.05
+    spec = MeshSpec(Geometry(Skeleton([0.5 * s, s])),
+                    UniformInterfaces(0.3 * s, 0.5 * s, 0.5 * s),
+                    dimension=dimension, order=1)
+    res = build_layered_mesh(spec, tmp_path / "small")
+    assert res.counts["elements"] > 0
+
+
+def test_several_unnamed_shells_are_numbered(tmp_path):
+    spec = MeshSpec(full_geometry(), COARSE, dimension=2,
+                    shells=(Shell(radius=1.4), Shell(ratio=0.2)))
+    assert [lay.name for lay in spec.domain.layers][-2:] == ["buffer_1", "buffer_2"]
+    assert MeshSpec(full_geometry(), COARSE, dimension=2,
+                    shells=(Shell(ratio=0.2),)).domain.layers[-1].name == "buffer"
+
+
+def test_a_refinement_that_fails_is_not_meshed_around(tmp_path):
+    from planetmodel.mesh3d import NearPoints
+
+    cloud3 = NearPoints(np.array([[1.0, 0.0, 0.0]]), 0.1, 0.5, 0.3)
+    with pytest.raises(ValueError, match="2-dimensional"):
+        MeshSpec(full_geometry(), COARSE, dimension=2, refinements=[cloud3])
+
+    class Breaks:
+        size, far_size = 0.1, 0.5
+
+        def __call__(self, points):
+            if np.any(np.abs(np.asarray(points)) > 0.5):
+                raise RuntimeError("off the cloud")
+            return np.full(len(points), 0.5)
+
+    spec = MeshSpec(full_geometry(), COARSE, dimension=2, refinements=[Breaks()])
+    with pytest.raises(RuntimeError, match="a refinement failed"):
+        build_layered_mesh(spec, tmp_path / "broken")

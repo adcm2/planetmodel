@@ -133,10 +133,11 @@ def _coefficients(coeffs: ArrayLike) -> np.ndarray:
 
 
 def _contract(c: np.ndarray, theta: np.ndarray, phi: np.ndarray,
-              basis: Basis) -> np.ndarray:
+              basis: Basis, *, index: np.ndarray | None = None) -> np.ndarray:
     """sum_slm c[slm] B_slm at flat points, a block of points at a time so
     that the basis never holds more than `_BLOCK` entries; `c` is
-    (2, L + 1, L + 1), or that followed by one entry per point."""
+    (2, L + 1, L + 1), or that followed by one column per point, or by
+    columns that `index` picks for each point."""
     L = c.shape[1] - 1
     out = np.empty(theta.size)
     step = max(1, _BLOCK // (2 * (L + 1) ** 2))
@@ -146,7 +147,8 @@ def _contract(c: np.ndarray, theta: np.ndarray, phi: np.ndarray,
         if c.ndim == 3:
             out[block] = np.einsum("slm,slmp->p", c, B)
         else:
-            out[block] = np.einsum("slmp,slmp->p", c[..., block], B)
+            columns = c[..., block] if index is None else c[..., index[block]]
+            out[block] = np.einsum("slmp,slmp->p", columns, B)
     return out
 
 
@@ -175,15 +177,25 @@ def synthesise_gradient(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike
     return dt.reshape(theta.shape), dp.reshape(theta.shape)
 
 
-def synthesise(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
+def synthesise(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike, *,
+               index: ArrayLike | None = None) -> np.ndarray:
     """sum_lm c_lm Y_lm(theta, phi) for coefficients of shape
     (2, lmax + 1, lmax + 1), or that shape followed by the points' shape
-    when the coefficients vary from point to point.  Through scipy, a
-    block of points at a time."""
+    when the coefficients vary from point to point, or followed by one
+    axis of n columns with `index`, of the points' shape, naming each
+    point's column (so that coefficients shared by many points are held
+    once).  Through scipy, a block of points at a time."""
     c = _coefficients(coeffs)
     theta, phi = np.broadcast_arrays(np.asarray(theta, dtype=float),
                                      np.asarray(phi, dtype=float))
     shape = theta.shape
+    if index is not None:
+        idx = np.broadcast_to(np.asarray(index, dtype=np.intp), shape).ravel()
+        if c.ndim != 4 or (idx.size and not 0 <= idx.min() <= idx.max() < c.shape[3]):
+            raise ValueError("with index, coefficients have shape (2, l + 1, l + 1, "
+                             "n) and index picks columns in 0..n-1")
+        return _contract(c, theta.ravel(), phi.ravel(), real_harmonics,
+                         index=idx).reshape(shape)
     if c.ndim > 3:
         if c.shape[3:] != shape:
             raise ValueError(f"coefficients of shape {c.shape} do not match points "

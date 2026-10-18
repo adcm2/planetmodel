@@ -263,11 +263,12 @@ class MineosModel(Elastic, ConstantQ, SelfGravitating, Viscoelastic, Tabulated, 
     becomes the constant `omega_ref` that `moduli_at` and `frozen`
     disperse about, and its title is the model's name.  The deck is
     kept as `deck`, its knots per layer as `knots` and its header as
-    `header`, so `to_deck` writes the model back out.
+    `header`, so `to_deck` writes the model back out.  The model is in
+    SI, as the deck is; `converted` gives it in other scales.
     """
 
     def __init__(self, source: str | os.PathLike[str] | Deck, *,
-                 kind: str = "cubic", scales: Scales = Scales.SI) -> None:
+                 kind: str = "cubic") -> None:
         deck = source if isinstance(source, Deck) else read_deck(source, MINEOS)
         skeleton, layers = deck_layers(deck, kind=kind)
         layer_names, interface_names = mineos_names(deck)
@@ -282,5 +283,5 @@ class MineosModel(Elastic, ConstantQ, SelfGravitating, Viscoelastic, Tabulated, 
         self.deck = deck
         self.knots = deck_knots(deck)
         self.header = deck.header
-        super().__init__(geometry, layers, scales=scales, constants=constants,
+        super().__init__(geometry, layers, constants=constants,
                          name=str(deck.header.get("name", "")) or None)

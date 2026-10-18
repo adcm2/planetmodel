@@ -7,6 +7,7 @@ from planetmodel import Geometry, Skeleton
 from planetmodel.catalogue import LayeredIsotropicElastic, PREM
 from planetmodel.character import DENSITY
 from planetmodel.fields import RadialField
+from planetmodel.layerfunction import polynomial_layer
 from planetmodel.mesh1d.gravity import gravity, mass
 from planetmodel.model import Model
 from planetmodel.units import GRAVITY, MASS, G_SI
@@ -86,8 +87,10 @@ def test_refusals():
     m = PREM()
     with pytest.raises(ValueError, match="lie in the model"):
         gravity(m, 7e6)
-    with pytest.raises(ValueError, match="outside the model"):
+    with pytest.raises(ValueError, match="lie in the model"):
         mass(m, radius=7e6)
+    with pytest.raises(ValueError, match="lie in the model"):
+        gravity(m, np.nan)
     with pytest.raises(KeyError, match="needs 'rho'"):
         gravity(m.without_field("rho", layers=[3]), 1e6)
 
@@ -168,3 +171,22 @@ def test_with_stratification_matches_the_direct_ratio():
     solid = LayeredIsotropicElastic([0.0, 1.0], rho=[1.0], vp=[2.0], vs=[1.0])
     with pytest.raises(ValueError, match="no fluid layer"):
         solid.with_stratification()
+
+
+def test_radii_are_held_to_the_geometry_tolerance():
+    """A radius an ulp beyond the surface is the surface, as the fields
+    take it; the antiderivative agrees with a quadrature point by point."""
+    nd = PREM().nondimensionalised()
+    beyond = np.nextafter(1.0, 2.0)
+    assert gravity(nd, beyond) == gravity(nd, 1.0)
+    assert mass(nd, radius=beyond) == mass(nd)
+    r = np.linspace(0.0, 1.0, 37)
+    each = np.array([4 * np.pi * sum(
+        float(f.integrate(f.interval[0], min(x, f.interval[1])))
+        for f in ((lay["rho"] * RadialField(lay.interval, polynomial_layer(
+            lay.interval, [0.0, 0.0, 1.0]))) for lay in nd.layers)
+        if f.interval[0] < x) for x in r])
+    g = gravity(nd, r)
+    safe = np.where(r > 0, r, 1.0)
+    assert np.allclose(g, np.where(r > 0, nd.G * each / safe ** 2, 0.0), rtol=1e-12,
+                       atol=0.0)

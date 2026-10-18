@@ -66,7 +66,8 @@ class PerturbedField(FieldBase):
                  name: str | None = None) -> None:
         if kind not in KINDS:
             raise ValueError(f"kind must be one of {KINDS}, got {kind!r}")
-        if reference.character.rank or not getattr(reference, "is_radial", False):
+        if (reference.character.rank or not getattr(reference, "is_radial", False)
+                or getattr(reference, "perturbation", None) is not None):
             raise ValueError(
                 f"the reference of a perturbed field is a radial field of rank "
                 f"0; {reference!r} is not (a perturbed field is perturbed once: "
@@ -122,6 +123,17 @@ class PerturbedField(FieldBase):
         if self._kind == "relative":
             return ref * (1.0 + dp)
         return ref * np.exp(dp)
+
+    def radial_pieces(self) -> tuple[np.ndarray, int] | None:
+        """The breakpoints and degree that hold both parts exactly, each
+        being held apart: the union of their breakpoints and the higher
+        of their degrees, or None when either part has none."""
+        parts = [getattr(f, "radial_pieces", lambda: None)()
+                 for f in (self._reference, self._perturbation)]
+        if any(p is None for p in parts):
+            return None
+        return (np.unique(np.concatenate([p[0] for p in parts])),
+                max(p[1] for p in parts))
 
     def spherical_mean(self, *, grid: AngularGrid | None = None) -> RadialField:
         """The mean from the parts: reference + mean(perturbation) when

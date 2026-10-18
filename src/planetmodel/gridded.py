@@ -32,30 +32,37 @@ A `GriddedFunction` is the same thing for a function of (theta, phi)
 alone: values on a grid, its values at the poles, a lateral rule, and
 the two angular derivatives, so that it serves as a relief of
 `layer_linear` and as a surface quantity such as the thickness of a
-lithosphere.
+lithosphere.  A `GriddedDisplacement` is a mapping held the same way:
+its displacement m(X) - X a gridded vector field on every layer of a
+skeleton, its deformation gradient the derivatives of the rules that
+read it, and every element boundary declared as a knot, since the
+radial rule's derivative may jump there.
 
 Everything is numbers and every stored array is read-only.
 """
 from __future__ import annotations
 
 import copy
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike
 
-from .character import SCALAR, Character
+from .character import SCALAR, VECTOR, Character
 from .displacement import Relief
 from .fields import Field, FieldBase, RadialField, rotate_stored, stored_shape
-from .frames import spherical_frame
+from .frames import cartesian_points, spherical_coordinates, spherical_frame
 from .layerfunction import PolynomialLayer, as_interval
-from .lateral import METHODS, LateralInterpolant, polar_values
-from .mesh1d.mesh import RADIAL_METHODS, Mesh1D
+from .lateral import METHODS, LateralInterpolant, check_rule, polar_values
+from .mapping import R_FLOOR_FRACTION, SIN_FLOOR, Mapping, MappingBase
+from .mesh1d.mesh import RADIAL_METHODS, Mesh1D, RadialMesh
+from .skeleton import Skeleton
 
 if TYPE_CHECKING:
     from .sampling import AngularGrid
 
-__all__ = ["GriddedField", "GriddedFunction"]
+__all__ = ["GriddedField", "GriddedFunction", "GriddedDisplacement"]
 
 
 def _readonly(a: np.ndarray) -> np.ndarray:
@@ -98,6 +105,7 @@ class GriddedField(FieldBase):
             raise ValueError(f"radial must be one of {RADIAL_METHODS}, got {radial!r}")
         if lateral not in METHODS:
             raise ValueError(f"lateral must be one of {METHODS}, got {lateral!r}")
+        check_rule(grid, lateral)
         self._interval = as_interval(interval)
         self._character = character
         self._name = name
@@ -232,6 +240,31 @@ class GriddedField(FieldBase):
             out[m] = np.einsum("pi,i...p->p...", W[m], lat)
         return out
 
+    def cartesian_derivatives(self, r: ArrayLike, theta: ArrayLike, phi: ArrayLike
+                              ) -> tuple[np.ndarray, np.ndarray, np.ndarray,
+                                         np.ndarray]:
+        """The Cartesian components at flat points and their derivatives in
+        r, theta and phi, each (P,) + stored shape: the radial rule's
+        weights and their derivatives against the lateral rule's values
+        and gradient at the nodes of the point's element.  Radii beyond
+        the breaks continue the end elements; nothing is checked against
+        the interval."""
+        r, theta, phi = (np.asarray(a, dtype=float).ravel()
+                         for a in np.broadcast_arrays(r, theta, phi))
+        e, W = self._mesh.interpolation_weights(r, method=self._radial)
+        _, dW = self._mesh.interpolation_weights(r, method=self._radial, nu=1)
+        out = [np.empty((r.size,) + self.stored_shape) for _ in range(4)]
+        for k in np.unique(e):
+            m = e == k
+            f = self._interpolant(int(k))
+            lat = f(theta[m], phi[m])                         # (ngll, *c, Pk)
+            gt, gp = f.gradient(theta[m], phi[m])
+            out[0][m] = np.einsum("pi,i...p->p...", W[m], lat)
+            out[1][m] = np.einsum("pi,i...p->p...", dW[m], lat)
+            out[2][m] = np.einsum("pi,i...p->p...", W[m], gt)
+            out[3][m] = np.einsum("pi,i...p->p...", W[m], gp)
+        return out[0], out[1], out[2], out[3]
+
     def _values(self, r: np.ndarray, theta: np.ndarray | None,
                 phi: np.ndarray | None) -> np.ndarray:
         shape = r.shape
@@ -241,6 +274,18 @@ class GriddedField(FieldBase):
             R = spherical_frame(theta, phi)
             out = rotate_stored(out, np.swapaxes(R, -1, -2), self._character)
         return out
+
+    def radial_pieces(self) -> tuple[np.ndarray, int]:
+        """The breakpoints and degree that hold the field exactly on its
+        interval: the breaks inside it and ngll - 1 under the polynomial
+        rule, the nodes inside it and one under the linear rule, with the
+        interval's ends."""
+        linear = self._radial == "linear"
+        x = np.unique(self._mesh.r) if linear else self._breaks
+        lo, hi = self._interval
+        tol = self._rtol * (hi - lo)
+        inside = x[(x > lo + tol) & (x < hi - tol)]
+        return np.concatenate([[lo], inside, [hi]]), 1 if linear else self.ngll - 1
 
     def spherical_mean(self, *, grid: AngularGrid | None = None) -> RadialField:
         """The spherical mean as exact polynomial pieces: at every node the
@@ -269,11 +314,13 @@ class GriddedField(FieldBase):
         values and the polar values by v."""
         k, v = float(k), float(v)
         lo, hi = self._interval
-        return GriddedField((k * lo, k * hi), k * self._breaks, self._grid,
-                            v * self._data, character=self._character,
-                            name=self._name, radial=self._radial,
-                            lateral=self._lateral, poles=v * self._poles,
-                            rtol=self._rtol)
+        breaks = k * self._breaks
+        out = GriddedField((breaks[0], breaks[-1]), breaks, self._grid,
+                           v * self._data, character=self._character,
+                           name=self._name, radial=self._radial,
+                           lateral=self._lateral, poles=v * self._poles,
+                           rtol=self._rtol)
+        return out.on_interval(k * lo, k * hi)
 
     def renamed(self, name: str | None) -> "GriddedField":
         """The same field under `name`."""
@@ -311,6 +358,7 @@ class GriddedFunction:
             raise ValueError(f"values must have shape (ntheta, nphi), got {v.shape}")
         if lateral not in METHODS:
             raise ValueError(f"lateral must be one of {METHODS}, got {lateral!r}")
+        check_rule(grid, lateral)
         self._poles = _readonly(polar_values(v, grid, poles=poles, rtol=rtol))
         self._f = LateralInterpolant(v, grid, method=lateral, poles=self._poles,
                                      rtol=rtol)
@@ -361,3 +409,133 @@ class GriddedFunction:
 
     def __repr__(self) -> str:
         return f"GriddedFunction({self.lateral} on {self.grid!r})"
+
+
+class GriddedDisplacement(MappingBase):
+    """The mapping m(X) = X + u(X), with u held on grids.
+
+    `fields` holds one `GriddedField` of character `VECTOR` per layer of
+    `skeleton`, in order, each on its layer's interval: the displacement
+    m(X) - X in the spherical frame at X, as a sample holds it.  The
+    deformation gradient is I + grad u from the radial and lateral
+    rules' derivatives, the e_phi entry taken on the polar axis as its
+    limit along the meridian; every element boundary of every field is a
+    knot.  `GriddedDisplacement.sampled` builds one from any mapping.
+    """
+
+    def __init__(self, skeleton: Skeleton, fields: Sequence[GriddedField]) -> None:
+        fields = tuple(fields)
+        b = skeleton.boundaries
+        if len(fields) != b.size - 1:
+            raise ValueError(f"{b.size - 1} layers need {b.size - 1} gridded "
+                             f"fields, got {len(fields)}")
+        tol = 1e-9 * skeleton.span
+        for i, f in enumerate(fields):
+            if not isinstance(f, GriddedField) or f.character != VECTOR:
+                raise ValueError(f"field {i} is not a gridded vector field")
+            lo, hi = f.interval
+            if abs(lo - b[i]) > tol or abs(hi - b[i + 1]) > tol:
+                raise ValueError(f"field {i} lies on [{lo:g}, {hi:g}], its layer "
+                                 f"on [{b[i]:g}, {b[i + 1]:g}]")
+        self._sk, self._fields = skeleton, fields
+        breaks = np.unique(np.concatenate([f.breaks for f in fields]))
+        self.knots = tuple(float(k) for k in breaks[1:-1])
+        self.rmax = float(b[-1])
+        self.name = "gridded_displacement"
+
+    @classmethod
+    def sampled(cls, mapping: Mapping, mesh: RadialMesh, grid: AngularGrid, *,
+                lateral: str = "cubic") -> "GriddedDisplacement":
+        """`mapping`'s displacement sampled at the nodes of `mesh`'s
+        elements on `grid`, layer by layer, and exactly at both poles."""
+        sk = mesh.skeleton
+        disp = getattr(mapping, "displacement", None)
+
+        def u(X: np.ndarray) -> np.ndarray:
+            return np.asarray(disp(X) if disp is not None else mapping(X) - X,
+                              dtype=float)
+
+        R = _grid_frames(grid)                              # (nt, np, 3, 3)
+        fields = []
+        for i in range(sk.nlayers):
+            elems = np.flatnonzero(mesh.layer == i)
+            r = mesh.r[elems]                               # (ne, ngll)
+            breaks = np.append(mesh.left[elems], mesh.right[elems[-1]])
+            X = r[:, :, None, None, None] * R[None, None, ..., :, 0]
+            values = np.einsum("tpji,egtpj->egtpi", R, u(X))
+            poles = u(cartesian_points(r[:, :, None], np.array([0.0, np.pi]),
+                                       np.zeros(2)))
+            fields.append(GriddedField(tuple(sk.boundaries[i:i + 2]), breaks, grid,
+                                       values, character=VECTOR, lateral=lateral,
+                                       poles=poles))
+        return cls(sk, fields)
+
+    @property
+    def skeleton(self) -> Skeleton:
+        """The skeleton the displacement is held over."""
+        return self._sk
+
+    @property
+    def fields(self) -> tuple[GriddedField, ...]:
+        """The displacement's gridded field on each layer."""
+        return self._fields
+
+    def _derivatives(self, r: np.ndarray, theta: np.ndarray, phi: np.ndarray
+                     ) -> list[np.ndarray]:
+        """[u, du/dr, du/dtheta, du/dphi] at flat (r, theta, phi), each
+        (P, 3), components Cartesian; a radius on a boundary is read from
+        the layer above."""
+        b = self._sk.boundaries
+        layer = np.clip(np.searchsorted(b, r, side="right") - 1, 0, b.size - 2)
+        parts = [np.empty((r.size, 3)) for _ in range(4)]
+        for i in np.unique(layer):
+            m = layer == i
+            for out, got in zip(parts, self._fields[i].cartesian_derivatives(
+                    r[m], theta[m], phi[m])):
+                out[m] = got
+        return parts
+
+    def _parts(self, X: ArrayLike) -> tuple[np.ndarray, ...]:
+        """(shape, r, theta, phi, R, u, du/dr, du/dtheta, du/dphi) at X, flat."""
+        X = np.asarray(X, dtype=float)
+        r, theta, phi, R = spherical_coordinates(X)
+        shape = r.shape
+        r, theta, phi = r.ravel(), theta.ravel(), phi.ravel()
+        return (shape, r, theta, phi, R.reshape(-1, 3, 3),
+                *self._derivatives(r, theta, phi))
+
+    def displacement(self, X: ArrayLike) -> np.ndarray:
+        """u(X) = m(X) - X, Cartesian, of the shape of X."""
+        shape, *_, u, _, _, _ = self._parts(X)
+        return u.reshape(shape + (3,))
+
+    def __call__(self, X: ArrayLike) -> np.ndarray:
+        """m(X) = X + u(X)."""
+        X = np.asarray(X, dtype=float)
+        return X + self.displacement(X)
+
+    def deformation_gradient(self, X: ArrayLike) -> np.ndarray:
+        """F = I + du/dr e_r + (1/r) du/dtheta e_theta + (1/(r sin theta))
+        du/dphi e_phi, each a Cartesian column against a frame vector."""
+        shape, r, theta, phi, R, _, dr, dt, dp = self._parts(X)
+        rs = np.maximum(r, R_FLOOR_FRACTION * self.rmax)[:, None]
+        sin_t = np.sin(theta)
+        per_sin = dp / np.maximum(sin_t, SIN_FLOOR)[:, None]
+        axis = sin_t < SIN_FLOOR
+        if np.any(axis):
+            # on the polar axis the e_phi derivative is the theta derivative
+            # a quarter turn on, negated at the south pole
+            q = self._derivatives(r[axis], theta[axis], phi[axis] + 0.5 * np.pi)[2]
+            per_sin[axis] = np.where(np.cos(theta[axis]) > 0.0, 1.0, -1.0)[:, None] * q
+        G = (np.einsum("pi,pj->pij", dr, R[:, :, 0])
+             + np.einsum("pi,pj->pij", dt / rs, R[:, :, 1])
+             + np.einsum("pi,pj->pij", per_sin / rs, R[:, :, 2]))
+        return (np.eye(3) + G).reshape(shape + (3, 3))
+
+    def jacobian(self, X: ArrayLike) -> np.ndarray:
+        """J = det F."""
+        return np.linalg.det(self.deformation_gradient(X))
+
+    def __repr__(self) -> str:
+        return (f"GriddedDisplacement({len(self._fields)} layers, "
+                f"{len(self.knots)} knots)")

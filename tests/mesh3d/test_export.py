@@ -195,3 +195,29 @@ def test_a_mapping_that_folds_the_mesh_is_refused_at_export(tmp_path):
     ref = export_mfem_mesh(res, tmp_path / "ref", delivery="referential")
     assert ref.quality["negative_jacobians"] == 0
     assert jacobian_report(load(ref))["negative_jacobians"] == 0
+
+
+def test_a_wrongly_oriented_element_is_refused(tmp_path):
+    """The check reads the file as written, without MFEM's own repair."""
+    import dataclasses
+
+    from planetmodel import Geometry, Skeleton
+    from planetmodel.mesh3d import UniformInterfaces, export_mfem_mesh
+
+    spec = MeshSpec(Geometry(Skeleton([0.0, 0.5, 1.0])),
+                    UniformInterfaces(0.3, 0.5, 0.5), dimension=2, order=1)
+    res = build_layered_mesh(spec, tmp_path / "m")
+    lines = res.msh_path.read_text().splitlines()
+    for k in range(lines.index("$Elements") + 2, len(lines)):
+        f = lines[k].split()
+        if len(f) > 1 and f[1] == "2":                        # a triangle
+            ntags = int(f[2])
+            nodes = f[3 + ntags:]
+            nodes[-1], nodes[-2] = nodes[-2], nodes[-1]
+            lines[k] = " ".join(f[:3 + ntags] + nodes)
+            break
+    bad = tmp_path / "bad.msh"
+    bad.write_text("\n".join(lines) + "\n")
+    with pytest.raises(ValueError, match="wrongly oriented"):
+        export_mfem_mesh(dataclasses.replace(res, msh_path=bad), tmp_path / "x")
+    export_mfem_mesh(res, tmp_path / "good")

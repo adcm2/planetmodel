@@ -52,6 +52,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import ArrayLike
 
+from .. import modelfile
 from ..character import VECTOR, Character
 from ..fields import stored_shape
 from ..mapping import IdentityMapping, Mapping
@@ -62,6 +63,7 @@ from .spec import DELIVERIES, MeshResult
 
 if TYPE_CHECKING:
     from ..model import Layer, Model
+    from ..modelfile import Grids
 
 __all__ = ["ExportResult", "export_mfem_mesh", "export_mfem",
            "jacobian_report", "MESH_READ_OPTIONS"]
@@ -113,6 +115,8 @@ class ExportResult:
     _: KW_ONLY
     #: name -> the field's GridFunction, for the fields `export_mfem` wrote.
     field_paths: dict[str, Path] = field(default_factory=dict)
+    #: The model file beside the mesh, where `export_mfem` wrote one.
+    model_path: Path | None = None
 
     def __repr__(self) -> str:
         n = len(self.field_paths)
@@ -126,9 +130,12 @@ def _load_mesh(msh_path: str | Path) -> Any:
     msh = Path(msh_path)
     if not msh.is_file():
         raise FileNotFoundError(f"no mesh at {msh}: the build wrote none")
-    mesh = mfem.Mesh(str(msh))
-    wrong_cells = mesh.CheckElementOrientation(True)
-    wrong_faces = mesh.CheckBdrElementOrientation(True)
+    # Read as a consumer is told to, without MFEM's own repair, so that
+    # the check sees the file as written.
+    o = MESH_READ_OPTIONS
+    mesh = mfem.Mesh(str(msh), o["generate_edges"], o["refine"], o["fix_orientation"])
+    wrong_cells = mesh.CheckElementOrientation(False)
+    wrong_faces = mesh.CheckBdrElementOrientation(False)
     if wrong_cells or wrong_faces:
         raise ValueError(
             f"MFEM finds {wrong_cells} wrongly oriented elements and "
@@ -279,7 +286,10 @@ def export_mfem_mesh(result: MeshResult, path_base: str | Path, *,
     manifest's `mesh` block names the MFEM file, says whether its nodes
     are reference or physical coordinates, and names the displacement
     among the `fields` where one was written; the displacement's unit
-    is "1" until a model's scales are known.
+    is "1" until a model's scales are known.  What only a model can say
+    (`fluid`, `kind`, `values`, the `model` block) is null, whatever the
+    manifest read had.  The manifest is validated before any file is
+    written.
     """
     mfem = _mfem()
     path_base = Path(path_base)
@@ -304,14 +314,10 @@ def export_mfem_mesh(result: MeshResult, path_base: str | Path, *,
     else:
         quality = jacobian_report(mesh)
     mesh_path = manifest.beside(path_base, ".mesh")
-    mesh_path.parent.mkdir(parents=True, exist_ok=True)
-    mesh.Print(str(mesh_path), 16)
-
     displacement_path = None
     entries = []
     if delivery == "referential":
         displacement_path = manifest.beside(path_base, ".displacement.gf")
-        displacement.Save(str(displacement_path), 16)
         entries.append(_field_entry(
             DISPLACEMENT, displacement_path, nodes.FESpace(), character=VECTOR,
             dimensions=LENGTH, si=False,
@@ -322,8 +328,17 @@ def export_mfem_mesh(result: MeshResult, path_base: str | Path, *,
         read_options=MESH_READ_OPTIONS,
         displacement=DISPLACEMENT if entries else None)
     card.fields = [dataclasses.asdict(e) for e in entries]
-    card.scales, card.constants = None, {}
+    card.scales, card.constants, card.model = None, {}, None
+    for entry in card.layers:
+        entry["fluid"] = None
+    for entry in card.interfaces:
+        entry["kind"] = entry["values"] = None
     manifest.validate_structure(card)
+
+    mesh_path.parent.mkdir(parents=True, exist_ok=True)
+    mesh.Print(str(mesh_path), 16)
+    if displacement_path is not None:
+        displacement.Save(str(displacement_path), 16)
     manifest_path = manifest.write(path_base, card)
 
     counts = {"elements": mesh.GetNE(), "boundary_elements": mesh.GetNBE(),
@@ -430,7 +445,12 @@ def _field_values(model: Model, name: str, X: np.ndarray,
             continue
         layer = model.layer(i)
         points = _clipped_into(_lifted(X[dofs]), layer.interval)
-        got = np.asarray(layer[name].evaluate_at(points, frame=FRAME), dtype=float)
+        got = np.asarray(layer[name].evaluate_at(points, frame=FRAME))
+        if np.iscomplexobj(got):
+            raise ValueError(
+                f"{name!r} is complex on layer {i}; a GridFunction is real, so "
+                "export its real and imaginary parts as fields of their own")
+        got = got.astype(float, copy=False)
         want = (dofs.size,) + tuple(shape)
         if got.shape != want:
             raise ValueError(
@@ -529,7 +549,8 @@ def _annotate_from_model(card: manifest.MeshManifest, model: Model,
 
 def export_mfem(result: MeshResult, path_base: str | Path, *, model: Model,
                 fields: Iterable[str] | None = None, delivery: str = "physical",
-                order: int | None = None) -> ExportResult:
+                order: int | None = None,
+                model_file: bool | Grids = False) -> ExportResult:
     """Write an MFEM delivery of a built mesh with the fields of a model
     beside it: `<base>.mesh`, the displacement in referential delivery,
     one `<base>.<name>.gf` per field, and the manifest.
@@ -554,21 +575,38 @@ def export_mfem(result: MeshResult, path_base: str | Path, *, model: Model,
     polynomial in r, the degree that reproduces it (`radial_degree`);
     and `scales` and `constants` blocks from the model.  What the model
     says about the skeleton is written onto its records: `fluid` on
-    every layer (the vanishing of shear in the exported description;
-    False for a shell, null where the fields do not say), `kind` on
-    every interface, and `values`, the one-sided values there of every
-    exported real scalar radial field.
+    every layer (the vanishing of shear in the model's layer, whichever
+    fields are exported; False for a shell, null where the fields do
+    not say), `kind` on every interface, and `values`, the one-sided
+    values there of every exported real scalar radial field.
+
+    `model_file` writes the model too, beside the mesh as
+    `<base>.model.nc` on the mesh's reference skeleton, the fields
+    chosen by `fields`, and records it in the manifest's `model` block:
+    a grid (or a mapping from layers to grids) for the file's parts, as
+    `modelfile.write_model` takes it, or True for a model that does not
+    vary with direction under the identity, written on the smallest
+    grid.  Layer n of the file is attribute n + 1 of the mesh; a shell
+    the spec appended has no model data.  The `.gf` fields are written
+    either way.
     """
     mfem = _mfem()
     _check_model_sits_on(result, model)
     names = _chosen_names(model, fields)
+    if delivery == "referential" and DISPLACEMENT in names:
+        raise ValueError(
+            f"a field named {DISPLACEMENT!r} would take the file of the mapping's "
+            "displacement in referential delivery; rename the field, or leave it "
+            "out of fields=")
+    grid = None if model_file is False else _model_file_grid(model, names, model_file)
     mesh = _load_mesh(result.msh_path)
     order = _mesh_order(mesh) if order is None else int(order)
     if order < 0:
         raise ValueError(f"the order of an L2 space is not negative, got {order}")
     holders = {name: [i + 1 for i in model.layers_with(name)] for name in names}
 
-    # Every value is computed before anything is written.
+    # Every value is computed, and the manifest checked, before anything
+    # but the model file is written.
     collection = mfem.L2_FECollection(order, mesh.Dimension())
     scalar = mfem.FiniteElementSpace(mesh, collection, 1)
     X = _dof_coordinates(mesh, scalar)
@@ -578,8 +616,12 @@ def export_mfem(result: MeshResult, path_base: str | Path, *, model: Model,
         vdim = int(np.prod(stored_shape(_character_of(model, name)), dtype=int))
         values[name] = (vdim, _field_values(model, name, X, groups, vdim=vdim))
 
-    export = export_mfem_mesh(result, path_base, delivery=delivery)
     path_base = Path(path_base)
+    model_path = None
+    if grid is not None:
+        model_path = modelfile.write_model(manifest.beside(path_base, ".model.nc"),
+                                           model, grid=grid, fields=names)
+    export = export_mfem_mesh(result, path_base, delivery=delivery)
     si = model.scales.is_si
     written, entries = {}, []
     for name, (vdim, array) in values.items():
@@ -603,7 +645,27 @@ def export_mfem(result: MeshResult, path_base: str | Path, *, model: Model,
     card.scales = manifest.scales_block(model.scales)
     card.constants = manifest.constants_block(model)
     _annotate_from_model(card, model, written)
+    if model_path is not None:
+        card.model = {"file": model_path.name, "schema": modelfile.SCHEMA}
     manifest.validate_structure(card)
     manifest_path = manifest.write(path_base, card)
     return dataclasses.replace(export, manifest_path=manifest_path,
-                               field_paths=written)
+                               field_paths=written, model_path=model_path)
+
+
+def _model_file_grid(model: Model, names: Sequence[str], grid: bool | Grids
+                     ) -> Grids:
+    """The grids of the model file: those given, or for a model that does
+    not vary with direction, the smallest grid."""
+    from ..sampling import gauss_legendre
+    if grid is True:
+        lateral = [n for n in names for i in model.layers_with(n)
+                   if not getattr(model.layer(i)[n], "is_radial", False)]
+        if lateral or not model.geometry.is_identity:
+            varies = sorted(set(lateral)) or "its mapping"
+            raise ValueError(
+                "model_file=True writes a model that does not vary with "
+                f"direction under the identity; {varies} does: give the "
+                "angular grid, model_file=grid")
+        grid = gauss_legendre(0)
+    return grid

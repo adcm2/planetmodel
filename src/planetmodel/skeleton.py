@@ -18,7 +18,11 @@ from dataclasses import KW_ONLY, dataclass
 import numpy as np
 from numpy.typing import ArrayLike
 
-__all__ = ["Location", "Skeleton", "CoarseningMap"]
+__all__ = ["Location", "Skeleton", "CoarseningMap", "DEFAULT_RTOL"]
+
+#: The relative tolerance to which radii are the same by default: a
+#: fraction of the skeleton's span (of an interval's width, for a field).
+DEFAULT_RTOL = 1e-9
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,8 @@ class Skeleton:
         b = np.array(boundaries, dtype=float)
         if b.ndim != 1 or b.size < 2:
             raise ValueError("need a 1-d array of at least two boundary radii")
+        if not np.all(np.isfinite(b)):
+            raise ValueError("boundary radii must be finite")
         if b[0] < 0.0:
             raise ValueError("boundary radii must be non-negative")
         if not np.all(np.diff(b) > 0.0):
@@ -110,20 +116,20 @@ class Skeleton:
     # -- membership ---------------------------------------------------------
 
     def spans(self, lo: float, hi: float, *, layer: int | None = None,
-              rtol: float = 1e-9) -> bool:
+              rtol: float = DEFAULT_RTOL) -> bool:
         """Whether [lo, hi] is this skeleton's span, or one layer's, to rtol*span."""
         a, b = (self.interval(layer) if layer is not None
                 else (float(self._b[0]), float(self._b[-1])))
         tol = rtol * self.span
         return abs(float(lo) - a) <= tol and abs(float(hi) - b) <= tol
 
-    def contains(self, lo: float, hi: float, *, rtol: float = 1e-9) -> bool:
+    def contains(self, lo: float, hi: float, *, rtol: float = DEFAULT_RTOL) -> bool:
         """Whether [lo, hi] lies inside the skeleton's span, to rtol*span."""
         tol = rtol * self.span
         return (float(lo) >= float(self._b[0]) - tol
                 and float(hi) <= float(self._b[-1]) + tol)
 
-    def locate(self, r: float, *, rtol: float = 1e-9) -> Location:
+    def locate(self, r: float, *, rtol: float = DEFAULT_RTOL) -> Location:
         """Locate radius r, flagging boundary ambiguity through Location.
 
         A radius within rtol*span of a boundary is reported on that
@@ -133,7 +139,7 @@ class Skeleton:
         r = float(r)
         b = self._b
         tol = rtol * self.span
-        if r < b[0] - tol or r > b[-1] + tol:
+        if not (b[0] - tol <= r <= b[-1] + tol):
             raise ValueError(f"radius {r} outside [{b[0]}, {b[-1]}]")
         j = int(np.argmin(np.abs(b - r)))
         if abs(b[j] - r) <= tol:
@@ -195,10 +201,10 @@ class Skeleton:
         """The skeleton cut at `radius`, which becomes the outer boundary.
 
         Boundaries at or above the cut are dropped; a cut on an existing
-        boundary removes what lies above it, otherwise the outermost
-        surviving layer is shortened.
+        boundary, to `DEFAULT_RTOL` of the span, removes what lies above
+        it, otherwise the outermost surviving layer is shortened.
         """
-        radius = float(radius)
+        radius = self._snapped(radius)
         if radius <= self._b[0]:
             raise ValueError(
                 f"cannot truncate at {radius}: it is at or below the innermost "
@@ -215,10 +221,14 @@ class Skeleton:
         boundary.
 
         Boundaries at or below the cut are dropped; a cut on an existing
-        boundary removes what lies below it, otherwise the innermost
-        surviving layer is shortened.  The result is hollow.
+        boundary, to `DEFAULT_RTOL` of the span, removes what lies below
+        it, otherwise the innermost surviving layer is shortened.  The
+        result is hollow, so its inner boundary is positive.
         """
-        radius = float(radius)
+        radius = self._snapped(radius)
+        if not radius > 0.0:
+            raise ValueError(f"cannot hollow at {radius}: a hollow skeleton's "
+                             "inner boundary is positive")
         if radius < self._b[0]:
             raise ValueError(
                 f"cannot hollow at {radius}: below the innermost boundary "
@@ -234,21 +244,33 @@ class Skeleton:
                     ok: Callable[[float], bool]) -> "Skeleton":
         """Merge extra radii into the boundary array, checking each one."""
         extra = np.atleast_1d(np.asarray(radii, dtype=float))
+        tol = DEFAULT_RTOL * self.span
         for r in extra:
+            if np.any(np.abs(self._b - r) <= tol):
+                raise ValueError(f"radius {float(r)} is already a boundary")
             if not ok(float(r)):
                 raise ValueError(
                     f"cannot {verb} radius {float(r)} into a skeleton spanning "
                     f"[{self._b[0]}, {self._b[-1]}]")
-            if np.any(self._b == r):
-                raise ValueError(f"radius {float(r)} is already a boundary")
         merged = np.union1d(self._b, extra)
-        if merged.size != self._b.size + extra.size:
+        if merged.size != self._b.size + extra.size or np.any(np.diff(merged) <= tol):
             raise ValueError(f"duplicate radii among {list(map(float, extra))}")
         return Skeleton(merged)
+
+    def _snapped(self, radius: float) -> float:
+        """`radius`, or the boundary within `DEFAULT_RTOL` of the span of it."""
+        radius = float(radius)
+        j = int(np.argmin(np.abs(self._b - radius)))
+        return float(self._b[j]) if (abs(self._b[j] - radius)
+                                     <= DEFAULT_RTOL * self.span) else radius
 
     def __eq__(self, other: object) -> bool:
         """Skeletons are equal iff their boundary arrays are identical."""
         return isinstance(other, Skeleton) and np.array_equal(self._b, other._b)
+
+    def __hash__(self) -> int:
+        """The hash of the boundary radii, consistent with equality."""
+        return hash(self._b.tobytes())
 
     def __repr__(self) -> str:
         return (f"Skeleton({self.nlayers} layers, "
