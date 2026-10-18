@@ -18,11 +18,16 @@ netCDF file each: for a lateral case the grid (`colatitude`,
 `poles`, the `method`, the query points `query_colatitude` and
 `query_longitude`, and the `expected` values with their derivatives
 `expected_dtheta` and `expected_dphi`; for a radial case the element
-`breaks`, `ngll`, the `values` at the nodes (element by element), the
-`method`, the query radii and the `expected` values and derivatives.
+`breaks`, `ngll`, the node `radius` and the `values` there (element by
+element), the `method`, the query radii and the `expected` values and
+derivatives.
 Every case covers the poles, the longitude seam and points between
 nodes.  The local rules only: the C++ side does no spherical-harmonic
 work.
+
+**Frames** (`frames.txt`): `frame <theta> <phi>` and the nine entries
+of the frame matrix by rows, and `wrapped <x> <start> <value>`, the
+longitude reduction, the seam's rounding case among them.
 
 **JSON** (`json_*.json`, and `manifests/<case>/*.json`, the manifests
 the mesher and the MFEM exports write on unit geometries, which need
@@ -151,7 +156,8 @@ def radial_cases(directory: Path) -> list[Path]:
         pp = mesh.to_ppoly(values, method=method)
         out.append(_write_case(
             directory / f"case_radial_{method}.nc",
-            {"breaks": mesh.breakpoints, "values": values, "query_radius": r,
+            {"breaks": mesh.breakpoints, "radius": mesh.r, "values": values,
+             "query_radius": r,
              "expected": pp(r), "expected_dr": pp.derivative()(r)},
             {"method": method, "ngll": np.int32(mesh.ngll)}))
     return out
@@ -612,6 +618,25 @@ _DIMENSIONS = (units.DIMENSIONLESS, units.MASS, units.LENGTH, units.TIME,
                units.DENSITY * units.TEMPERATURE ** -1, units.LENGTH ** -7)
 
 
+def frames(directory: Path) -> list[Path]:
+    """The frames and reductions of the module docstring."""
+    from planetmodel.frames import spherical_frame, wrapped
+    rng = np.random.default_rng(3)
+    theta = np.concatenate(([0.0, np.pi, 0.5 * np.pi], rng.uniform(0.0, np.pi, 6)))
+    phi = np.concatenate(([0.0, 1.0, -2.0], rng.uniform(-7.0, 7.0, 6)))
+    lines = []
+    for t, p in zip(theta, phi):
+        R = spherical_frame(t, p)
+        lines.append(f"frame {float(t)!r} {float(p)!r} "
+                     + " ".join(repr(float(x)) for x in R.ravel()))
+    for x, start in ((-1e-17, 0.0), (2.0 * np.pi, 0.0), (-7.0, 0.3), (19.0, 0.3),
+                     (0.3, 0.3), (0.3 - 1e-16, 0.3), (-100.5, 1.7)):
+        lines.append(f"wrapped {x!r} {start!r} {float(wrapped(x, start=start))!r}")
+    path = directory / "frames.txt"
+    path.write_text("\n".join(lines) + "\n")
+    return [path]
+
+
 def constants(directory: Path) -> list[Path]:
     """The facts of the module docstring, under the SI scales, the Earth's
     geophysical ones, and scales of no physical meaning with a
@@ -643,7 +668,7 @@ def write_fixtures(directory: str | Path, *, meshes: bool = True) -> list[Path]:
     for path in models:
         validate_structure(path)
     return (models + lateral_cases(directory) + radial_cases(directory)
-            + constants(directory) + json_documents(directory)
+            + constants(directory) + frames(directory) + json_documents(directory)
             + manifest_cases(directory) + decks(directory)
             + (manifests(directory) if meshes else []))
 

@@ -22,7 +22,6 @@
 #include <vector>
 
 #include <Interpolation/CubicSpline.hpp>
-#include <Interpolation/Lagrange.hpp>
 #include <Interpolation/Linear.hpp>
 
 #include "planetmodel/error.hpp"
@@ -97,7 +96,14 @@ enum class KnotKind { Cubic, Natural, Linear };
   if (r.size() == 2 || kind == KnotKind::Linear) {
     evaluator = share(Interpolation::Linear(std::move(r), std::move(y)));
   } else if (r.size() == 3 && kind == KnotKind::Cubic) {
-    evaluator = share(Interpolation::Lagrange(std::move(r), std::move(y)));
+    // the parabola in Newton's form, which no nearness to a knot upsets
+    const auto d01 = (y[1] - y[0]) / (r[1] - r[0]);
+    const auto d12 = (y[2] - y[1]) / (r[2] - r[1]);
+    const auto d012 = (d12 - d01) / (r[2] - r[0]);
+    evaluator = [x0 = r[0], x1 = r[1], y0 = y[0], d01, d012](double x, int derivative) {
+      return derivative == 0 ? y0 + (x - x0) * (d01 + (x - x1) * d012)
+                             : d01 + ((x - x0) + (x - x1)) * d012;
+    };
   } else {
     const auto condition = kind == KnotKind::Cubic ? Interpolation::BoundaryCondition::NotAKnot
                                                    : Interpolation::BoundaryCondition::Natural;

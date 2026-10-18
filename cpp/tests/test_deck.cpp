@@ -200,6 +200,19 @@ TEST(Deck, RefusesWhatIsNotADeckByName) {
   EXPECT_THROW(static_cast<void>(planetmodel::ReadDeck("/nonexistent", two)), Error);
 }
 
+TEST(Deck, AParabolaIsAccurateBesideItsKnots) {
+  // a three-knot layer under the cubic kind, read a hair from a knot
+  const auto layers = planetmodel::DeckLayers(
+      Deck({0.0, 0.3, 1.0}, {{"a", {1.0, 2.0, 0.5}}}), "cubic");
+  const auto& f = layers.layers[0].at("a");
+  const auto x = std::nextafter(0.3, 1.0);
+  // p(x) = 1 + (x - 0)(d01 + (x - 0.3) d012), d01 = 10/3, d012 = (-15/7 - 10/3) / 1
+  const auto d01 = 1.0 / 0.3;
+  const auto d012 = (-1.5 / 0.7 - d01) / 1.0;
+  EXPECT_NEAR(f.Derivative(x), d01 + (x + (x - 0.3)) * d012, 1e-12);
+  EXPECT_NEAR(f.Value(0.3), 2.0, 1e-15);
+}
+
 TEST(Deck, ARadialFunctionHoldsToItsLayer) {
   const auto layers = planetmodel::DeckLayers(Deck({0.0, 0.5, 1.0}, {{"a", {1.0, 1.5, 2.0}}}));
   const auto& f = layers.layers[0].at("a");
