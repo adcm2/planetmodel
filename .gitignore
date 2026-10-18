@@ -23,6 +23,10 @@ htmlcov/
 docs/build/
 docs/source/modules.rst
 docs/source/planetmodel*.rst
+# and the C++ reference Doxygen writes for it, or writes into cpp/ when
+# run there without PLANETMODEL_DOCS_OUTPUT
+docs/_doxygen/
+cpp/cpp-reference/
 
 
 # outputs of examples and tests

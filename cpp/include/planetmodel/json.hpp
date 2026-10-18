@@ -1,26 +1,28 @@
 #ifndef PLANETMODEL_JSON_HPP
 #define PLANETMODEL_JSON_HPP
 
-/// @file
-/// A strict reader of JSON (RFC 8259), for the manifests the Python
-/// writes and any other small document a code reads.
-///
-/// `ReadJson(text, source)` and `ReadJsonFile(path)` parse a whole
-/// document into a `Json` value or throw `planetmodel::Error` at the line
-/// and column of the first fault.  Strict means: the grammar's whitespace
-/// alone; numbers by the grammar (no `+1`, `.5`, `01`, hex, `NaN` or
-/// `Infinity`) read by `std::from_chars`, so independent of the locale,
-/// one beyond the range of a double refused; strings with every escape
-/// checked, `\u` escapes and surrogate pairs encoded as UTF-8, raw
-/// control characters and malformed UTF-8 refused; a key repeated in one
-/// object refused; nesting deeper than `JSON_MAX_DEPTH` refused; nothing
-/// after the document but whitespace.  Object members keep their order.
-///
-/// Every value knows where it came from: its source, its path from the
-/// root (`layers[2].r_outer`, a key that is not an identifier written
-/// `["a key"]`) and its line, so that an accessor asked for the wrong
-/// type, a missing key or an index out of range throws an `Error` naming
-/// the source and the path.
+/**
+ * @file
+ * @brief A strict reader of JSON (RFC 8259), for the manifests the Python
+ * writes and any other small document a code reads.
+ *
+ * `ReadJson(text, source)` and `ReadJsonFile(path)` parse a whole document
+ * into a `Json` value or throw `planetmodel::Error` at the line and column
+ * of the first fault.  Strict means: the grammar's whitespace alone;
+ * numbers by the grammar (no `+1`, `.5`, `01`, hex, `NaN` or `Infinity`)
+ * read by `std::from_chars`, so independent of the locale, one beyond the
+ * range of a double refused; strings with every escape checked, `\u`
+ * escapes and surrogate pairs encoded as UTF-8, raw control characters and
+ * malformed UTF-8 refused; a key repeated in one object refused; nesting
+ * deeper than `JSON_MAX_DEPTH` refused; nothing after the document but
+ * whitespace.  Object members keep their order.
+ *
+ * Every value knows where it came from: its source, its path from the root
+ * (`layers[2].r_outer`, a key that is not an identifier written `["a
+ * key"]`) and its line, so that an accessor asked for the wrong type, a
+ * missing key or an index out of range throws an `Error` naming the source
+ * and the path.
+ */
 
 #include <charconv>
 #include <cstddef>
@@ -41,44 +43,78 @@
 
 namespace planetmodel {
 
-/// How deeply arrays and objects may nest in a document.
+/** @brief How deeply arrays and objects may nest in a document. */
 inline constexpr auto JSON_MAX_DEPTH = 256;
 
-/// One JSON value, with the place in its document it was read from.
+namespace detail {
+class JsonParser;
+}  // namespace detail
+
+/** @brief One JSON value, with the place in its document it was read from. */
 class Json {
  public:
-  enum class Type { Null, Bool, Number, String, Array, Object };
+  /** @brief The types of value JSON has. */
+  enum class Type {
+    Null,   /**< `null`. */
+    Bool,   /**< `true` or `false`. */
+    Number, /**< A number. */
+    String, /**< A string. */
+    Array,  /**< An array. */
+    Object  /**< An object. */
+  };
 
-  /// An object's members, in the order the document gives them.
+  /** @brief An object's members, in the order the document gives them. */
   using Members = std::vector<std::pair<std::string, Json>>;
 
+  /** @brief The value's type. */
   [[nodiscard]] Type GetType() const noexcept { return type_; }
+  /** @brief Whether the value is `null`. */
   [[nodiscard]] bool IsNull() const noexcept { return type_ == Type::Null; }
+  /** @brief Whether the value is a boolean. */
   [[nodiscard]] bool IsBool() const noexcept { return type_ == Type::Bool; }
+  /** @brief Whether the value is a number. */
   [[nodiscard]] bool IsNumber() const noexcept { return type_ == Type::Number; }
+  /** @brief Whether the value is a string. */
   [[nodiscard]] bool IsString() const noexcept { return type_ == Type::String; }
+  /** @brief Whether the value is an array. */
   [[nodiscard]] bool IsArray() const noexcept { return type_ == Type::Array; }
+  /** @brief Whether the value is an object. */
   [[nodiscard]] bool IsObject() const noexcept { return type_ == Type::Object; }
 
-  /// Whether the value is a number written as an integer, with no
-  /// fraction and no exponent (as Python's json reads an `int`), that an
-  /// `int` holds.
+  /**
+   * @brief Whether the value is a number written as an integer, with no
+   * fraction and no exponent (as Python's json reads an `int`), that an
+   * `int` holds.
+   */
   [[nodiscard]] bool IsInteger() const noexcept {
     return type_ == Type::Number && integral_ &&
            number_ >= std::numeric_limits<int>::min() &&
            number_ <= std::numeric_limits<int>::max();
   }
 
+  /**
+   * @brief The boolean.
+   * @throws planetmodel::Error naming the value's path where it is not a
+   *         boolean.
+   */
   [[nodiscard]] bool AsBool() const {
     Expect(Type::Bool);
     return boolean_;
   }
+  /**
+   * @brief The number.
+   * @throws planetmodel::Error naming the value's path where it is not a
+   *         number.
+   */
   [[nodiscard]] double AsNumber() const {
     Expect(Type::Number);
     return number_;
   }
-  /// The number as an `int`, refused where it was not written as an
-  /// integer or lies beyond the range of one.
+  /**
+   * @brief The number as an `int`.
+   * @throws planetmodel::Error naming the value's path where it is not a
+   *         number written as an integer in the range of an `int`.
+   */
   [[nodiscard]] int AsInt() const {
     Expect(Type::Number);
     if (!integral_) {
@@ -93,27 +129,50 @@ class Json {
     }
     return static_cast<int>(number_);
   }
+  /**
+   * @brief The string, UTF-8.
+   * @throws planetmodel::Error naming the value's path where it is not a
+   *         string.
+   */
   [[nodiscard]] const std::string& AsString() const {
     Expect(Type::String);
     return string_;
   }
+  /**
+   * @brief The array's elements.
+   * @throws planetmodel::Error naming the value's path where it is not an
+   *         array.
+   */
   [[nodiscard]] const std::vector<Json>& AsArray() const {
     Expect(Type::Array);
     return array_;
   }
+  /**
+   * @brief The object's members, in order.
+   * @throws planetmodel::Error naming the value's path where it is not an
+   *         object.
+   */
   [[nodiscard]] const Members& AsObject() const {
     Expect(Type::Object);
     return object_;
   }
 
-  /// The number of elements of an array or members of an object.
+  /**
+   * @brief The number of elements of an array or members of an object.
+   * @throws planetmodel::Error where the value is neither.
+   */
   [[nodiscard]] std::size_t Size() const {
     if (type_ == Type::Array) return array_.size();
     Expect(Type::Object);
     return object_.size();
   }
 
-  /// The member named `key` of an object, or null where it has none.
+  /**
+   * @brief A member of an object, by name.
+   * @param key The member's name.
+   * @return The member, or null where the object has none of the name.
+   * @throws planetmodel::Error where the value is not an object.
+   */
   [[nodiscard]] const Json* Find(std::string_view key) const {
     Expect(Type::Object);
     for (const auto& [name, value] : object_) {
@@ -122,17 +181,30 @@ class Json {
     return nullptr;
   }
 
-  /// Whether an object has a member named `key`.
+  /**
+   * @brief Whether an object has a member of a name.
+   * @param key The member's name.
+   * @throws planetmodel::Error where the value is not an object.
+   */
   [[nodiscard]] bool Contains(std::string_view key) const { return Find(key) != nullptr; }
 
-  /// The member named `key` of an object, refused by name where it is
-  /// missing.
+  /**
+   * @brief A member of an object, by name.
+   * @param key The member's name.
+   * @throws planetmodel::Error naming the value's path and the key where
+   *         the object has no such member, or the value is not an object.
+   */
   [[nodiscard]] const Json& At(std::string_view key) const {
     if (const auto* found = Find(key)) return *found;
     throw Error(Source(), Path(), std::format("has no member \"{}\"", key));
   }
 
-  /// Element `index` of an array, refused where it is out of range.
+  /**
+   * @brief An element of an array.
+   * @param index The element, from zero.
+   * @throws planetmodel::Error where the index is out of range or the
+   *         value is not an array.
+   */
   [[nodiscard]] const Json& At(std::size_t index) const {
     Expect(Type::Array);
     if (index >= array_.size()) {
@@ -142,19 +214,22 @@ class Json {
     return array_[index];
   }
 
-  /// The document the value was read from, as `ReadJson` was told.
+  /** @brief The document the value was read from, as `ReadJson` was told. */
   [[nodiscard]] const std::string& Source() const noexcept {
     static const auto none = std::string{};
     return source_ ? *source_ : none;
   }
 
-  /// The value's path from the root: empty for the root itself.
+  /** @brief The value's path from the root: empty for the root itself. */
   [[nodiscard]] const std::string& Path() const noexcept { return path_; }
 
-  /// The line of the document the value starts on, counted from one.
+  /** @brief The line of the document the value starts on, counted from one. */
   [[nodiscard]] std::size_t Line() const noexcept { return line_; }
 
-  /// The name of a type, as the errors give it.
+  /**
+   * @brief The name of a type, as the errors give it.
+   * @param type The type.
+   */
   [[nodiscard]] static std::string_view TypeName(Type type) noexcept {
     switch (type) {
       case Type::Null: return "null";
@@ -168,7 +243,7 @@ class Json {
   }
 
  private:
-  friend class JsonParser;
+  friend class detail::JsonParser;
 
   void Expect(Type type) const {
     if (type_ != type) {
@@ -188,6 +263,8 @@ class Json {
   std::string path_;
   std::size_t line_ = 0;
 };
+
+namespace detail {
 
 /// The parser behind `ReadJson`: one document, read once, the text
 /// borrowed for the length of the call only.
@@ -569,13 +646,24 @@ class JsonParser {
   std::size_t line_start_ = 0;
 };
 
-/// The document in `text`, read whole; `source` names it in errors (a
-/// path, say).
+}  // namespace detail
+
+/**
+ * @brief A JSON document, read whole.
+ * @param text The document.
+ * @param source What the document is, as errors name it (a path, say).
+ * @throws planetmodel::Error at the line and column of the first fault.
+ */
 [[nodiscard]] inline Json ReadJson(std::string_view text, std::string source = "<text>") {
-  return JsonParser(text, std::move(source)).Parse();
+  return detail::JsonParser(text, std::move(source)).Parse();
 }
 
-/// The document in the file at `path`.
+/**
+ * @brief The JSON document in a file, read whole.
+ * @param path The file.
+ * @throws planetmodel::Error if the file cannot be opened, or at the line
+ *         and column of the first fault.
+ */
 [[nodiscard]] inline Json ReadJsonFile(const std::filesystem::path& path) {
   auto in = std::ifstream(path, std::ios::binary);
   if (!in) throw Error(path.string(), "", "cannot be opened");

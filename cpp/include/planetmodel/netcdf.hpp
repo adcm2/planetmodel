@@ -78,9 +78,15 @@ class File {
   File(const File&) = delete;
   /** @brief A file is not copied, its handle being its own. */
   File& operator=(const File&) = delete;
-  /** @brief The handle moves with the file. */
+  /**
+   * @brief The handle moves with the file.
+   * @param other The file moved from, left closed.
+   */
   File(File&& other) noexcept : path_(std::move(other.path_)), id_(std::exchange(other.id_, -1)) {}
-  /** @brief The handles are exchanged. */
+  /**
+   * @brief The handles are exchanged.
+   * @param other The file exchanged with.
+   */
   File& operator=(File&& other) noexcept {
     std::swap(path_, other.path_);
     std::swap(id_, other.id_);

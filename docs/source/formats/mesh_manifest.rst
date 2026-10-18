@@ -4,7 +4,9 @@ The mesh manifest
 The JSON that travels beside every mesh the 3D mesher writes, described
 from the consumer's side.  It is written by ``planetmodel.mesh3d``; the
 single definition of its shape is ``planetmodel/mesh3d/manifest.py``,
-and ``validate_structure`` there checks a file against it.
+and ``validate_structure`` there checks a file against it.  In C++,
+planetmodel's own library (:doc:`../cpp`) reads it, with the same
+checks.
 
 A mesh file carries numbered attributes and nothing else.  Which number
 is which layer, which boundary is which interface, where each sits,

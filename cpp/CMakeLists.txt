@@ -46,8 +46,12 @@ option(PLANETMODEL_WITH_NETCDF
        "Read and write model files, over netCDF-C (required when on)" ON)
 option(PLANETMODEL_BUILD_TESTS
        "Build planetmodel's own tests" ${PROJECT_IS_TOP_LEVEL})
+option(PLANETMODEL_BUILD_EXAMPLES
+       "Build the example programs (with the model file)" ${PROJECT_IS_TOP_LEVEL})
+option(PLANETMODEL_BUILD_DOCS
+       "Build the Doxygen reference, target planetmodel_docs" OFF)
 option(PLANETMODEL_WARNINGS_AS_ERRORS
-       "Treat warnings in planetmodel's own tests as errors" OFF)
+       "Treat warnings in planetmodel's own tests and examples as errors" OFF)
 set(PLANETMODEL_INTERPOLATION_TAG v1.1.2 CACHE STRING
     "The tag of da380/Interpolation to fetch")
 
@@ -108,4 +112,22 @@ endif()
 if(PLANETMODEL_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+endif()
+
+if(PLANETMODEL_BUILD_EXAMPLES AND PLANETMODEL_WITH_NETCDF)
+  add_subdirectory(examples)
+endif()
+
+# The reference, by the Doxyfile the documentation's own build runs too;
+# every warning fails it.
+if(PLANETMODEL_BUILD_DOCS)
+  find_package(Doxygen REQUIRED)
+  add_custom_target(planetmodel_docs
+    COMMAND ${CMAKE_COMMAND} -E env
+            PLANETMODEL_DOCS_OUTPUT=${CMAKE_CURRENT_BINARY_DIR}/docs
+            PLANETMODEL_VERSION=${PLANETMODEL_VERSION_STRING}
+            ${DOXYGEN_EXECUTABLE} docs/Doxyfile
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "planetmodel: the reference, into ${CMAKE_CURRENT_BINARY_DIR}/docs/cpp-reference"
+    VERBATIM)
 endif()

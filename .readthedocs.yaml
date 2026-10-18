@@ -4,6 +4,9 @@ build:
   os: ubuntu-24.04
   tools:
     python: "3.12"
+  # Doxygen builds the C++ reference beside the pages (docs/source/conf.py).
+  apt_packages:
+    - doxygen
   jobs:
     post_create_environment:
       - pip install poetry

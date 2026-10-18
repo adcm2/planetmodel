@@ -1,9 +1,12 @@
 #ifndef PLANETMODEL_VERSION_HPP
 #define PLANETMODEL_VERSION_HPP
 
-/// @file
-/// The library's version, which is the Python package's: the CMake target
-/// reads it from `pyproject.toml` and defines it for every code it links.
+/**
+ * @file
+ * @brief The library's version, which is the Python package's: the CMake
+ * target reads it from `pyproject.toml` and defines it for every code it
+ * links.
+ */
 
 #include <string_view>
 
@@ -13,8 +16,10 @@
 
 namespace planetmodel {
 
-/// The version of the release the library was fetched at, as the Python
-/// package states it (`1.3.0`, say).
+/**
+ * @brief The version of the release the library was fetched at, as the
+ * Python package states it (`1.3.0`, say).
+ */
 [[nodiscard]] constexpr std::string_view Version() noexcept {
   return PLANETMODEL_VERSION;
 }

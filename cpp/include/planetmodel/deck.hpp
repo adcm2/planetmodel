@@ -1,24 +1,26 @@
 #ifndef PLANETMODEL_DECK_HPP
 #define PLANETMODEL_DECK_HPP
 
-/// @file
-/// Decks, as `planetmodel.deck` reads them: tables of knots, radius first
-/// and one column per named field, in which a repeated radius marks a
-/// boundary.
-///
-/// A `DeckFormat` names the columns (by row width, where a format admits
-/// more than one) and says how many header lines precede the table and
-/// what they must say.  `MINEOS()` is the format of the mineos and PREM
-/// decks, three header lines (a title; `ifanis tref ifdeck`; `nknot nic
-/// noc`) and nine or six columns; `GIA()` that of a viscoelastic model for
-/// glacial isostatic adjustment, a title and the line naming the columns,
-/// `r rho vpv vsv vph vsh eta viscosity` in SI, NaN where a layer lacks a
-/// field.  `ReadDeck` gives a `Deck`, the numbers and the header lines,
-/// nothing else; the table's blank lines and `#` comments are skipped and
-/// its numbers read as Python reads them, `nan` and a leading `+`
-/// included.  `MineosNames` gives the layer and interface names a mineos
-/// header implies, and `DeckLayers` each layer's columns as functions of
-/// the radius, joined by the kind asked for, on the deck's skeleton.
+/**
+ * @file
+ * @brief Decks, as `planetmodel.deck` reads them: tables of knots, radius
+ * first and one column per named field, in which a repeated radius marks
+ * a boundary.
+ *
+ * A `DeckFormat` names the columns (by row width, where a format admits
+ * more than one) and says how many header lines precede the table and
+ * what they must say.  `MINEOS()` is the format of the mineos and PREM
+ * decks, three header lines (a title; `ifanis tref ifdeck`; `nknot nic
+ * noc`) and nine or six columns; `GIA()` that of a viscoelastic model for
+ * glacial isostatic adjustment, a title and the line naming the columns,
+ * `r rho vpv vsv vph vsh eta viscosity` in SI, NaN where a layer lacks a
+ * field.  `ReadDeck` gives a `Deck`, the numbers and the header lines,
+ * nothing else; the table's blank lines and `#` comments are skipped and
+ * its numbers read as Python reads them, `nan` and a leading `+`
+ * included.  `MineosNames` gives the layer and interface names a mineos
+ * header implies, and `DeckLayers` each layer's columns as functions of
+ * the radius, joined by the kind asked for, on the deck's skeleton.
+ */
 
 #include <algorithm>
 #include <array>
@@ -46,32 +48,39 @@
 
 namespace planetmodel {
 
-/// The columns of a transversely isotropic mineos deck, after the radius.
+/** @brief The columns of a transversely isotropic mineos deck, after the radius. */
 inline const auto MINEOS_COLUMNS = std::vector<std::string>{
     "rho", "vpv", "vsv", "qkappa", "qmu", "vph", "vsh", "eta"};
 
-/// The columns of an isotropic mineos deck, after the radius.
+/** @brief The columns of an isotropic mineos deck, after the radius. */
 inline const auto MINEOS_ISOTROPIC_COLUMNS =
     std::vector<std::string>{"rho", "vp", "vs", "qkappa", "qmu"};
 
-/// The columns of a GIA deck, after the radius.
+/** @brief The columns of a GIA deck, after the radius. */
 inline const auto GIA_COLUMNS = std::vector<std::string>{
     "rho", "vpv", "vsv", "vph", "vsh", "eta", "viscosity"};
 
-/// What a family of deck files looks like.
+/** @brief What a family of deck files looks like. */
 struct DeckFormat {
-  /// The format's name, as errors give it.
+  /** @brief The format's name, as errors give it. */
   std::string name = "custom";
-  /// The column names after the radius, by the number of them a row has.
+  /** @brief The column names after the radius, by the number of them a row has. */
   std::map<std::size_t, std::vector<std::string>> columns{};
-  /// How many lines precede the table.
+  /** @brief How many lines precede the table. */
   std::size_t header_lines = 0;
-  /// What the header lines must say: throws `Error` naming `source`
-  /// where they do not; none for a header kept verbatim.
+  /**
+   * @brief What the header lines must say: throws `Error` naming `source`
+   * where they do not; none for a header kept verbatim.
+   */
   std::function<void(const std::vector<std::string>& lines, const std::string& source)>
       check_header{};
 
-  /// The column names of a row with `width` values after the radius.
+  /**
+   * @brief The column names of a row of a width.
+   * @param width The number of values after the radius.
+   * @param source The deck, as an error names it.
+   * @throws planetmodel::Error if the format has no row of that width.
+   */
   [[nodiscard]] const std::vector<std::string>& Names(std::size_t width,
                                                       const std::string& source) const {
     if (const auto it = columns.find(width); it != columns.end()) return it->second;
@@ -84,18 +93,17 @@ struct DeckFormat {
   }
 };
 
-/// The three header lines of a mineos deck, read.
+/** @brief The three header lines of a mineos deck, read. */
 struct MineosHeader {
-  std::string name;
-  int ifanis = 0;
-  double tref = 0.0;
-  int ifdeck = 0;
-  int nknot = 0;
-  int nic = 0;
-  int noc = 0;
-  /// The tokens after the three each of the second and third lines carry.
-  std::vector<std::string> extras2{};
-  std::vector<std::string> extras3{};
+  std::string name;    /**< The title, trimmed. */
+  int ifanis = 0;      /**< Whether the deck is anisotropic. */
+  double tref = 0.0;   /**< The reference period of the velocities, in seconds. */
+  int ifdeck = 0;      /**< Whether the deck is a table of knots. */
+  int nknot = 0;       /**< The number of knots the header states. */
+  int nic = 0;         /**< The knots of the inner core. */
+  int noc = 0;         /**< The knots to the top of the outer core. */
+  std::vector<std::string> extras2{}; /**< The tokens after the second line's three. */
+  std::vector<std::string> extras3{}; /**< The tokens after the third line's three. */
 };
 
 namespace detail {
@@ -134,8 +142,13 @@ inline std::optional<int> Integer(std::string_view token) {
 
 }  // namespace detail
 
-/// The mineos header of lines `lines` read from `source`, or an `Error`
-/// saying what the second and third lines must carry.
+/**
+ * @brief A mineos deck's header, read.
+ * @param lines The header lines, three at least.
+ * @param source The deck, as an error names it.
+ * @throws planetmodel::Error saying what the second and third lines must
+ *         carry, where they do not.
+ */
 [[nodiscard]] inline MineosHeader ReadMineosHeader(const std::vector<std::string>& lines,
                                                    const std::string& source) {
   if (lines.size() < 3) {
@@ -167,8 +180,10 @@ inline std::optional<int> Integer(std::string_view token) {
           .extras3 = std::vector<std::string>(h3.begin() + 3, h3.end())};
 }
 
-/// The mineos format: three header lines, then `r` and the eight columns
-/// of `MINEOS_COLUMNS` or the five of `MINEOS_ISOTROPIC_COLUMNS`.
+/**
+ * @brief The mineos format: three header lines, then `r` and the eight
+ * columns of `MINEOS_COLUMNS` or the five of `MINEOS_ISOTROPIC_COLUMNS`.
+ */
 [[nodiscard]] inline const DeckFormat& MINEOS() {
   static const auto format = DeckFormat{
       .name = "mineos",
@@ -180,8 +195,10 @@ inline std::optional<int> Integer(std::string_view token) {
   return format;
 }
 
-/// The GIA format: a title line, the line naming the columns, then `r`
-/// and the columns of `GIA_COLUMNS`.
+/**
+ * @brief The GIA format: a title line, the line naming the columns, then
+ * `r` and the columns of `GIA_COLUMNS`.
+ */
 [[nodiscard]] inline const DeckFormat& GIA() {
   static const auto format = DeckFormat{
       .name = "gia",
@@ -200,12 +217,20 @@ inline std::optional<int> Integer(std::string_view token) {
   return format;
 }
 
-/// A table of knots: radii, one column per name, and the header lines.
+/** @brief A table of knots: radii, one column per name, and the header lines. */
 class Deck {
  public:
-  /// A deck of `radius`, non-decreasing with every repeat a boundary, and
-  /// `columns` each of one value per knot (NaN where absent); its layers
-  /// are checked as it is built.
+  /**
+   * @brief A deck of knots.
+   * @param radius The knots' radii, non-decreasing, every repeat a
+   *        boundary.
+   * @param columns Each column's name and its value at every knot, NaN
+   *        where it is absent.
+   * @param header The header lines.
+   * @param source Where the deck was read from, as errors name it.
+   * @throws planetmodel::Error if the radii decrease, a column has not one
+   *         value per knot, or a layer has fewer than two knots.
+   */
   Deck(std::vector<double> radius,
        std::vector<std::pair<std::string, std::vector<double>>> columns,
        std::vector<std::string> header = {}, std::string source = "the deck")
@@ -226,26 +251,36 @@ class Deck {
     static_cast<void>(Layers());
   }
 
+  /** @brief The knots' radii. */
   [[nodiscard]] const std::vector<double>& Radius() const noexcept { return radius_; }
+  /** @brief The number of knots. */
   [[nodiscard]] std::size_t NKnots() const noexcept { return radius_.size(); }
-  /// The header lines, as read.
+  /** @brief The header lines, as read. */
   [[nodiscard]] const std::vector<std::string>& Header() const noexcept { return header_; }
-  /// Where the deck was read from.
+  /** @brief Where the deck was read from. */
   [[nodiscard]] const std::string& Source() const noexcept { return source_; }
 
-  /// The column names, in the deck's order.
+  /** @brief The column names, in the deck's order. */
   [[nodiscard]] std::vector<std::string> Names() const {
     auto out = std::vector<std::string>{};
     for (const auto& [name, values] : columns_) out.push_back(name);
     return out;
   }
+  /**
+   * @brief Whether the deck has a column.
+   * @param name The column.
+   */
   [[nodiscard]] bool HasColumn(std::string_view name) const {
     for (const auto& [n, values] : columns_) {
       if (n == name) return true;
     }
     return false;
   }
-  /// The values of column `name` at every knot.
+  /**
+   * @brief A column's values at every knot.
+   * @param name The column.
+   * @throws planetmodel::Error if the deck has no such column.
+   */
   [[nodiscard]] const std::vector<double>& Column(std::string_view name) const {
     for (const auto& [n, values] : columns_) {
       if (n == name) return values;
@@ -253,9 +288,12 @@ class Deck {
     throw Error(source_, "", std::format("has no column {}", name));
   }
 
-  /// The rows of every layer, centre outward, as [begin, end): one span
-  /// between repeated radii, each of at least two strictly increasing
-  /// knots.
+  /**
+   * @brief The rows of every layer, centre outward, as [begin, end): one
+   * span between repeated radii, each of at least two strictly increasing
+   * knots.
+   * @throws planetmodel::Error if a layer has fewer than two knots.
+   */
   [[nodiscard]] std::vector<std::pair<std::size_t, std::size_t>> Layers() const {
     auto out = std::vector<std::pair<std::size_t, std::size_t>>{};
     auto start = std::size_t{0};
@@ -274,9 +312,10 @@ class Deck {
     }
     return out;
   }
+  /** @brief The number of layers. */
   [[nodiscard]] std::size_t NLayers() const { return Layers().size(); }
 
-  /// The skeleton's boundary radii: the ends and every repeated radius.
+  /** @brief The skeleton's boundary radii: the ends and every repeated radius. */
   [[nodiscard]] std::vector<double> Boundaries() const {
     auto out = std::vector<double>{radius_.front()};
     for (auto i = std::size_t{1}; i < radius_.size(); ++i) {
@@ -295,7 +334,14 @@ class Deck {
   std::string source_;
 };
 
-/// The deck in `text`, by `format`, `source` naming it in errors.
+/**
+ * @brief A deck from its text.
+ * @param text The deck.
+ * @param format Its format.
+ * @param source What the deck is, as errors name it.
+ * @throws planetmodel::Error naming the line of the first fault, or the
+ *         header where it is not as the format says.
+ */
 [[nodiscard]] inline Deck ReadDeckText(std::string_view text, const DeckFormat& format,
                                        std::string source = "the deck") {
   auto lines = std::vector<std::string>{};
@@ -346,7 +392,13 @@ class Deck {
   return Deck(std::move(radius), std::move(columns), header, std::move(source));
 }
 
-/// The deck in the file at `path`, by `format`.
+/**
+ * @brief A deck from a file.
+ * @param path The file.
+ * @param format Its format.
+ * @throws planetmodel::Error if the file cannot be opened, or as
+ *         `ReadDeckText` does.
+ */
 [[nodiscard]] inline Deck ReadDeck(const std::filesystem::path& path, const DeckFormat& format) {
   auto in = std::ifstream(path, std::ios::binary);
   if (!in) throw Error(path.string(), "", "cannot be opened");
@@ -354,31 +406,40 @@ class Deck {
   return ReadDeckText(text, format, path.string());
 }
 
-/// A format of the given column names after the radius, its header
-/// `header_lines` lines kept as they are.
+/**
+ * @brief A format of named columns, its header lines kept as they are.
+ * @param columns The column names after the radius.
+ * @param header_lines How many lines precede the table.
+ */
 [[nodiscard]] inline DeckFormat ColumnsFormat(std::vector<std::string> columns,
                                               std::size_t header_lines = 0) {
   const auto width = columns.size();
   return DeckFormat{.columns = {{width, std::move(columns)}}, .header_lines = header_lines};
 }
 
-/// The names a mineos header implies, and what in it did not hold.
+/** @brief The names a mineos header implies, and what in it did not hold. */
 struct DeckNames {
-  /// One per layer, empty where the header names none.
+  /** @brief One per layer, empty where the header names none. */
   std::vector<std::optional<std::string>> layers{};
-  /// One per interface, centre outward.
+  /** @brief One per interface, centre outward. */
   std::vector<std::optional<std::string>> interfaces{};
-  /// What of the header was ignored, and why, as the Python warns it.
+  /** @brief What of the header was ignored, and why, as the Python warns it. */
   std::vector<std::string> ignored{};
 };
 
-/// The layer and interface names a mineos header implies: `nic` and
-/// `noc` count the knots of the inner core and to the top of the outer
-/// core, so where each sits on a repeated radius the first two layers are
-/// `inner_core` and `outer_core` under `icb` and `cmb`; the outermost
-/// interface is `surface`.  A count of zero says there is no such core; a
-/// count that does not sit on a repeated radius, or a knot count other
-/// than the table's, is ignored and said so in `ignored`.
+/**
+ * @brief The layer and interface names a mineos header implies.
+ *
+ * `nic` and `noc` count the knots of the inner core and to the top of the
+ * outer core, so where each sits on a repeated radius the first two layers
+ * are `inner_core` and `outer_core` under `icb` and `cmb`; the outermost
+ * interface is `surface`.  A count of zero says there is no such core; a
+ * count that does not sit on a repeated radius, or a knot count other than
+ * the table's, is ignored and said so in `ignored`.
+ *
+ * @param deck A mineos deck.
+ * @throws planetmodel::Error if the deck's header is not a mineos header.
+ */
 [[nodiscard]] inline DeckNames MineosNames(const Deck& deck) {
   const auto h = ReadMineosHeader(deck.Header(), deck.Source());
   const auto& r = deck.Radius();
@@ -416,15 +477,23 @@ struct DeckNames {
   return out;
 }
 
-/// A deck's skeleton and each layer's columns as functions of the radius.
+/** @brief A deck's skeleton and each layer's columns as functions of the radius. */
 struct DeckFunctions {
+  /** @brief The deck's skeleton. */
   Skeleton skeleton;
-  /// One map of name to function per layer; a column NaN throughout a
-  /// layer is absent from it.
+  /**
+   * @brief One map of name to function per layer; a column NaN throughout
+   * a layer is absent from it.
+   */
   std::vector<std::map<std::string, RadialFunction>> layers{};
 };
 
-/// The kinds a deck's knots may be joined by in C++, by name.
+/**
+ * @brief A kind a deck's knots may be joined by in C++, by name.
+ * @param kind `cubic`, `natural` or `linear`.
+ * @throws planetmodel::Error if the kind is the Python's alone (`pchip`,
+ *         `akima`) or no kind.
+ */
 [[nodiscard]] inline KnotKind KnotKindNamed(std::string_view kind) {
   if (kind == "cubic") return KnotKind::Cubic;
   if (kind == "natural") return KnotKind::Natural;
@@ -438,10 +507,15 @@ struct DeckFunctions {
               std::format("{} is not a kind; they are cubic, natural and linear", kind));
 }
 
-/// The skeleton of a deck and every layer's columns, each the piecewise
-/// polynomial of `kind` through the layer's knots, on its layer with the
-/// skeleton's default tolerance.  A column NaN on part of a layer is
-/// refused.
+/**
+ * @brief The skeleton of a deck and every layer's columns, each the
+ * piecewise polynomial of `kind` through the layer's knots, on its layer
+ * with the skeleton's default tolerance.
+ * @param deck The deck.
+ * @param kind How the knots are joined: `cubic`, `natural` or `linear`.
+ * @throws planetmodel::Error if the kind is refused, or a column is NaN on
+ *         part of a layer.
+ */
 [[nodiscard]] inline DeckFunctions DeckLayers(const Deck& deck,
                                               std::string_view kind = "cubic") {
   const auto knot_kind = KnotKindNamed(kind);

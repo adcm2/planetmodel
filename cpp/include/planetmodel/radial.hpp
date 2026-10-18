@@ -1,17 +1,20 @@
 #ifndef PLANETMODEL_RADIAL_HPP
 #define PLANETMODEL_RADIAL_HPP
 
-/// @file
-/// Functions of the radius on one interval, with their first derivative.
-///
-/// A `RadialFunction` evaluates at any radius of its interval, and at one
-/// within its tolerance outside, which is taken as the nearer end, as the
-/// Python's fields take a radius within their rtol of an interval as on
-/// it; beyond that it throws.  It is cheap to copy, the interpolant behind
-/// it being shared, and its evaluation is `const` and thread-safe.  The
-/// constructors here are the piecewise polynomials through knots that a
-/// deck's columns are joined by: the not-a-knot and the natural cubic
-/// splines, the parabola, and the polyline.
+/**
+ * @file
+ * @brief Functions of the radius on one interval, with their first
+ * derivative.
+ *
+ * A `RadialFunction` evaluates at any radius of its interval, and at one
+ * within its tolerance outside, which is taken as the nearer end, as the
+ * Python's fields take a radius within their rtol of an interval as on
+ * it; beyond that it throws.  It is cheap to copy, the interpolant behind
+ * it being shared, and its evaluation is `const` and thread-safe.  The
+ * constructors here are the piecewise polynomials through knots that a
+ * deck's columns are joined by: the not-a-knot and the natural cubic
+ * splines, the parabola, and the polyline.
+ */
 
 #include <format>
 #include <functional>
@@ -29,26 +32,43 @@
 
 namespace planetmodel {
 
-/// A function of the radius on [lo, hi] and its first derivative.
+/** @brief A function of the radius on [lo, hi] and its first derivative. */
 class RadialFunction {
  public:
-  /// What a function is built from: its value (`derivative` 0) or first
-  /// derivative (1) at a radius already within the interval.
+  /**
+   * @brief What a function is built from: its value (`derivative` 0) or
+   * first derivative (1) at a radius already within the interval.
+   */
   using Evaluator = std::function<double(double r, int derivative)>;
 
-  /// `evaluate` on [lo, hi], a radius within `tolerance` outside it taken
-  /// as the nearer end.
+  /**
+   * @brief A function on an interval.
+   * @param lo The inner end.
+   * @param hi The outer end.
+   * @param tolerance How far beyond an end a radius is taken as on it.
+   * @param evaluate The function and its derivative within [lo, hi].
+   */
   RadialFunction(double lo, double hi, double tolerance, Evaluator evaluate)
       : lo_(lo), hi_(hi), tolerance_(tolerance),
         evaluate_(std::make_shared<const Evaluator>(std::move(evaluate))) {}
 
-  /// The value at `r`.
+  /**
+   * @brief The value at a radius.
+   * @param r The radius.
+   * @throws planetmodel::Error if `r` lies beyond the interval by more
+   *         than the tolerance.
+   */
   [[nodiscard]] double Value(double r) const { return (*evaluate_)(Within(r), 0); }
 
-  /// The first derivative at `r`.
+  /**
+   * @brief The first derivative at a radius.
+   * @param r The radius.
+   * @throws planetmodel::Error if `r` lies beyond the interval by more
+   *         than the tolerance.
+   */
   [[nodiscard]] double Derivative(double r) const { return (*evaluate_)(Within(r), 1); }
 
-  /// The interval the function is defined on.
+  /** @brief The interval the function is defined on. */
   [[nodiscard]] std::pair<double, double> Interval() const noexcept { return {lo_, hi_}; }
 
  private:
@@ -66,14 +86,26 @@ class RadialFunction {
   std::shared_ptr<const Evaluator> evaluate_;
 };
 
-/// How a deck's knots are joined within a layer, the kinds both the Python
-/// and the C++ read: `cubic` (scipy's not-a-knot `CubicSpline`, the
-/// parabola through three knots), `natural` (no curvature at the ends) and
-/// `linear`; two knots are a line under every kind.
-enum class KnotKind { Cubic, Natural, Linear };
+/**
+ * @brief How a deck's knots are joined within a layer, the kinds both the
+ * Python and the C++ read; two knots are a line under every kind.
+ */
+enum class KnotKind {
+  Cubic,   /**< scipy's not-a-knot `CubicSpline`, the parabola through three knots. */
+  Natural, /**< The natural cubic spline: no curvature at the ends. */
+  Linear   /**< The polyline. */
+};
 
-/// The piecewise polynomial of `kind` through knots (r, y), the radii
-/// strictly increasing, on [r.front(), r.back()] with `tolerance`.
+/**
+ * @brief The piecewise polynomial through knots, on the interval they
+ * span.
+ * @param r The knots' radii, strictly increasing, at least two.
+ * @param y The values at the knots.
+ * @param kind How the knots are joined.
+ * @param tolerance How far beyond an end a radius is taken as on it.
+ * @throws planetmodel::Error if the knots are fewer than two, the values
+ *         do not match them, or the radii do not increase strictly.
+ */
 [[nodiscard]] inline RadialFunction ThroughKnots(std::vector<double> r, std::vector<double> y,
                                                  KnotKind kind, double tolerance) {
   if (r.size() != y.size() || r.size() < 2) {

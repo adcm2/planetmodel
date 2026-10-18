@@ -11,6 +11,9 @@ CF-styled, so xarray (``open_datatree`` for the whole file,
 ``open_dataset(path, group="part_0")`` for one part), Panoply and
 ncview open it as it stands.  The Python module is the definition of
 the format, and ``validate_structure`` there checks a file against it.
+In C++, planetmodel's own library (:doc:`../cpp`) reads the file, its
+fields evaluated by the rules below, and writes one from a code's own
+fields, checked as the readers check it.
 
 **Schema string**: the global attribute ``schema``,
 ``planetmodel.model/1``.  Readers check it; it is bumped only for an

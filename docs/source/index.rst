@@ -59,6 +59,21 @@ for their readers:
    formats/model_file
    formats/mesh_manifest
 
+The C++ library
+===============
+
+:doc:`cpp` reads the model file, the mesh manifest and decks in C++, and
+writes model files, so that a solver in C++ can take a model from the
+Python and hand its own fields back; its reference is built beside these
+pages.
+
+.. toctree::
+   :maxdepth: 2
+   :caption: The C++ library
+   :hidden:
+
+   cpp
+
 .. toctree::
    :maxdepth: 4
    :caption: API Reference

@@ -1,34 +1,38 @@
 #ifndef PLANETMODEL_MANIFEST_HPP
 #define PLANETMODEL_MANIFEST_HPP
 
-/// @file
-/// The mesh manifest: the JSON that travels beside every mesh the Python's
-/// 3D mesher writes, as `planetmodel/mesh3d/manifest.py` defines it and
-/// the format page describes it.
-///
-/// A mesh file carries numbered attributes and nothing else; the manifest
-/// says which attribute is which layer and interface, where each sits,
-/// whether the nodes carry the mapping, how the mesh must be opened, and
-/// which files beside it hold which fields.  `MeshManifest(path)` reads one
-/// and holds it to the structure the Python's `validate_structure` checks,
-/// refusing the first fault with an `Error` naming the file and the JSON
-/// path of the fault; schema 5 alone is read.  Keys the schema added
-/// within itself are optional (`refinements` empty, `scales.temperature`
-/// a kelvin, `model` null where absent), and keys it does not know are
-/// ignored.  Null is kept as null: a manifest written without a model
-/// says nothing of fluidity, kinds or interface values, and the queries
-/// that need them say so.
-///
-/// Nothing here knows MFEM.  A code opens the mesh and its fields itself,
-/// with what the manifest gives:
-///
-///     const auto m = planetmodel::MeshManifest(path);
-///     const auto o = m.Options();
-///     auto mesh = mfem::Mesh(m.MeshFile().string(), o.generate_edges,
-///                            o.refine, o.fix_orientation);
-///     const auto& rho = m.FieldNamed("rho");
-///     auto in = std::ifstream(m.FieldFile("rho"));
-///     auto gf = mfem::GridFunction(&mesh, in);   // in rho.fe_space, vdim
+/**
+ * @file
+ * @brief The mesh manifest: the JSON that travels beside every mesh the
+ * Python's 3D mesher writes, as `planetmodel/mesh3d/manifest.py` defines
+ * it and the format page describes it.
+ *
+ * A mesh file carries numbered attributes and nothing else; the manifest
+ * says which attribute is which layer and interface, where each sits,
+ * whether the nodes carry the mapping, how the mesh must be opened, and
+ * which files beside it hold which fields.  `MeshManifest(path)` reads one
+ * and holds it to the structure the Python's `validate_structure` checks,
+ * refusing the first fault with an `Error` naming the file and the JSON
+ * path of the fault; schema 5 alone is read.  Keys the schema added within
+ * itself are optional (`refinements` empty, `scales.temperature` a
+ * kelvin, `model` null where absent), and keys it does not know are
+ * ignored.  Null is kept as null: a manifest written without a model says
+ * nothing of fluidity, kinds or interface values, and the queries that
+ * need them say so.
+ *
+ * Nothing here knows MFEM.  A code opens the mesh and its fields itself,
+ * with what the manifest gives:
+ *
+ * @code
+ * const auto m = planetmodel::MeshManifest(path);
+ * const auto o = m.Options();
+ * auto mesh = mfem::Mesh(m.MeshFile().string(), o.generate_edges, o.refine,
+ *                        o.fix_orientation);
+ * const auto& rho = m.FieldNamed("rho");
+ * auto in = std::ifstream(m.FieldFile("rho"));
+ * auto gf = mfem::GridFunction(&mesh, in);   // in rho.fe_space, vdim
+ * @endcode
+ */
 
 #include <algorithm>
 #include <array>
@@ -48,75 +52,91 @@
 
 namespace planetmodel {
 
-/// The schema this reader reads; bumped only for an incompatible change.
+/** @brief The schema this reader reads; bumped only for an incompatible change. */
 inline constexpr std::string_view MANIFEST_SCHEMA = "planetmodel.mesh.manifest/5";
 
-/// The formats a manifest's mesh may be in: the mesher's MSH, or MFEM's.
+/** @brief The formats a manifest's mesh may be in: the mesher's MSH, or MFEM's. */
 inline constexpr auto MANIFEST_FORMATS = std::array<std::string_view, 2>{"msh", "mfem"};
 
-/// What a mesh's node coordinates are: reference ones, or physical ones
-/// that carry the mapping.
+/**
+ * @brief What a mesh's node coordinates are: reference ones, or physical
+ * ones that carry the mapping.
+ */
 inline constexpr auto MANIFEST_NODES =
     std::array<std::string_view, 2>{"reference", "physical"};
 
-/// What an interface's kind may be, where a model said.
+/** @brief What an interface's kind may be, where a model said. */
 inline constexpr auto INTERFACE_KINDS = std::array<std::string_view, 5>{
     "solid-solid", "fluid-solid", "fluid-fluid", "free", "outer"};
 
-/// The `mfem::Mesh` constructor arguments the dof numbering of a manifest's
-/// fields was written under, the documented ones where it gives none.
+/**
+ * @brief The `mfem::Mesh` constructor arguments the dof numbering of a
+ * manifest's fields was written under, the documented ones where it gives
+ * none.
+ */
 struct ReadOptions {
-  int generate_edges = 1;
-  int refine = 0;
-  bool fix_orientation = false;
+  int generate_edges = 1;       /**< Whether MFEM generates the edges. */
+  int refine = 0;               /**< MFEM's refine argument. */
+  bool fix_orientation = false; /**< Whether MFEM fixes the elements' orientation. */
 
+  /** @brief Options are equal when all three are. */
   friend bool operator==(const ReadOptions&, const ReadOptions&) = default;
 };
 
-/// A mesh manifest, read and checked.
+/** @brief A mesh manifest, read and checked. */
 class MeshManifest {
  public:
-  /// One `layers[]` record: a layer of the mesh, centre outward.
+  /** @brief One `layers[]` record: a layer of the mesh, centre outward. */
   struct Layer {
-    int attribute = 0;
-    std::string name;
-    double r_inner = 0.0;
-    double r_outer = 0.0;
-    /// False for a shell the mesh spec added outside the geometry.
+    int attribute = 0;     /**< The mesh attribute, from one. */
+    std::string name;      /**< The layer's name. */
+    double r_inner = 0.0;  /**< Its inner radius. */
+    double r_outer = 0.0;  /**< Its outer radius. */
+    /** @brief False for a shell the mesh spec added outside the geometry. */
     bool in_geometry = true;
-    /// Whether shear vanishes throughout the model's layer; empty where no
-    /// model said.
+    /**
+     * @brief Whether shear vanishes throughout the model's layer; empty
+     * where no model said.
+     */
     std::optional<bool> fluid{};
   };
 
-  /// The values just inside each side of an interface, empty on a side
-  /// holding none.
+  /**
+   * @brief The values just inside each side of an interface, empty on a
+   * side holding none.
+   */
   struct Sides {
-    std::optional<double> below{};
-    std::optional<double> above{};
+    std::optional<double> below{}; /**< Just inside the layer below. */
+    std::optional<double> above{}; /**< Just inside the layer above. */
   };
 
-  /// One `interfaces[]` record: a boundary of the mesh, centre outward.
+  /** @brief One `interfaces[]` record: a boundary of the mesh, centre outward. */
   struct Interface {
-    int attribute = 0;
-    std::string name;
-    double radius = 0.0;
-    /// The layers below and above as 0-based indices, -1 for the outside.
+    int attribute = 0;    /**< The boundary attribute, from one. */
+    std::string name;     /**< The interface's name. */
+    double radius = 0.0;  /**< Its radius. */
+    /** @brief The layers below and above as 0-based indices, -1 for the outside. */
     std::array<int, 2> between_layers{};
-    /// One of `INTERFACE_KINDS`; empty where no model said.
+    /** @brief One of `INTERFACE_KINDS`; empty where no model said. */
     std::optional<std::string> kind{};
-    /// {field: sides} for the exported real scalar radial fields; empty
-    /// where no model said.
+    /**
+     * @brief {field: sides} for the exported real scalar radial fields;
+     * empty where no model said.
+     */
     std::optional<std::map<std::string, Sides>> values{};
 
-    /// The attribute of the layer below, 0 for the outside.
+    /** @brief The attribute of the layer below, 0 for the outside. */
     [[nodiscard]] int BelowAttribute() const { return between_layers[0] + 1; }
-    /// The attribute of the layer above, 0 for the outside.
+    /** @brief The attribute of the layer above, 0 for the outside. */
     [[nodiscard]] int AboveAttribute() const { return between_layers[1] + 1; }
 
-    /// The value of `field` just inside the side of layer `attribute`,
-    /// refused where that layer is not a side or the manifest holds no
-    /// such value.
+    /**
+     * @brief A field's value just inside the side of a layer.
+     * @param field The field.
+     * @param attribute The layer's attribute, below or above.
+     * @throws planetmodel::Error where that layer is not a side or the
+     *         manifest holds no such value.
+     */
     [[nodiscard]] double ValueBeside(std::string_view field, int attribute) const {
       if (attribute < 1 || (attribute != BelowAttribute() && attribute != AboveAttribute())) {
         throw Error("MeshManifest", name,
@@ -138,132 +158,185 @@ class MeshManifest {
     }
   };
 
-  /// One `refinements[]` record: an extra size field the mesh was sized
-  /// under, for provenance alone.
+  /**
+   * @brief One `refinements[]` record: an extra size field the mesh was
+   * sized under, for provenance alone.
+   */
   struct Refinement {
-    std::string name;
-    double size = 0.0;
-    double far_size = 0.0;
-    std::optional<double> decay_width{};
-    std::optional<int> points{};
-    std::optional<std::string> digest{};
+    std::string name;                     /**< The refinement's name. */
+    double size = 0.0;                    /**< The element size it asked for. */
+    double far_size = 0.0;                /**< The size far from it. */
+    std::optional<double> decay_width{};  /**< How fast the size relaxes, where given. */
+    std::optional<int> points{};          /**< Its number of points, where given. */
+    std::optional<std::string> digest{};  /**< A digest of what it was sized by, where given. */
   };
 
-  /// One `fields[]` record: a file beside the mesh and what it holds.
+  /** @brief One `fields[]` record: a file beside the mesh and what it holds. */
   struct Field {
-    std::string name{};
-    std::string file{};
-    /// MFEM's collection name, `L2_3D_P2` say.
+    std::string name{};   /**< The field's name. */
+    std::string file{};   /**< Its file, beside the manifest. */
+    /** @brief MFEM's collection name, `L2_3D_P2` say. */
     std::string fe_space;
-    int vdim = 1;
-    /// `byNODES` or `byVDIM`.
+    int vdim = 1;         /**< The components per dof. */
+    /** @brief `byNODES` or `byVDIM`. */
     std::string ordering;
-    int rank = 0;
-    int weight = 0;
-    bool voigt = true;
-    std::string unit;
-    /// The attributes of the layers on which the values mean anything.
+    int rank = 0;         /**< The character's rank. */
+    int weight = 0;       /**< The character's weight. */
+    bool voigt = true;    /**< Whether the character is in Voigt form. */
+    std::string unit;     /**< The unit of the stored values. */
+    /** @brief The attributes of the layers on which the values mean anything. */
     std::vector<int> layers{};
-    /// The degree in r reproducing a scalar field within each layer
-    /// holding it; empty where no single degree does or no model said.
+    /**
+     * @brief The degree in r reproducing a scalar field within each layer
+     * holding it; empty where no single degree does or no model said.
+     */
     std::optional<int> radial_degree{};
 
-    /// The field's character.
+    /** @brief The field's character. */
     [[nodiscard]] Character GetCharacter() const { return Character(rank, weight, voigt); }
   };
 
-  /// The `model` record: a model file beside the manifest.
+  /** @brief The `model` record: a model file beside the manifest. */
   struct ModelRecord {
-    std::string file;
-    std::string schema;
+    std::string file;    /**< The model file, beside the manifest. */
+    std::string schema;  /**< The schema it was written under. */
   };
 
-  /// The manifest in the file at `path`, read and checked.
+  /**
+   * @brief The manifest in a file, read and checked.
+   * @param path The manifest.
+   * @throws planetmodel::Error naming the file and the JSON path of the
+   *         first fault.
+   */
   explicit MeshManifest(const std::filesystem::path& path)
       : MeshManifest(ReadJsonFile(path), path) {}
 
-  /// The manifest in a document already read, `path` being where it lies
-  /// (the files it names are beside it).
+  /**
+   * @brief The manifest in a document already read.
+   * @param document The document.
+   * @param path Where it lies; the files it names are beside it.
+   * @throws planetmodel::Error naming the file and the JSON path of the
+   *         first fault.
+   */
   MeshManifest(const Json& document, std::filesystem::path path)
       : path_(std::move(path)), document_(document) {
     Read();
     Check();
   }
 
-  /// The manifest's own path.
+  /** @brief The manifest's own path. */
   [[nodiscard]] const std::filesystem::path& Path() const noexcept { return path_; }
 
-  /// The mesh file beside the manifest.
+  /** @brief The mesh file beside the manifest. */
   [[nodiscard]] std::filesystem::path MeshFile() const {
     return path_.parent_path() / mesh_file_;
   }
-  /// `msh` from the mesher, `mfem` from the exporter.
+  /** @brief `msh` from the mesher, `mfem` from the exporter. */
   [[nodiscard]] const std::string& Format() const noexcept { return format_; }
-  /// `reference` or `physical`.
+  /** @brief `reference` or `physical`. */
   [[nodiscard]] const std::string& Nodes() const noexcept { return nodes_; }
-  /// Whether the mesh's nodes carry the mapping already.
+  /** @brief Whether the mesh's nodes carry the mapping already. */
   [[nodiscard]] bool PhysicalNodes() const noexcept { return nodes_ == "physical"; }
-  /// How the mesh must be opened for its fields' dof numbering to hold.
+  /** @brief How the mesh must be opened for its fields' dof numbering to hold. */
   [[nodiscard]] const ReadOptions& Options() const noexcept { return options_; }
-  /// The name of the displacement field, where one was written beside a
-  /// reference mesh.
+  /**
+   * @brief The name of the displacement field, where one was written
+   * beside a reference mesh.
+   */
   [[nodiscard]] const std::optional<std::string>& Displacement() const noexcept {
     return displacement_;
   }
 
+  /** @brief The layers, centre outward. */
   [[nodiscard]] const std::vector<Layer>& Layers() const noexcept { return layers_; }
+  /** @brief The interfaces, centre outward. */
   [[nodiscard]] const std::vector<Interface>& Interfaces() const noexcept {
     return interfaces_;
   }
+  /** @brief The refinements the mesh was sized under. */
   [[nodiscard]] const std::vector<Refinement>& Refinements() const noexcept {
     return refinements_;
   }
+  /** @brief The fields written beside the mesh. */
   [[nodiscard]] const std::vector<Field>& Fields() const noexcept { return fields_; }
 
+  /**
+   * @brief A layer by name.
+   * @param name The layer's name.
+   * @throws planetmodel::Error if the manifest has no such layer.
+   */
   [[nodiscard]] const Layer& LayerNamed(std::string_view name) const {
     return Named(layers_, name, "layer");
   }
+  /**
+   * @brief An interface by name.
+   * @param name The interface's name.
+   * @throws planetmodel::Error if the manifest has no such interface.
+   */
   [[nodiscard]] const Interface& InterfaceNamed(std::string_view name) const {
     return Named(interfaces_, name, "interface");
   }
+  /**
+   * @brief A field by name.
+   * @param name The field's name.
+   * @throws planetmodel::Error if the manifest has no such field.
+   */
   [[nodiscard]] const Field& FieldNamed(std::string_view name) const {
     return Named(fields_, name, "field");
   }
+  /**
+   * @brief Whether a field was written beside the mesh.
+   * @param name The field's name.
+   */
   [[nodiscard]] bool HasField(std::string_view name) const {
     return std::ranges::any_of(fields_, [&](const auto& f) { return f.name == name; });
   }
-  /// The file of field `name`, beside the manifest.
+  /**
+   * @brief A field's file, beside the manifest.
+   * @param name The field's name.
+   * @throws planetmodel::Error if the manifest has no such field.
+   */
   [[nodiscard]] std::filesystem::path FieldFile(std::string_view name) const {
     return path_.parent_path() / FieldNamed(name).file;
   }
 
-  /// Zero for a full mesh, the inner boundary's radius for a hollow one.
+  /** @brief Zero for a full mesh, the inner boundary's radius for a hollow one. */
   [[nodiscard]] double InnerRadius() const { return layers_.front().r_inner; }
-  /// The outer radius of the mesh, shells included.
+  /** @brief The outer radius of the mesh, shells included. */
   [[nodiscard]] double OuterRadius() const { return layers_.back().r_outer; }
-  /// Whether the mesh has a hole at the centre.
+  /** @brief Whether the mesh has a hole at the centre. */
   [[nodiscard]] bool IsHollow() const { return InnerRadius() > 0.0; }
 
-  /// The attributes of the geometry's layers.
+  /** @brief The attributes of the geometry's layers. */
   [[nodiscard]] std::vector<int> BodyAttributes() const {
     return Select([](const Layer& l) { return l.in_geometry; });
   }
-  /// The attributes of the shells outside the geometry.
+  /** @brief The attributes of the shells outside the geometry. */
   [[nodiscard]] std::vector<int> ShellAttributes() const {
     return Select([](const Layer& l) { return !l.in_geometry; });
   }
-  /// The attributes of the geometry's solid layers, refused where a
-  /// layer's fluidity is unknown (no model said).
+  /**
+   * @brief The attributes of the geometry's solid layers.
+   * @throws planetmodel::Error where a layer's fluidity is unknown (no
+   *         model said).
+   */
   [[nodiscard]] std::vector<int> SolidAttributes() const {
     RequireFluidity();
     return Select([](const Layer& l) { return l.in_geometry && !*l.fluid; });
   }
-  /// The attributes of the geometry's fluid layers, refused likewise.
+  /**
+   * @brief The attributes of the geometry's fluid layers.
+   * @throws planetmodel::Error where a layer's fluidity is unknown.
+   */
   [[nodiscard]] std::vector<int> FluidAttributes() const {
     RequireFluidity();
     return Select([](const Layer& l) { return l.in_geometry && *l.fluid; });
   }
-  /// The interfaces between a fluid and a solid layer of the geometry.
+  /**
+   * @brief The interfaces between a fluid and a solid layer of the
+   * geometry.
+   * @throws planetmodel::Error where a layer's fluidity is unknown.
+   */
   [[nodiscard]] std::vector<int> FluidSolidInterfaces() const {
     RequireFluidity();
     auto out = std::vector<int>{};
@@ -274,7 +347,11 @@ class MeshManifest {
     }
     return out;
   }
-  /// The interfaces between fluid layer `fluid_attribute` and a solid one.
+  /**
+   * @brief The interfaces between a fluid layer and a solid one.
+   * @param fluid_attribute The fluid layer's attribute.
+   * @throws planetmodel::Error where a layer's fluidity is unknown.
+   */
   [[nodiscard]] std::vector<int> FluidSolidInterfaces(int fluid_attribute) const {
     RequireFluidity();
     auto solid = [&](int attribute) {
@@ -290,7 +367,10 @@ class MeshManifest {
     }
     return out;
   }
-  /// The interface on the outside of the geometry's outermost layer.
+  /**
+   * @brief The interface on the outside of the geometry's outermost layer.
+   * @throws planetmodel::Error if the manifest lists none.
+   */
   [[nodiscard]] int SurfaceAttribute() const {
     const auto body = BodyAttributes();
     for (const auto& f : interfaces_) {
@@ -298,15 +378,23 @@ class MeshManifest {
     }
     throw Error(path_.string(), "interfaces", "lists no surface of the geometry");
   }
-  /// The radius of that interface.
+  /**
+   * @brief The radius of the surface, as `SurfaceAttribute` gives it.
+   * @throws planetmodel::Error if the manifest lists none.
+   */
   [[nodiscard]] double SurfaceRadius() const {
     return interfaces_[static_cast<std::size_t>(SurfaceAttribute() - 1)].radius;
   }
-  /// The outer boundary of the mesh.
+  /** @brief The outer boundary of the mesh. */
   [[nodiscard]] int OuterAttribute() const { return interfaces_.back().attribute; }
 
-  /// MFEM's marker array of `size` entries for a list of attributes: one
-  /// where the attribute is listed, zero elsewhere.
+  /**
+   * @brief MFEM's marker array for a list of attributes: one where the
+   * attribute is listed, zero elsewhere.
+   * @param attributes The attributes, from one.
+   * @param size The number of entries.
+   * @throws planetmodel::Error if an attribute is below one.
+   */
   [[nodiscard]] static std::vector<int> Marker(const std::vector<int>& attributes, int size) {
     auto marker = std::vector<int>(static_cast<std::size_t>(std::max(size, 0)), 0);
     for (const auto a : attributes) {
@@ -316,10 +404,12 @@ class MeshManifest {
     return marker;
   }
 
-  /// Whether a model's fields were exported, and so the scales stated.
+  /** @brief Whether a model's fields were exported, and so the scales stated. */
   [[nodiscard]] bool HasScales() const noexcept { return scales_.has_value(); }
-  /// The scales the field values and constants are in, refused where no
-  /// model was exported.
+  /**
+   * @brief The scales the field values and constants are in.
+   * @throws planetmodel::Error where no model was exported.
+   */
   [[nodiscard]] const ::planetmodel::Scales& GetScales() const {
     if (!scales_) {
       throw Error(path_.string(), "scales",
@@ -327,14 +417,22 @@ class MeshManifest {
     }
     return *scales_;
   }
-  /// The model's constants, in its units.
+  /** @brief The model's constants, in its units. */
   [[nodiscard]] const std::map<std::string, double>& Constants() const noexcept {
     return constants_;
   }
+  /**
+   * @brief Whether the manifest holds a constant.
+   * @param name The constant.
+   */
   [[nodiscard]] bool HasConstant(std::string_view name) const {
     return constants_.contains(std::string{name});
   }
-  /// Constant `name`, refused where the manifest holds none of that name.
+  /**
+   * @brief A constant, in the model's units.
+   * @param name The constant.
+   * @throws planetmodel::Error where the manifest holds none of that name.
+   */
   [[nodiscard]] double Constant(std::string_view name) const {
     if (const auto it = constants_.find(std::string{name}); it != constants_.end()) {
       return it->second;
@@ -342,19 +440,27 @@ class MeshManifest {
     throw Error(path_.string(), "constants",
                 std::format("holds no constant {}", name));
   }
-  /// The gravitational constant in the model's units.
+  /**
+   * @brief The gravitational constant in the model's units.
+   * @throws planetmodel::Error where the manifest holds none.
+   */
   [[nodiscard]] double G() const { return Constant("G"); }
 
-  /// The model file beside the mesh, where one was written.
+  /** @brief The model file beside the mesh, where one was written. */
   [[nodiscard]] const std::optional<ModelRecord>& Model() const noexcept { return model_; }
-  /// Its path, refused where none was written.
+  /**
+   * @brief The model file's path, beside the manifest.
+   * @throws planetmodel::Error where none was written.
+   */
   [[nodiscard]] std::filesystem::path ModelFile() const {
     if (!model_) throw Error(path_.string(), "model", "is null: no model file was written");
     return path_.parent_path() / model_->file;
   }
 
-  /// The mesh spec's `meta`, as the document gives it; an empty object
-  /// where it gives none.
+  /**
+   * @brief The mesh spec's `meta`, as the document gives it; an empty
+   * object where it gives none.
+   */
   [[nodiscard]] const Json& Meta() const { return meta_; }
 
  private:
