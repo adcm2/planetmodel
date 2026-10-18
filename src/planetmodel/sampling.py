@@ -171,6 +171,29 @@ class AngularGrid:
         """Whether the north pole and the south pole are nodes, in that order."""
         return bool(self.colatitudes[0] == 0.0), bool(self.colatitudes[-1] == np.pi)
 
+    def mean(self, values: ArrayLike) -> np.ndarray:
+        """The mean over the sphere of values at the nodes, by the grid's
+        quadrature: shape (..., ntheta, nphi) to (...).
+
+        The colatitude weights against sin(theta) dtheta and, in
+        longitude, the periodic trapezoid, 2 pi / nphi for equally spaced
+        longitudes and half the spacing to either neighbour otherwise;
+        divided by 4 pi.  A grid without weights has no quadrature and
+        is refused.
+        """
+        if self.weights is None:
+            raise ValueError(f"{self!r} carries no colatitude weights, so it has "
+                             "no quadrature; use a grid of a shipped kind, or "
+                             "give the weights")
+        v = np.asarray(values)
+        if v.ndim < 2 or v.shape[-2:] != (self.ntheta, self.nphi):
+            raise ValueError(f"values must have trailing shape "
+                             f"{(self.ntheta, self.nphi)}, got {v.shape}")
+        phi = self.longitudes
+        gaps = np.diff(np.append(phi, phi[0] + 2.0 * np.pi))
+        dphi = 0.5 * (gaps + np.roll(gaps, 1))
+        return np.einsum("...ij,i,j->...", v, self.weights, dphi) / (4.0 * np.pi)
+
     def __repr__(self) -> str:
         band = "" if self.lmax is None else f", lmax={self.lmax}"
         return f"AngularGrid({self.kind}, {self.ntheta} x {self.nphi}{band})"

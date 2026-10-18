@@ -72,16 +72,22 @@ smoothness of that order waits for a use.
 
 `LateralInterpolant` builds a rule once over any array whose two
 trailing axes are a grid's, and gives its values and its two angular
-derivatives at any points; `interpolate` builds one and evaluates it.
+derivatives at any points, and its mean over the sphere: exactly, the
+mean of the interpolant itself, so that a mean is consistent with the
+rule that reads the values (for the local rules the coefficients
+against the integrals of the B-splines, sin(theta) dtheta and dphi; for
+the harmonic rule the degree-zero term); `interpolate` builds one and
+evaluates it.
 Everything is numbers.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike
-from scipy.interpolate import NdBSpline, make_interp_spline
+from scipy.interpolate import BSpline, NdBSpline, make_interp_spline
 
 from .frames import wrapped
 from .harmonics import (analyse_grid, real_harmonics, synthesise_points_gradient,
@@ -97,6 +103,23 @@ METHODS = ("linear", "cubic", "harmonic")
 
 #: The poles in the order of every (..., 2) array of polar values.
 _POLES = ("north", "south")
+
+#: Gauss-Legendre points per knot interval for the integrals of the
+#: B-splines: exact against dphi, and against sin(theta) dtheta to
+#: rounding on intervals of a grid's spacing.
+_POINTS = 12
+
+
+def _basis_integrals(t: np.ndarray, k: int, lo: float, hi: float,
+                     weight: Callable[[np.ndarray], np.ndarray]) -> np.ndarray:
+    """integral from lo to hi of B_a(x) weight(x) dx for every B-spline of
+    degree k on the knots t, by Gauss-Legendre on each knot interval."""
+    xq, wq = np.polynomial.legendre.leggauss(_POINTS)
+    u = np.unique(np.clip(t, lo, hi))
+    a, b = u[:-1, None], u[1:, None]
+    x = (0.5 * (b - a) * xq + 0.5 * (a + b)).ravel()
+    w = (0.5 * (b - a) * wq).ravel()
+    return BSpline.design_matrix(x, t, k).T @ (w * weight(x))
 
 
 def _grid_values(values: ArrayLike, grid: AngularGrid) -> np.ndarray:
@@ -279,6 +302,7 @@ class LateralInterpolant:
             k = 3
         self._spline = NdBSpline((along_theta.t, along_phi.t),
                                  np.swapaxes(along_phi.c, 0, 1), k)
+        self._degree = k
 
     @property
     def grid(self) -> AngularGrid:
@@ -334,6 +358,22 @@ class LateralInterpolant:
         else:
             dt, dp = self._local(t, p, (1, 0)), self._local(t, p, (0, 1))
         return dt.reshape(self._shape + points), dp.reshape(self._shape + points)
+
+    def mean(self) -> np.ndarray:
+        """The mean over the sphere of the interpolant itself, of shape
+        `shape`: exact for the local rules, whose B-spline coefficients are
+        contracted with the integrals of the B-splines against
+        sin(theta) dtheta and dphi over one turn, and the degree-zero
+        term of the expansion for the harmonic rule.  No weights of the
+        grid are used, so any grid has a mean."""
+        if self._method == "harmonic":
+            return np.asarray(self._coeffs[0, 0, 0] / np.sqrt(4.0 * np.pi))
+        tt, tp = self._spline.t
+        k = self._degree
+        phi0 = float(self._grid.longitudes[0])
+        it = _basis_integrals(tt, k, 0.0, np.pi, np.sin)
+        ip = _basis_integrals(tp, k, phi0, phi0 + 2.0 * np.pi, np.ones_like)
+        return np.einsum("ab...,a,b->...", self._spline.c, it, ip) / (4.0 * np.pi)
 
     def __repr__(self) -> str:
         return f"LateralInterpolant({self._method}, {self._shape} on {self._grid!r})"

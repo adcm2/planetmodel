@@ -228,6 +228,7 @@ def test_a_gridded_function_is_a_relief_whose_geometry_holds(grid):
     rng = np.random.default_rng(4)
     t, p = rng.uniform(0, np.pi, 200), rng.uniform(0, 2 * np.pi, 200)
     assert np.allclose(gf(t, p), bump(t, p), atol=1e-5)
+    assert abs(gf.mean()) < 1e-5                   # bump has no degree-zero term
 
 
 @pytest.mark.harmonics

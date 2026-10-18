@@ -46,9 +46,9 @@ from numpy.typing import ArrayLike
 
 from .character import SCALAR, Character
 from .displacement import Relief
-from .fields import Field, FieldBase, rotate_stored, stored_shape
+from .fields import Field, FieldBase, RadialField, rotate_stored, stored_shape
 from .frames import spherical_frame
-from .layerfunction import as_interval
+from .layerfunction import PolynomialLayer, as_interval
 from .lateral import METHODS, LateralInterpolant, polar_values
 from .mesh1d.mesh import RADIAL_METHODS, Mesh1D
 
@@ -242,6 +242,20 @@ class GriddedField(FieldBase):
             out = rotate_stored(out, np.swapaxes(R, -1, -2), self._character)
         return out
 
+    def spherical_mean(self, *, grid: AngularGrid | None = None) -> RadialField:
+        """The spherical mean as exact polynomial pieces: at every node the
+        exact mean of the lateral rule's interpolant, joined by the radial
+        rule, so the mean of the field as its rules define it; `grid` is
+        not needed."""
+        if self._character.rank:
+            raise ValueError(f"a spherical mean is taken of a field of rank 0, "
+                             f"not {self._character}")
+        nodal = np.stack([self._interpolant(e).mean()
+                          for e in range(self._breaks.size - 1)])
+        pp = self._mesh.to_ppoly(nodal, method=self._radial)
+        return RadialField(self._interval, PolynomialLayer(self._interval, pp),
+                           character=self._character, name=self._name)
+
     def on_interval(self, lo: float, hi: float) -> "GriddedField":
         """The same elements on [lo, hi]: beyond the breaks the end
         elements continue."""
@@ -340,6 +354,10 @@ class GriddedFunction:
                          ) -> tuple[np.ndarray, np.ndarray]:
         """(d/dtheta, d/dphi) at (theta, phi), broadcast together."""
         return self._f.gradient(theta, phi)
+
+    def mean(self) -> float:
+        """The mean over the sphere of the function as its rule defines it."""
+        return float(self._f.mean())
 
     def __repr__(self) -> str:
         return f"GriddedFunction({self.lateral} on {self.grid!r})"

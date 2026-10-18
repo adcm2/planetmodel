@@ -91,6 +91,7 @@ from .mapping import (
     validity_lattice,
 )
 from .materials import ElasticField, elastic_moduli, is_fluid, kappa_mu, moduli
+from .means import spherical_mean, spherically_averaged
 from .mesh1d import RadialMesh
 from .mesh1d.gravity import gravity, gravity_fields, mass
 from .model import CoarseningFit, Layer, Model
@@ -167,6 +168,8 @@ __all__ = [
     "PerturbedField",
     "perturbed",
     "unperturbed",
+    "spherical_mean",
+    "spherically_averaged",
     "ElasticField",
     "is_fluid",
     "moduli",

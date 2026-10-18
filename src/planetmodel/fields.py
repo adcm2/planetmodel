@@ -36,7 +36,7 @@ functions, exact when they are polynomial; otherwise it is a
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -47,6 +47,9 @@ from .frames import (SphericalFunction, bond_matrix, rotate_slots,
 from .layerfunction import (LayerFunction, LayerFunctionLike, as_interval,
                             as_layer_function, as_scalar, as_values, constant_layer,
                             same_interval)
+
+if TYPE_CHECKING:
+    from .sampling import AngularGrid
 
 __all__ = ["Field", "FieldBase", "RadialField", "AnalyticField",
            "ComposedField", "constant_field", "FRAMES", "check_frame",
@@ -423,6 +426,14 @@ class RadialField(FieldBase):
         lo, hi = as_interval((lo, hi))
         return self._map(lambda f: f.on_interval(lo, hi), interval=(lo, hi),
                          name=self._name)
+
+    def spherical_mean(self, *, grid: AngularGrid | None = None) -> "RadialField":
+        """A radial field of rank 0 is its own spherical mean; `grid` is not
+        needed."""
+        if self._character.rank:
+            raise ValueError(f"a spherical mean is taken of a field of rank 0, "
+                             f"not {self._character}")
+        return self
 
     def rescaled(self, *, k: float, v: float) -> "RadialField":
         """v f(r / k) on the interval scaled by k."""

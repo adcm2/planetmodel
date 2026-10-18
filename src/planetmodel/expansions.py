@@ -27,15 +27,19 @@ from __future__ import annotations
 
 import copy
 from math import factorial
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike
 from scipy.interpolate import BSpline, PPoly
 
 from .character import SCALAR, Character
-from .fields import FieldBase
+from .fields import FieldBase, RadialField
 from .harmonics import synthesise, synthesise_gradient
-from .layerfunction import as_interval
+from .layerfunction import PolynomialLayer, as_interval
+
+if TYPE_CHECKING:
+    from .sampling import AngularGrid
 
 __all__ = ["HarmonicField", "HarmonicFunction"]
 
@@ -130,6 +134,13 @@ class HarmonicField(FieldBase):
     def _values(self, r: np.ndarray, theta: np.ndarray | None,
                 phi: np.ndarray | None) -> np.ndarray:
         return synthesise(self.coefficients_at(r), theta, phi)
+
+    def spherical_mean(self, *, grid: AngularGrid | None = None) -> RadialField:
+        """c_00(r) / sqrt(4 pi), exact polynomial pieces; `grid` is not
+        needed."""
+        pp = PPoly(self._pp.c[..., 0, 0, 0] / np.sqrt(4.0 * np.pi), self._pp.x)
+        return RadialField(self._interval, PolynomialLayer(self._interval, pp),
+                           character=self._character, name=self._name)
 
     def on_interval(self, lo: float, hi: float) -> "HarmonicField":
         """The same expansion on [lo, hi], the end pieces continuing."""

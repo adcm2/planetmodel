@@ -333,3 +333,42 @@ def test_the_gradient_of_a_local_rule(method, tol):
     if method == "cubic":
         fd = (f(t + h, p) - f(t - h, p)) / (2 * h)
         assert np.allclose(dt, fd, atol=1e-7)
+
+
+def cellwise_mean(f, grid):
+    """The mean of an interpolant by Gauss-Legendre on every cell of the
+    padded grid, exact for a piecewise polynomial times sin(theta)."""
+    T = np.unique(np.concatenate([[0.0], grid.colatitudes, [np.pi]]))
+    P = np.append(grid.longitudes, grid.longitudes[0] + 2 * np.pi)
+    x, w = np.polynomial.legendre.leggauss(10)
+    total = 0.0
+    for a, b in zip(T[:-1], T[1:]):
+        tq = 0.5 * (b - a) * x + 0.5 * (a + b)
+        wt = 0.5 * (b - a) * w * np.sin(tq)
+        for c, d in zip(P[:-1], P[1:]):
+            pq = 0.5 * (d - c) * x + 0.5 * (c + d)
+            total += np.einsum("i,j,ij->", wt, 0.5 * (d - c) * w,
+                               f(tq[:, None], pq[None, :]))
+    return total / (4 * np.pi)
+
+
+@pytest.mark.parametrize("method", LOCAL)
+@pytest.mark.parametrize("grid", GRIDS, ids=repr)
+def test_the_mean_is_the_interpolants_own(grid, method):
+    v, poles = on(grid)
+    f = LateralInterpolant(v, grid, method=method, poles=poles)
+    assert np.isclose(f.mean(), cellwise_mean(f, grid), rtol=0, atol=1e-13)
+    stack = LateralInterpolant(np.stack([v, 2 * v]), grid, method=method,
+                               poles=np.stack([poles, 2 * poles]))
+    assert stack.mean().shape == (2,)
+    assert np.allclose(stack.mean(), [f.mean(), 2 * f.mean()])
+
+
+@pytest.mark.harmonics
+def test_the_harmonic_rule_mean_is_its_degree_zero_term():
+    pytest.importorskip("ducc0")
+    g = gauss_legendre(16)
+    c = band16_field()
+    v = synthesise(c, g.colatitudes[:, None], g.longitudes[None, :])
+    f = LateralInterpolant(v, g, method="harmonic")
+    assert np.isclose(f.mean(), c[0, 0, 0] / np.sqrt(4 * np.pi), rtol=0, atol=1e-13)

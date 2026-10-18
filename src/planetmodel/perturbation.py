@@ -35,13 +35,17 @@ mean of a perturbed field differ in general and are named apart.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from .character import SCALAR
-from .fields import Field, FieldBase
+from .fields import ComposedField, Field, FieldBase, RadialField
 from .layerfunction import same_interval
 from .model import Layer, Model
+
+if TYPE_CHECKING:
+    from .sampling import AngularGrid
 
 __all__ = ["KINDS", "PerturbedField", "perturbed", "unperturbed"]
 
@@ -118,6 +122,33 @@ class PerturbedField(FieldBase):
         if self._kind == "relative":
             return ref * (1.0 + dp)
         return ref * np.exp(dp)
+
+    def spherical_mean(self, *, grid: AngularGrid | None = None) -> RadialField:
+        """The mean from the parts: reference + mean(perturbation) when
+        absolute, reference (1 + mean(perturbation)) when relative, and
+        reference mean(exp(perturbation)) when logarithmic, the last by
+        quadrature on `grid`, or on the perturbation's own grid where it
+        has weights; a radial perturbation's mean is itself."""
+        from .means import quadrature_mean, spherical_mean
+        ref, d = self._reference, self._perturbation
+        if self._kind == "absolute":
+            out = ref + spherical_mean(d, grid=grid)
+        elif self._kind == "relative":
+            out = ref * (1.0 + spherical_mean(d, grid=grid))
+        else:
+            ex = ComposedField(np.exp, [d], character=SCALAR)
+            if getattr(d, "is_radial", False):
+                ex_mean = spherical_mean(ex)
+            else:
+                g = grid if grid is not None else getattr(d, "grid", None)
+                if g is None or getattr(g, "weights", None) is None:
+                    raise ValueError(
+                        "the mean of a log perturbation is the mean of its "
+                        "exponential, taken by quadrature: pass grid=, a grid "
+                        "with weights")
+                ex_mean = quadrature_mean(ex, g)
+            out = ref * ex_mean
+        return out.renamed(self._name)
 
     def on_interval(self, lo: float, hi: float) -> "PerturbedField":
         """Both parts on [lo, hi]."""
