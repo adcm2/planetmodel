@@ -43,6 +43,13 @@ Every case covers the poles, the longitude seam and points between
 nodes.  The local rules only: the C++ side does no spherical-harmonic
 work.
 
+**Grids** (`grids.txt`): for each shipped grid, named as the C++ makes
+it (`gl:<lmax>[:<nphi>]`, `dh:<lmax>:<sampling>`,
+`eq:<ntheta>:<nphi>:<poles>`), its `band`, `colatitudes`, `longitudes`
+and `weights`, one line each.  **The vocabulary** (`vocabulary.txt`):
+each name, its rank, weight and Voigt form, its four exponents, and its
+meaning's UTF-8 in hexadecimal.
+
 **Frames** (`frames.txt`): `frame <theta> <phi>` and the nine entries
 of the frame matrix by rows, and `wrapped <x> <start> <value>`, the
 longitude reduction, the seam's rounding case among them.
@@ -931,6 +938,54 @@ def gll(directory: Path) -> list[Path]:
     return [path]
 
 
+#: The shipped grids `grids.txt` holds, by the C++ name of each.
+_GRIDS = {
+    "gl:0": lambda: pm.gauss_legendre(0),
+    "gl:1": lambda: pm.gauss_legendre(1),
+    "gl:5": lambda: pm.gauss_legendre(5),
+    "gl:5:16": lambda: pm.gauss_legendre(5, nphi=16),
+    "gl:64": lambda: pm.gauss_legendre(64),
+    "gl:255": lambda: pm.gauss_legendre(255),
+    "dh:0:1": lambda: pm.driscoll_healy(0),
+    "dh:6:1": lambda: pm.driscoll_healy(6),
+    "dh:6:2": lambda: pm.driscoll_healy(6, sampling=2),
+    "dh:63:1": lambda: pm.driscoll_healy(63),
+    "eq:1:1:0": lambda: pm.equiangular(1, 1),
+    "eq:8:16:0": lambda: pm.equiangular(8, 16),
+    "eq:9:4:0": lambda: pm.equiangular(9, 4),
+    "eq:2:3:1": lambda: pm.equiangular(2, 3, poles=True),
+    "eq:9:16:1": lambda: pm.equiangular(9, 16, poles=True),
+    "eq:64:128:1": lambda: pm.equiangular(64, 128, poles=True)}
+
+
+def grids(directory: Path) -> list[Path]:
+    """The shipped grids of the module docstring."""
+    lines = []
+    for label, make in _GRIDS.items():
+        g = make()
+        lines.append(f"band {label} {g.kind} {g.lmax}")
+        for key, values in (("colatitudes", g.colatitudes),
+                            ("longitudes", g.longitudes), ("weights", g.weights)):
+            lines.append(f"{key} {label} " + " ".join(repr(float(x)) for x in values))
+    path = directory / "grids.txt"
+    path.write_text("\n".join(lines) + "\n")
+    return [path]
+
+
+def vocabulary(directory: Path) -> list[Path]:
+    """The vocabulary of the module docstring."""
+    from planetmodel.vocabulary import VOCABULARY
+    lines = []
+    for name, spec in VOCABULARY.items():
+        c, d = spec.character, spec.dimensions
+        lines.append(f"{name} {c.rank} {c.weight} {int(bool(c.voigt))} {d.mass} "
+                     f"{d.length} {d.time} {d.temperature} "
+                     f"{spec.meaning.encode('utf-8').hex()}")
+    path = directory / "vocabulary.txt"
+    path.write_text("\n".join(lines) + "\n")
+    return [path]
+
+
 def write_fixtures(directory: str | Path, *, meshes: bool = True) -> list[Path]:
     """Every fixture into `directory`, each model file validated; the
     manifests, which build meshes, only where `meshes` is true."""
@@ -939,7 +994,8 @@ def write_fixtures(directory: str | Path, *, meshes: bool = True) -> list[Path]:
     models = model_files(directory)
     for path in models:
         validate_structure(path)
-    return (models + model_cases(directory) + gll(directory)
+    return (models + model_cases(directory) + gll(directory) + grids(directory)
+            + vocabulary(directory)
             + lateral_cases(directory) + radial_cases(directory)
             + constants(directory) + frames(directory) + json_documents(directory)
             + manifest_cases(directory) + decks(directory)

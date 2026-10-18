@@ -43,6 +43,17 @@ using Matrix3 = std::array<std::array<double, 3>, 3>;
 }
 
 /**
+ * @brief A point's Cartesian coordinates, r e_r.
+ * @param r The radius.
+ * @param theta The colatitude.
+ * @param phi The longitude.
+ */
+[[nodiscard]] inline Vector3 CartesianPoint(double r, double theta, double phi) noexcept {
+  const auto st = std::sin(theta);
+  return {r * st * std::cos(phi), r * st * std::sin(phi), r * std::cos(theta)};
+}
+
+/**
  * @brief Spherical components at a point as Cartesian ones: R v.
  * @param v The components in the frame (e_r, e_theta, e_phi).
  * @param theta The colatitude.

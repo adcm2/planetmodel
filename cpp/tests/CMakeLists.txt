@@ -20,11 +20,16 @@ add_executable(planetmodel_tests
   test_manifest.cpp
   $<$<BOOL:${PLANETMODEL_WITH_NETCDF}>:test_modelfile.cpp>
   $<$<BOOL:${PLANETMODEL_WITH_NETCDF}>:test_rules.cpp>
+  $<$<BOOL:${PLANETMODEL_WITH_NETCDF}>:test_writer.cpp>
   test_units.cpp)
 target_link_libraries(planetmodel_tests PRIVATE planetmodel::planetmodel
                       GTest::gtest_main)
+# The model files the writer's tests write, for the Python to read back
+# (tests/test_cpp_written.py, with PLANETMODEL_CPP_WRITTEN naming it).
+set(PLANETMODEL_WRITTEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/written")
 target_compile_definitions(planetmodel_tests PRIVATE
-  "PLANETMODEL_FIXTURES_DIR=\"${PLANETMODEL_FIXTURES_DIR}\"")
+  "PLANETMODEL_FIXTURES_DIR=\"${PLANETMODEL_FIXTURES_DIR}\""
+  "PLANETMODEL_WRITTEN_DIR=\"${PLANETMODEL_WRITTEN_DIR}\"")
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(planetmodel_tests PRIVATE -Wall -Wextra -Wpedantic
     $<$<BOOL:${PLANETMODEL_WARNINGS_AS_ERRORS}>:-Werror>)

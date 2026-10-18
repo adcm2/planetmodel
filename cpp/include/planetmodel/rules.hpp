@@ -81,6 +81,22 @@ inline constexpr auto LATERAL_RULES =
     std::array<std::string_view, 3>{"linear", "cubic", "harmonic"};
 
 /**
+ * @brief The name a file states a radial rule by.
+ * @param rule The rule.
+ */
+[[nodiscard]] constexpr std::string_view RuleName(RadialRule rule) noexcept {
+  return rule == RadialRule::Polynomial ? RADIAL_RULES[0] : RADIAL_RULES[1];
+}
+
+/**
+ * @brief The name a file states a lateral rule by.
+ * @param rule The rule.
+ */
+[[nodiscard]] constexpr std::string_view RuleName(LateralRule rule) noexcept {
+  return rule == LateralRule::Linear ? LATERAL_RULES[0] : LATERAL_RULES[1];
+}
+
+/**
  * @brief The radial rule a file names.
  * @param name `polynomial` or `linear`.
  * @param source The file, as an error names it.
@@ -117,6 +133,26 @@ inline constexpr auto LATERAL_RULES =
   }
   throw Error(source, where,
               std::format("{} is not a lateral rule; they are linear and cubic", name));
+}
+
+/**
+ * @brief Refuse a lateral rule the grid cannot carry, as `check_rule`
+ * does: the cubic rule on fewer than four rows once the poles the grid
+ * lacks are added, or on fewer than three longitudes.
+ * @param grid The grid.
+ * @param rule The rule.
+ * @param where What the values are of, as an error names it.
+ * @throws planetmodel::Error if the grid cannot carry the rule.
+ */
+inline void CheckRule(const AngularGrid& grid, LateralRule rule, std::string_view where = "") {
+  if (rule != LateralRule::Cubic) return;
+  const auto rows = grid.NTheta() + (grid.NorthPoleNode() ? 0 : 1) + (grid.SouthPoleNode() ? 0 : 1);
+  if (rows < 4 || grid.NPhi() < 3) {
+    throw Error("LateralInterpolant", where,
+                std::format("the cubic rule needs at least 4 rows on the padded grid and 3 "
+                            "longitudes; this grid gives {} rows and has {} longitudes",
+                            rows, grid.NPhi()));
+  }
 }
 
 /**
@@ -443,13 +479,7 @@ class LateralInterpolant {
           std::in_place_type<Linear>, std::move(theta), std::move(phi), std::move(padded));
       return;
     }
-    if (rows.size() < 4 || nphi < 3) {
-      throw Error("LateralInterpolant", where,
-                  std::format("the cubic rule needs at least 4 rows on the padded grid "
-                              "and 3 longitudes; this grid gives {} rows and has {} "
-                              "longitudes",
-                              rows.size(), nphi));
-    }
+    CheckRule(grid, rule, where);
     const auto [north_slopes, south_slopes] = PoleSlopes(theta, rows, grid.Longitudes());
     spline_ = std::make_shared<const Spline>(
         std::in_place_type<Cubic>, std::move(theta), std::move(phi), std::move(padded),

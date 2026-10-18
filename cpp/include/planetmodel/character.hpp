@@ -20,7 +20,7 @@ namespace planetmodel {
 class Character {
  public:
   /// A character of rank `rank` >= 0 and weight 0 or 1, refused otherwise.
-  explicit Character(int rank, int weight = 0, bool voigt = true)
+  explicit constexpr Character(int rank, int weight = 0, bool voigt = true)
       : rank_(rank), weight_(weight), voigt_(voigt) {
     if (rank < 0) {
       throw Error("Character", "", std::format("rank must be non-negative, got {}", rank));
@@ -30,9 +30,9 @@ class Character {
     }
   }
 
-  [[nodiscard]] int Rank() const noexcept { return rank_; }
-  [[nodiscard]] int Weight() const noexcept { return weight_; }
-  [[nodiscard]] bool Voigt() const noexcept { return voigt_; }
+  [[nodiscard]] constexpr int Rank() const noexcept { return rank_; }
+  [[nodiscard]] constexpr int Weight() const noexcept { return weight_; }
+  [[nodiscard]] constexpr bool Voigt() const noexcept { return voigt_; }
 
   /// Whether the stored components are a Voigt vector or matrix: ranks 2
   /// and 4 with `voigt`.
@@ -62,6 +62,17 @@ class Character {
   int weight_;
   bool voigt_;
 };
+
+/// Q_kappa, Q_mu, eta, relaxation times, viscosity, velocities.
+inline constexpr auto SCALAR = Character(0, 0);
+/// Density, and every modulus, which shares its factor of 1/J.
+inline constexpr auto DENSITY = Character(0, 1);
+/// A vector.
+inline constexpr auto VECTOR = Character(1, 0);
+/// Equilibrium stress, stress glut.
+inline constexpr auto STRESS = Character(2, 1);
+/// The second elasticity tensor.
+inline constexpr auto ELASTIC = Character(4, 1);
 
 }  // namespace planetmodel
 

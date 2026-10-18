@@ -17,6 +17,14 @@ inline std::filesystem::path FixturesDir() {
   return std::filesystem::path{PLANETMODEL_FIXTURES_DIR};
 }
 
+/// Where the writer's tests leave the files they write, made where it is
+/// missing.
+inline std::filesystem::path WrittenDir() {
+  const auto out = std::filesystem::path{PLANETMODEL_WRITTEN_DIR};
+  std::filesystem::create_directories(out);
+  return out;
+}
+
 inline bool FixturesRequired() {
   return std::getenv("PLANETMODEL_REQUIRE_FIXTURES") != nullptr;
 }
