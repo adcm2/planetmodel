@@ -29,7 +29,10 @@ def test_displacements(h):
 def test_mappings(m):
     k = 3.0 if isinstance(m, ScaledMapping) else 1.0
     X = k * cartesian_points(*validity_lattice(SK, n_r=2, n_theta=4, n_phi=3))
-    testing.check_mapping(m, X.reshape(-1, 3))
+    X = X.reshape(-1, 3)
+    # off the centre, where a stretch whose dh/dr depends on direction is
+    # not differentiable and F is the limit along the radius
+    testing.check_mapping(m, X[np.linalg.norm(X, axis=-1) > 0.0])
 
 
 @pytest.mark.parametrize("sk", [SK, HOLLOW])
@@ -53,8 +56,29 @@ def test_catalogue_models_and_their_fields():
 
 def test_shipped_displacements():
     from planetmodel import flattening, layer_linear
-    testing.check_displacement(flattening(0.01, rmax=1.0), SK)
+    testing.check_displacement(flattening(0.01), SK)
     h = layer_linear(SK, [None, lambda t, p: 0.02 * np.sin(t) ** 2 * np.cos(3.0 * p),
                           None, lambda t, p: 0.01 * np.cos(t)])
     testing.check_displacement(h, SK)
     testing.check_geometry(Geometry(SK, mapping=RadialStretch(h, rmax=1.0)))
+
+
+def test_a_relief_with_a_gradient_at_the_poles_maps_smoothly_on_the_axis():
+    """A tilted boundary has a gradient at each pole; on the polar axis the
+    e_phi entry of F is the limit along the meridian, so the geometry's
+    contract holds on the axis too, with exact gradients and without."""
+    from planetmodel import layer_linear
+
+    def tilt(t, p):
+        return 0.01 * np.sin(t) * np.cos(p - 0.4) + 0.01 * np.cos(t)
+
+    def exact(t, p):
+        return tilt(t, p)
+
+    exact.angular_gradient = lambda t, p: (
+        0.01 * np.cos(t) * np.cos(p - 0.4) - 0.01 * np.sin(t),
+        -0.01 * np.sin(t) * np.sin(p - 0.4))
+    for rel in (tilt, exact):
+        h = layer_linear(SK, [None, rel, None, rel])
+        testing.check_displacement(h, SK)
+        testing.check_geometry(Geometry(SK, mapping=RadialStretch(h, rmax=1.0)))

@@ -7,8 +7,12 @@ values happen to agree across it.  What the columns are called and what
 the header lines mean is a `DeckFormat`: the column names (by row
 width, where a format admits more than one), the number of header
 lines, and how to read and write them.  `MINEOS` is the format of the
-mineos and PREM decks, three header lines and nine or six columns; any
-other table is a format of its own, given its column names.
+mineos and PREM decks, three header lines and nine or six columns;
+`GIA` that of a viscoelastic model for glacial isostatic adjustment,
+`r rho vpv vsv vph vsh eta viscosity` after two header lines (a title
+and the column names), SI, NaN where a layer lacks a field (the
+viscosity of an elastic or fluid layer); any other table is a format of
+its own, given its column names.
 
 `read_deck` turns a file into a `Deck`, numbers and a header, nothing
 else.  `deck_layers` turns a deck into the base fields of a model: the
@@ -41,22 +45,25 @@ from scipy.interpolate import Akima1DInterpolator, CubicSpline, PchipInterpolato
 
 from .character import SCALAR, Character
 from .fields import Field, RadialField
-from .layerfunction import PolynomialLayer
+from .layerfunction import PolynomialLayer, same_interval
 from .skeleton import Skeleton
+from .units import LENGTH, Scales
 from .vocabulary import VOCABULARY, FieldSpec
 
 if TYPE_CHECKING:
     from .model import Model
 
 __all__ = ["Deck", "DeckFormat", "MINEOS", "MINEOS_COLUMNS", "MINEOS_ISOTROPIC_COLUMNS",
+           "GIA", "GIA_COLUMNS",
            "read_deck", "write_deck", "deck_layers", "deck_knots", "mineos_names",
            "Tabulated", "KINDS"]
 
 #: The interpolants a deck's knots may be joined by, each a piecewise
-#: polynomial: a not-a-knot cubic spline, a shape-preserving cubic
-#: (pchip), Akima's cubic, or straight lines.  Two knots give a line
-#: under every kind.
-KINDS = ("cubic", "pchip", "akima", "linear")
+#: polynomial: a not-a-knot cubic spline, the parabola through three
+#: knots; a natural cubic spline, as the old Fortran codes take; a
+#: shape-preserving cubic (pchip), Akima's cubic, or straight lines.  Two
+#: knots give a line under every kind.
+KINDS = ("cubic", "natural", "pchip", "akima", "linear")
 
 #: The columns of a transversely isotropic mineos deck, after the radius.
 MINEOS_COLUMNS = ("rho", "vpv", "vsv", "qkappa", "qmu", "vph", "vsh", "eta")
@@ -282,7 +289,8 @@ def _mineos_header(lines: Sequence[str]) -> dict[str, Any]:
 
 def _mineos_header_lines(deck: Deck) -> list[str]:
     """The three header lines for a deck: the title from its header, the
-    flags from its header where present, the counts from its knots."""
+    flags from its header where present, the counts from its knots, and
+    the trailing tokens the header was read with."""
     h = deck.header
     cuts = np.flatnonzero(np.diff(deck.radius) == 0.0)
     nic = int(cuts[0] + 1) if cuts.size else deck.nknots
@@ -290,9 +298,11 @@ def _mineos_header_lines(deck: Deck) -> list[str]:
     ifanis = int(h.get("ifanis", 1 if "vph" in deck else 0))
     tref = float(h.get("tref", 1.0))
     ifdeck = int(h.get("ifdeck", 1))
+    tail2, tail3 = (tuple(t) for t in h.get("extras", ((), ())))
     return [str(h.get("name", deck.source or "deck")),
-            f"{ifanis} {tref:g} {ifdeck}",
-            f"{deck.nknots} {h.get('nic', nic)} {h.get('noc', noc)}"]
+            " ".join((f"{ifanis} {tref:g} {ifdeck}",) + tail2),
+            " ".join((f"{deck.nknots} {h.get('nic', nic)} {h.get('noc', noc)}",)
+                     + tail3)]
 
 
 #: The mineos deck: three header lines, then `r rho vpv vsv qkappa qmu vph
@@ -301,14 +311,39 @@ MINEOS = DeckFormat({8: MINEOS_COLUMNS, 5: MINEOS_ISOTROPIC_COLUMNS}, name="mine
                     header_lines=3, parse_header=_mineos_header,
                     write_header=_mineos_header_lines)
 
+#: The columns of a GIA deck, after the radius.
+GIA_COLUMNS = ("rho", "vpv", "vsv", "vph", "vsh", "eta", "viscosity")
+
+
+def _gia_header(lines: Sequence[str]) -> dict[str, Any]:
+    """A GIA header: the title, and the column line, which must name the
+    format's columns after `r`."""
+    named = tuple(lines[1].split())
+    if named != ("r",) + GIA_COLUMNS:
+        raise ValueError(f"a GIA deck's second line names its columns, "
+                         f"{' '.join(('r',) + GIA_COLUMNS)}; got {lines[1].strip()!r}")
+    return {"title": lines[0].strip(), "columns": named[1:]}
+
+
+def _gia_header_lines(deck: Deck) -> list[str]:
+    """A GIA header from a deck: its title, and the column line."""
+    return [str(deck.header.get("title", "")), " ".join(("r",) + GIA_COLUMNS)]
+
+
+#: The GIA deck: a title line, a line naming the columns, then `r rho vpv
+#: vsv vph vsh eta viscosity` in SI, NaN where a layer lacks a field.
+GIA = DeckFormat(GIA_COLUMNS, name="gia", header_lines=2, parse_header=_gia_header,
+                 write_header=_gia_header_lines)
+
 
 def mineos_names(deck: Deck) -> tuple[list[str | None], list[str | None]]:
     """Layer and interface names a mineos header implies: `nic` and `noc`
     count the knots of the inner core and to the top of the outer core,
     so where each sits on a repeated radius the first two layers are
     `inner_core` and `outer_core` under `icb` and `cmb`; the outermost
-    interface is `surface`.  Every other name is None.  A header whose
-    counts do not sit on repeated radii is warned about and ignored."""
+    interface is `surface`.  Every other name is None.  A count of zero
+    says there is no such core; a header whose other counts do not sit
+    on repeated radii is warned about and ignored."""
     layers: list[str | None] = [None] * deck.nlayers
     faces: list[str | None] = [None] * (deck.nlayers + (1 if deck.radius[0] > 0 else 0))
     faces[-1] = "surface"
@@ -318,7 +353,7 @@ def mineos_names(deck: Deck) -> tuple[list[str | None], list[str | None]]:
     for key, layer, face in cores:
         i = int(h.get(key, 0))
         if not (1 <= i < r.size and r[i - 1] == r[i]):
-            if key in h:
+            if i != 0:
                 warnings.warn(f"the header's {key} = {i} does not sit on a repeated "
                               "radius; the layer is left unnamed", stacklevel=2)
             continue
@@ -345,6 +380,8 @@ def _interpolant(r: np.ndarray, y: np.ndarray, kind: str) -> PolynomialLayer:
         ppoly = PPoly(np.vstack([slopes, y[:-1]]), r)
     elif kind == "cubic":
         ppoly = CubicSpline(r, y)
+    elif kind == "natural":
+        ppoly = CubicSpline(r, y, bc_type="natural")
     elif kind == "pchip":
         ppoly = PchipInterpolator(r, y)
     else:
@@ -397,21 +434,34 @@ class Tabulated:
     `to_deck` samples the model on those knots, every rank-0 radial
     field by name, NaN where a layer lacks one, so that a model that
     was read can be written by `write_deck`, and a model whose fields
-    were changed can be written as the deck it now is.  A model whose
-    layering no longer matches its knots (after surgery) is refused.
+    were changed can be written as the deck it now is.  The knots are
+    in the model's units and follow it through `converted`; a deck is
+    in SI, so `to_deck` converts a model in other scales first.  A
+    model whose layering no longer matches its knots (after surgery)
+    is refused.
     """
 
     knots: tuple[np.ndarray, ...] = ()
     header: Mapping[str, Any] = MappingProxyType({})
 
+    def converted(self: Model, scales: Scales) -> Model:
+        """`Model.converted`, the knots carried into the new length unit."""
+        out = super().converted(scales)
+        k = self.scales.factor(LENGTH) / scales.factor(LENGTH)
+        out.knots = tuple(np.asarray(knots) * k for knots in self.knots)
+        return out
+
     def to_deck(self: Model, *, columns: Sequence[str] | None = None) -> Deck:
-        """The model as a deck on its knots: `columns` are the names to
-        tabulate, every rank-0 radial real field by default."""
+        """The model as a deck on its knots, in SI: `columns` are the
+        names to tabulate, every rank-0 radial real field by default."""
+        if not self.scales.is_si:
+            return self.in_si().to_deck(columns=columns)
         knots = self.knots
         intervals = [layer.interval for layer in self.layers]
+        rtol = self.geometry.rtol
         if len(knots) != self.nlayers or any(
-                not (np.isclose(k[0], lo) and np.isclose(k[-1], hi))
-                for k, (lo, hi) in zip(knots, intervals)):
+                not same_interval((k[0], k[-1]), interval, rtol=rtol)
+                for k, interval in zip(knots, intervals)):
             raise ValueError("the model's layering no longer matches its knots; "
                              "a deck is written on the layering it was read with")
         if columns is None:

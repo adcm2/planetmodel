@@ -61,3 +61,159 @@ def test_refusals():
     with pytest.raises(ValueError, match="radial field of rank 0"):
         profile(ax, [m.elastic_moduli(0)])
     plt.close(fig)
+
+
+# -- slices drawn -----------------------------------------------------------
+
+from planetmodel import AnalyticField, flattening, gauss_legendre  # noqa: E402
+from planetmodel import slices  # noqa: E402
+from planetmodel.plotting import (BOUNDARY_STYLE, DIVERGING, SEQUENTIAL,  # noqa: E402
+                                  colour_scale, section)
+
+
+def _lateral(r, t, p):
+    return 3.0 + 0.3 * r * np.cos(t) + 0.2 * r * np.sin(t) * np.cos(p)
+
+
+@pytest.fixture
+def layered():
+    m = LayeredIsotropicElastic([0.0, 0.5, 1.0], rho=[10.0, 4.0], vp=[9.0, 7.0],
+                                vs=[4.0, 3.0])
+    return m.with_field(1, "vs", AnalyticField((0.5, 1.0), _lateral, name="vs"),
+                        replace=True)
+
+
+def test_a_profile_slice_is_drawn_layer_by_layer_with_its_step(layered):
+    prof = slices.profile(layered, "rho", 1.0, 2.0, n=7)
+    fig, ax = plt.subplots()
+    lines = profile(ax, prof, scale=2.0)
+    segments = [ln for ln in lines if ln.get_label() != "_joiner"]
+    joiners = [ln for ln in lines if ln.get_label() == "_joiner"]
+    assert len(segments) == 2 and len(joiners) == 1
+    x, y = segments[1].get_data()
+    assert np.allclose(x, prof.layers[1].values)
+    assert np.allclose(y, 2.0 * prof.layers[1].radius)
+    assert list(joiners[0].get_data()[0]) == [10.0, 4.0]
+    mean = slices.mean_profile(layered, "vs", mean_grid=gauss_legendre(8), n=5)
+    assert len(profile(fig.add_subplot(2, 1, 2), mean, joiners=False)) == 2
+    plt.close(fig)
+
+
+def test_a_section_is_a_wedge_of_the_annulus_on_polar_axes(layered):
+    sec = slices.section(layered, "vs", (0.6, 0.2), azimuth=1.0, length=1.2, n=5,
+                         m=31, relative_to="mean", mean_grid=gauss_legendre(10))
+    fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
+    meshes = section(ax, sec, scale=10.0, colorbar=True)
+    assert len(meshes) == 2
+    # the layers share one scale, symmetric about zero for a departure
+    lims = {mesh.get_clim() for mesh in meshes}
+    assert len(lims) == 1 and np.isclose(-lims.pop()[0], meshes[0].get_clim()[1])
+    assert meshes[0].get_cmap().name == DIVERGING
+    coords = meshes[1].get_coordinates()
+    assert np.allclose(coords[..., 0], sec.distance[None, :] - 0.6)
+    assert np.allclose(coords[..., 1], 10.0 * sec.layers[1].radius)
+    assert np.allclose(np.asarray(meshes[1].get_array()).reshape(5, 31),
+                       sec.layers[1].values)
+    assert np.isclose(ax.get_thetamin(), -np.degrees(0.6))
+    assert np.isclose(ax.get_thetamax(), np.degrees(0.6))
+    assert np.allclose(ax.get_ylim(), (0.0, 10.0))
+    # the interfaces are faint arcs, and the colour bar names the slice
+    arcs = [ln for ln in ax.get_lines() if ln.get_color() == BOUNDARY_STYLE["color"]]
+    assert len(arcs) == 4
+    assert fig.axes[-1].get_ylabel() == sec.label
+    plt.close(fig)
+
+
+def test_a_whole_circle_is_a_disc_and_the_body_can_be_drawn_as_it_is(layered):
+    full = slices.section(layered, "rho", (0.6, 0.0), azimuth=0.5, length=2 * np.pi,
+                          n=4, m=40)
+    fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
+    section(ax, full)
+    assert np.isclose(ax.get_thetamax() - ax.get_thetamin(), 360.0)
+    assert section(ax, full)[0].get_cmap().name == SEQUENTIAL
+    plt.close(fig)
+    flat = layered.stretched(flattening(0.1))
+    sec = slices.section(flat, "rho", (0.3, 0.0), end=(2.0, 0.0), n=4, m=21)
+    fig, ax = plt.subplots()
+    meshes = section(ax, sec, physical=True)
+    xy = meshes[0].get_coordinates()
+    assert np.allclose(np.hypot(xy[..., 0], xy[..., 1]),
+                       np.linalg.norm(sec.layers[0].physical, axis=-1))
+    assert ax.get_aspect() == 1.0
+    with pytest.raises(ValueError, match="polar"):
+        section(ax, sec)
+    polar = fig.add_subplot(2, 1, 2, projection="polar")
+    with pytest.raises(ValueError, match="polar"):
+        section(polar, sec, physical=True)
+    at = slices.section(flat, "rho", (0.3, 0.0), end=(2.0, 0.0), n=4, m=21,
+                        at="physical")
+    assert len(section(polar, at)) == 2
+    with pytest.raises(ValueError, match="physical points already"):
+        section(ax, at, physical=True)
+    plt.close(fig)
+
+
+def test_the_colour_scale_is_the_callers_or_by_what_the_values_are(layered):
+    dep = slices.sphere(layered, "vs", radius=0.8, grid=gauss_legendre(4),
+                        relative_to="mean")
+    cmap, lo, hi = colour_scale([dep.values], dep.shown)
+    assert cmap == DIVERGING and lo == -hi == -np.max(np.abs(dep.values))
+    plain = slices.sphere(layered, "rho", radius=0.8, grid=gauss_legendre(4))
+    cmap, lo, hi = colour_scale([plain.values], plain.shown)
+    assert cmap == SEQUENTIAL and lo < 4.0 < hi
+    assert colour_scale([plain.values], plain.shown, cmap="magma", vmin=0.0,
+                        vmax=9.0) == ("magma", 0.0, 9.0)
+    with pytest.raises(ValueError, match="no finite"):
+        colour_scale([np.full(3, np.nan)], plain.shown)
+
+
+# -- spectra and correlations drawn --------------------------------------------
+
+def _harmonic_model(layered, coeffs, name):
+    from planetmodel.harmonics import synthesise
+    c = np.asarray(coeffs, dtype=float)
+    return layered.with_field(1, "vs", AnalyticField(
+        (0.5, 1.0), lambda r, t, p: r * synthesise(c, t, p), name="vs"),
+        replace=True).named(name)
+
+
+def test_a_spectrum_is_a_line_of_power_by_degree(layered):
+    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
+    from planetmodel.plotting import spectrum
+    c = np.zeros((2, 4, 4))
+    c[0, 0, 0], c[0, 2, 1], c[1, 3, 3] = 1.0, 0.5, 0.25
+    sp = slices.spectrum(_harmonic_model(layered, c, "h"), "vs", radius=0.8, lmax=5)
+    fig, ax = plt.subplots()
+    line = spectrum(ax, sp, first=1, label="h")
+    x, y = line.get_data()
+    assert list(x) == [1, 2, 3, 4, 5] and np.allclose(y, sp.power[1:])
+    assert ax.get_yscale() == "log" and line.get_label() == "h"
+    assert np.allclose(spectrum(ax, sp, amplitude=True).get_data()[1], sp.amplitude)
+    with pytest.raises(ValueError, match="first"):
+        spectrum(ax, sp, first=9)
+    plt.close(fig)
+
+
+def test_a_correlation_is_an_image_by_degree_and_radius(layered):
+    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
+    from planetmodel.plotting import correlation, correlation_total
+    a, b = np.zeros((2, 4, 4)), np.zeros((2, 4, 4))
+    a[0, 2, 1], a[0, 3, 0], a[0, 1, 1] = 1.0, 0.5, 0.3
+    b[1, 2, 1], b[0, 3, 0], b[0, 1, 1] = 0.7, -2.0, 0.3
+    cr = slices.correlation(_harmonic_model(layered, a, "a"), "vs",
+                            _harmonic_model(layered, b, "b"), lmax=3,
+                            radii=[0.9, 0.6, 0.75])
+    fig, (ax, bx) = plt.subplots(1, 2)
+    mesh = correlation(ax, cr, scale=10.0, colorbar=True)
+    assert mesh.get_clim() == (-1.0, 1.0) and mesh.get_cmap().name == DIVERGING
+    shown = np.ma.asarray(mesh.get_array()).reshape(3, 3)
+    order = np.argsort(cr.radii)
+    assert np.allclose(shown, cr.by_degree[order][:, 1:])
+    xy = mesh.get_coordinates()
+    assert np.allclose(xy[0, :, 0], [0.5, 1.5, 2.5, 3.5])
+    assert np.allclose(np.sort(xy[:, 0, 1])[1:-1], 10.0 * np.array([0.675, 0.825]))
+    line = correlation_total(bx, cr, scale=10.0)
+    assert np.allclose(line.get_data()[0], cr.total[order])
+    assert np.allclose(line.get_data()[1], 10.0 * cr.radii[order])
+    assert fig.axes[-1].get_ylabel() == cr.label
+    plt.close(fig)

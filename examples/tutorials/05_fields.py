@@ -366,7 +366,7 @@ print(
 # weight 1, is divided by `J`.
 
 # %%
-m = RadialStretch(flattening(0.05, rmax=OC[1]), rmax=OC[1])
+m = RadialStretch(flattening(0.05), rmax=OC[1])
 rho_phys = PushedForwardField(rho, m)
 X = np.array([[0.0, 0.0, 2000e3]])
 print(rho_phys, "| J at the pole:", m.jacobian(X)[0])

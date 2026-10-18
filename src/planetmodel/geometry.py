@@ -5,13 +5,18 @@ physical body, and the names of the layers and interfaces.  It is the
 object a mesher takes and the object on which fields are later hung.
 
 The mapping is one continuous map of the whole reference domain,
-orientation-preserving, whose gradient may jump only across skeleton
-boundaries.  Those are the invariants a Geometry checks on
-construction: the mapping satisfies the protocol, every knot it declares
-lies on a boundary, its Jacobian is positive on a lattice covering every
-layer and the whole sphere, and it is continuous across every interior
-boundary.  A piecewise construction is therefore legitimate as long as
-the pieces agree where they meet.
+orientation-preserving, whose gradient may jump only at the radii the
+mapping declares, its knots: skeleton boundaries, or radii inside the
+layers where a relief sits on a surface that is no boundary of the
+model or a mapping read from a mesh or a grid has an element edge.
+Those are the invariants a Geometry checks on construction: the
+mapping satisfies the protocol, its Jacobian is positive on a lattice
+covering every layer and the whole sphere, and it is continuous across
+every interior boundary.  The geometry's knots are those of the
+mapping's within the skeleton; a mapping may be defined on a larger
+body, and a truncated or hollowed geometry keeps its mapping.  A
+piecewise construction is therefore legitimate as long as the pieces
+agree where they meet.
 
 Interfaces are the boundaries that separate two layers plus the outer
 boundary.  For a full geometry (innermost radius zero) interface k is
@@ -32,8 +37,8 @@ from numpy.typing import ArrayLike
 
 from .displacement import RadialDisplacement, SphericalFunction
 from .frames import cartesian_points
-from .mapping import (IdentityMapping, Mapping, RadialStretch, ScaledMapping,
-                      SphericalSample, ValidityReport, validity_lattice)
+from .mapping import (IdentityMapping, Mapping, RadialStretch, SphericalSample,
+                      ValidityReport, scaled_mapping, validity, validity_lattice)
 from .skeleton import CoarseningMap, Skeleton
 
 __all__ = ["Geometry", "LayerInfo", "InterfaceInfo", "Names", "Renames"]
@@ -114,23 +119,14 @@ class Geometry:
         return self._sk.nlayers + (1 if self._sk.is_hollow else 0)
 
     def _check_mapping(self) -> None:
-        """The invariants: protocol, knots on boundaries, validity, continuity."""
+        """The invariants: protocol, validity, continuity."""
         m = self._m
         if not isinstance(m, Mapping):
             raise TypeError(
                 f"{type(m).__name__} is not a Mapping: it needs __call__, "
                 "deformation_gradient and jacobian on (..., 3) points")
         tol = self._rtol * self._sk.span
-        b = self._sk.boundaries
-        for k in getattr(m, "knots", ()):
-            if np.min(np.abs(b - float(k))) > tol:
-                raise ValueError(
-                    f"the mapping declares a kink at r = {float(k):g}, which is "
-                    f"not a boundary of {self._sk!r}; refine the skeleton there "
-                    "or move the kink")
-        lattice = validity_lattice(self._sk)
-        report = (m.is_valid(sample=lattice) if hasattr(m, "is_valid")
-                  else _generic_validity(m, lattice))
+        report = validity(m, sample=validity_lattice(self._sk))
         if not report:
             raise ValueError(f"the mapping does not preserve orientation: {report!r}")
         self._check_continuity(tol)
@@ -234,15 +230,17 @@ class Geometry:
         return i
 
     def knots(self) -> tuple[float, ...]:
-        """The radii where the mapping declares its gradient may jump."""
-        return tuple(float(k) for k in getattr(self._m, "knots", ()))
+        """The radii within the skeleton, to `rtol` of its span, where the
+        mapping declares its gradient may jump, in increasing order."""
+        tol = self._rtol * self._sk.span
+        b = self._sk.boundaries
+        return tuple(sorted(float(k) for k in getattr(self._m, "knots", ())
+                            if b[0] - tol <= float(k) <= b[-1] + tol))
 
     def validity(self, *, sample: SphericalSample | None = None) -> ValidityReport:
         """The mapping's validity report on `sample`, or on the lattice."""
         lattice = validity_lattice(self._sk) if sample is None else sample
-        if hasattr(self._m, "is_valid"):
-            return self._m.is_valid(sample=lattice)
-        return _generic_validity(self._m, lattice)
+        return validity(self._m, sample=lattice)
 
     # -- copies -------------------------------------------------------------
 
@@ -286,7 +284,7 @@ class Geometry:
         """The same geometry with every length multiplied by k."""
         k = float(k)
         sk = Skeleton(self._sk.boundaries * k)
-        m = self._m if self.is_identity else ScaledMapping(self._m, k)
+        m = self._m if self.is_identity else scaled_mapping(self._m, k)
         return self._copy(skeleton=sk, mapping=m)
 
     # -- surgery ------------------------------------------------------------
@@ -410,18 +408,3 @@ def _updated(current: tuple[str | None, ...], new: Renames) -> tuple[str | None,
             out[i] = None if value is None else str(value)
         return tuple(out)
     return tuple(new)
-
-
-def _generic_validity(m: Mapping, lattice: SphericalSample) -> ValidityReport:
-    """J > 0 on the lattice for a mapping without `is_valid`."""
-    from .mapping import MappingBase
-    class _Wrapped(MappingBase):
-        def __call__(self, X: ArrayLike) -> np.ndarray:
-            return m(X)
-
-        def deformation_gradient(self, X: ArrayLike) -> np.ndarray:
-            return m.deformation_gradient(X)
-
-        def jacobian(self, X: ArrayLike) -> np.ndarray:
-            return m.jacobian(X)
-    return _Wrapped().is_valid(sample=lattice)

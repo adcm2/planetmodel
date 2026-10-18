@@ -7,12 +7,10 @@ remembered.  Nothing inside a field or a mesh consults them: a model
 holds a `Scales` and a table of dimensions by name, and conversion is
 the model's operation.
 
-**Dimensions** are physical: integer exponents of (mass, length, time).
-They are independent of a field's character, which is its law under a
-mapping: Q_kappa and a relaxation time are both invariant, yet one is
-dimensionless and the other is seconds.  Three base dimensions cover
-everything held here; temperature can be added as a fourth exponent
-defaulting to zero without disturbing anything.
+**Dimensions** are physical: integer exponents of (mass, length, time,
+temperature).  They are independent of a field's character, which is
+its law under a mapping: Q_kappa and a relaxation time are both
+invariant, yet one is dimensionless and the other is seconds.
 
 **Scales** say what one unit of each base dimension is, in SI.  A
 quantity of dimensions d stored under scales s relates to its SI value
@@ -20,12 +18,14 @@ by
 
     stored = SI / s.factor(d),   s.factor(d) = mass^d.mass length^d.length
                                               time^d.time
+                                              temperature^d.temperature
 
 so `Scales.SI` is the identity.  `Scales.geophysical(a, density=rho)`
 takes the length a and the mass rho a^3 and fixes the time by
 G rho T^2 = 1, so that G is one in those units: factor(G's dimensions)
 is G_SI to machine precision, the time scale passing through a square
-root.  A solver that takes G as a parameter is handed
+root; the temperature scale is a kelvin unless it is given.  A solver
+that takes G as a parameter is handed
 `G_SI / scales.factor(GRAVITATIONAL_CONSTANT)`.
 
 The dimension constants are module names.  `DENSITY` here is the
@@ -36,14 +36,20 @@ its module.
 from __future__ import annotations
 
 import math
+import numbers
 from dataclasses import KW_ONLY, dataclass
 from typing import ClassVar
 
 __all__ = [
-    "Dimensions", "Scales", "unit_string", "G_SI", "EARTH_MEAN_DENSITY",
+    "Dimensions", "Scales", "unit_string", "scaled_unit", "G_SI",
+    "EARTH_MEAN_DENSITY",
     "DIMENSIONLESS", "MASS", "LENGTH", "TIME", "DENSITY", "VELOCITY",
     "GRAVITY", "MODULUS", "VISCOSITY", "GRAVITATIONAL_CONSTANT", "FREQUENCY",
+    "TEMPERATURE", "BASE",
 ]
+
+#: The base dimensions, in the order of every exponent tuple and scale.
+BASE = ("mass", "length", "time", "temperature")
 
 #: The gravitational constant, m^3 kg^-1 s^-2 (CODATA 2018).  The one
 #: definition in the package; everything that needs G reads it here or
@@ -57,7 +63,8 @@ EARTH_MEAN_DENSITY = 5515.0
 
 @dataclass(frozen=True)
 class Dimensions:
-    """Physical dimensions as integer exponents of (mass, length, time).
+    """Physical dimensions as integer exponents of (mass, length, time,
+    temperature).
 
     Multiplying quantities adds exponents, so
     `MODULUS == DENSITY * VELOCITY**2` holds here as it does on paper.
@@ -67,38 +74,35 @@ class Dimensions:
     mass: int = 0
     length: int = 0
     time: int = 0
+    temperature: int = 0
 
     def __post_init__(self) -> None:
-        for name in ("mass", "length", "time"):
+        for name in BASE:
             value = getattr(self, name)
-            if not isinstance(value, int) or isinstance(value, bool):
+            if not isinstance(value, numbers.Integral) or isinstance(value, bool):
                 raise TypeError(
                     f"{name} exponent must be an integer, got {value!r}")
+            object.__setattr__(self, name, int(value))
 
     @property
     def is_dimensionless(self) -> bool:
         """Whether every exponent is zero."""
-        return self.mass == 0 and self.length == 0 and self.time == 0
+        return all(getattr(self, name) == 0 for name in BASE)
 
     def __mul__(self, other: Dimensions) -> Dimensions:
         if not isinstance(other, Dimensions):
             return NotImplemented
-        return Dimensions(mass=self.mass + other.mass,
-                          length=self.length + other.length,
-                          time=self.time + other.time)
+        return Dimensions(**{n: getattr(self, n) + getattr(other, n) for n in BASE})
 
     def __truediv__(self, other: Dimensions) -> Dimensions:
         if not isinstance(other, Dimensions):
             return NotImplemented
-        return Dimensions(mass=self.mass - other.mass,
-                          length=self.length - other.length,
-                          time=self.time - other.time)
+        return Dimensions(**{n: getattr(self, n) - getattr(other, n) for n in BASE})
 
     def __pow__(self, n: int) -> Dimensions:
-        if not isinstance(n, int) or isinstance(n, bool):
+        if not isinstance(n, numbers.Integral) or isinstance(n, bool):
             return NotImplemented
-        return Dimensions(mass=self.mass * n, length=self.length * n,
-                          time=self.time * n)
+        return Dimensions(**{b: getattr(self, b) * int(n) for b in BASE})
 
     def unit_string(self, *, si: bool = True) -> str:
         """A udunits-style unit string: "kg m-3" in SI, "1" otherwise.
@@ -109,7 +113,8 @@ class Dimensions:
         if not si:
             return "1"
         parts = []
-        for symbol, n in (("kg", self.mass), ("m", self.length), ("s", self.time)):
+        for symbol, n in (("kg", self.mass), ("m", self.length), ("s", self.time),
+                          ("K", self.temperature)):
             if n == 1:
                 parts.append(symbol)
             elif n != 0:
@@ -120,13 +125,29 @@ class Dimensions:
         if self.is_dimensionless:
             return "dimensionless"
         return " ".join(f"{sym}^{e}" for sym, e in
-                        (("M", self.mass), ("L", self.length), ("T", self.time))
+                        (("M", self.mass), ("L", self.length), ("T", self.time),
+                         ("Theta", self.temperature))
                         if e != 0)
 
 
 def unit_string(dims: Dimensions | None, *, si: bool = True) -> str:
     """`dims.unit_string(si=si)`, or "unknown" where no dimensions are declared."""
     return "unknown" if dims is None else dims.unit_string(si=si)
+
+
+def scaled_unit(dims: Dimensions | None, scales: Scales) -> str:
+    """The stored unit as a UDUNITS scaled unit: the SI unit, preceded by
+    the size of one stored unit when the scales make it other than one
+    ("m s-1" in SI, "3865.300165 m s-1" under the geophysical scales of
+    the Earth); "1" for a
+    pure number and "unknown" where no dimensions are declared."""
+    if dims is None:
+        return "unknown"
+    si = dims.unit_string()
+    factor = scales.factor(dims)
+    if factor == 1.0:
+        return si
+    return f"{factor:.10g}" if si == "1" else f"{factor:.10g} {si}"
 
 
 DIMENSIONLESS = Dimensions()
@@ -140,6 +161,7 @@ GRAVITY = Dimensions(length=1, time=-2)
 MODULUS = Dimensions(mass=1, length=-1, time=-2)
 VISCOSITY = Dimensions(mass=1, length=-1, time=-1)
 GRAVITATIONAL_CONSTANT = Dimensions(mass=-1, length=3, time=-2)
+TEMPERATURE = Dimensions(temperature=1)
 
 
 @dataclass(frozen=True)
@@ -155,28 +177,30 @@ class Scales:
     length: float = 1.0
     mass: float = 1.0
     time: float = 1.0
+    temperature: float = 1.0
 
     SI: ClassVar[Scales]
 
     def __post_init__(self) -> None:
-        for name in ("length", "mass", "time"):
+        for name in ("length", "mass", "time", "temperature"):
             value = getattr(self, name)
-            if not (isinstance(value, (int, float)) and math.isfinite(value)
-                    and value > 0.0):
+            if not (isinstance(value, numbers.Real) and not isinstance(value, bool)
+                    and math.isfinite(value) and value > 0.0):
                 raise ValueError(
                     f"{name} scale must be a positive finite number, "
                     f"got {value!r}")
             object.__setattr__(self, name, float(value))
 
     @classmethod
-    def geophysical(cls, length: float,
-                    *, density: float = EARTH_MEAN_DENSITY) -> Scales:
+    def geophysical(cls, length: float, *, density: float = EARTH_MEAN_DENSITY,
+                    temperature: float = 1.0) -> Scales:
         """Scales for self-gravitating problems: G becomes one.
 
         `length` is the body's radius in metres and `density` a
         prescribed reference density in kg m^-3, conventionally the
         Earth's mean.  The mass scale is density length^3 and the time
-        scale is fixed by G density T^2 = 1.
+        scale is fixed by G density T^2 = 1; `temperature` is the
+        temperature scale in kelvin, one by default.
         """
         length = float(length)
         density = float(density)
@@ -184,23 +208,26 @@ class Scales:
             raise ValueError(
                 f"length and density must be positive, got {length}, {density}")
         return cls(length=length, mass=density * length ** 3,
-                   time=1.0 / math.sqrt(G_SI * density))
+                   time=1.0 / math.sqrt(G_SI * density), temperature=temperature)
 
     @property
     def is_si(self) -> bool:
         """Whether one stored unit of each base dimension is one SI unit."""
-        return self.length == 1.0 and self.mass == 1.0 and self.time == 1.0
+        return (self.length == 1.0 and self.mass == 1.0 and self.time == 1.0
+                and self.temperature == 1.0)
 
     def factor(self, dims: Dimensions) -> float:
         """The SI size of one stored unit of a quantity with `dims`."""
         return (self.mass ** dims.mass * self.length ** dims.length
-                * self.time ** dims.time)
+                * self.time ** dims.time * self.temperature ** dims.temperature)
 
     def __repr__(self) -> str:
         if self.is_si:
             return "Scales.SI"
+        kelvin = ("" if self.temperature == 1.0
+                  else f", temperature={self.temperature:.6g}")
         return (f"Scales(length={self.length:.6g}, mass={self.mass:.6g}, "
-                f"time={self.time:.6g})")
+                f"time={self.time:.6g}{kelvin})")
 
 
 Scales.SI = Scales()

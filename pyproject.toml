@@ -32,12 +32,15 @@ meshing = ["gmsh>=4.13"]
 mfem = ["mfem>=4.8"]
 netcdf = ["netCDF4>=1.7"]
 plot = ["matplotlib>=3.11,<4"]
+maps = ["matplotlib>=3.11,<4", "cartopy>=0.24,<1"]
 notebook = ["ipykernel>=6.29"]
-harmonics = ["pyshtools (>=4.14)", "ducc0 (>=0.41)"]
+harmonics = ["ducc0 (>=0.41)"]
 
 [dependency-groups]
 dev = [
     "pytest>=9",
+    # opens model files in the tests as CF tools do
+    "xarray>=2024.10",
     "ruff>=0.6",
     "pre-commit (>=4)",
     "pytest-cov (>=6)",
@@ -71,11 +74,18 @@ norecursedirs = [".*", "build", "dist"]
 # `plot` and `harmonics` extras where installed.  `-m "not slow"` adds the
 # gmsh unit geometries and the MFEM exports, `-m ""` everything.
 addopts = "-m 'not gmsh and not mfem and not slow'"
+# netCDF4 1.7.4 sets an array's shape when writing a variable of two or
+# more dimensions, which numpy 2.5 deprecates; nothing of ours to change.
+filterwarnings = [
+    "ignore:Setting the shape on a NumPy array:DeprecationWarning",
+]
 markers = [
     "slow: long-running tests (minutes); deselect with -m 'not slow'",
     "gmsh: requires the optional gmsh dependency (planetmodel[meshing])",
     "mfem: requires PyMFEM (planetmodel[mfem])",
-    "harmonics: requires pyshtools (planetmodel[harmonics])",
+    "harmonics: requires ducc0 (planetmodel[harmonics])",
+    "netcdf: requires netCDF4 (planetmodel[netcdf])",
+    "maps: requires cartopy (planetmodel[maps])",
 ]
 
 [tool.ruff]

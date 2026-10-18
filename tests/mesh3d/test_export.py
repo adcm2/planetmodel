@@ -195,3 +195,80 @@ def test_a_mapping_that_folds_the_mesh_is_refused_at_export(tmp_path):
     ref = export_mfem_mesh(res, tmp_path / "ref", delivery="referential")
     assert ref.quality["negative_jacobians"] == 0
     assert jacobian_report(load(ref))["negative_jacobians"] == 0
+
+
+def report_by_element(mesh):
+    """The Jacobian report from its statement, one element at a time."""
+    order = mesh.GetNodes().FESpace().GetOrder(0)
+    ratios, negative = [], 0
+    for e in range(mesh.GetNE()):
+        T = mesh.GetElementTransformation(e)
+        dets = []
+        for rule in (mfem.IntRules.Get(mesh.GetElementBaseGeometry(e), 2 * order),
+                     mesh.GetNodes().FESpace().GetFE(e).GetNodes()):
+            for i in range(rule.GetNPoints()):
+                T.SetIntPoint(rule.IntPoint(i))
+                dets.append(T.Weight())
+        negative += min(dets) <= 0.0
+        ratios.append(min(dets) / max(dets) if max(dets) > 0.0 else -np.inf)
+    return min(ratios), negative
+
+
+def test_the_jacobian_report_is_its_statement(built):
+    """On meshes of one geometry, read all at once, and after their nodes
+    move; on a mesh of two, element by element; a fold is counted."""
+    for name in ("full3", "hollow3", "full2", "hollow2"):
+        mesh = mfem.Mesh(str(built[name].msh_path), *MESH_READ_OPTIONS.values())
+        if mesh.GetNodes() is None:
+            mesh.SetCurvature(1)
+        for _ in range(2):
+            got = jacobian_report(mesh)
+            ratio, negative = report_by_element(mesh)
+            assert np.isclose(got["min_ratio"], ratio, rtol=1e-12)
+            assert got["negative_jacobians"] == negative == 0
+            x = mesh.GetNodes().GetDataArray()
+            x += 0.2 * x ** 2
+    mixed = mfem.Mesh(2, 5, 2, 0, 2)
+    for v in ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (2.0, 0.5)):
+        mixed.AddVertex(list(v))
+    mixed.AddQuad([0, 1, 2, 3], 1)
+    mixed.AddTriangle([1, 4, 2], 1)
+    mixed.FinalizeMesh()
+    mixed.SetCurvature(2)
+    assert jacobian_report(mixed)["negative_jacobians"] == 0
+    # the triangle's apex pulled back across its edge with the quad folds it
+    nodes = mixed.GetNodes()
+    x = nodes.GetDataArray()
+    xy = (x.reshape(2, -1).T if nodes.FESpace().GetOrdering() == mfem.Ordering.byNODES
+          else x.reshape(-1, 2))
+    xy[(xy[:, 0] == 2.0) & (xy[:, 1] == 0.5), 0] = 0.5
+    got = jacobian_report(mixed)
+    ratio, negative = report_by_element(mixed)
+    assert np.isclose(got["min_ratio"], ratio, rtol=1e-12)
+    assert got["negative_jacobians"] == negative == 1
+
+
+def test_a_wrongly_oriented_element_is_refused(tmp_path):
+    """The check reads the file as written, without MFEM's own repair."""
+    import dataclasses
+
+    from planetmodel import Geometry, Skeleton
+    from planetmodel.mesh3d import UniformInterfaces, export_mfem_mesh
+
+    spec = MeshSpec(Geometry(Skeleton([0.0, 0.5, 1.0])),
+                    UniformInterfaces(0.3, 0.5, 0.5), dimension=2, order=1)
+    res = build_layered_mesh(spec, tmp_path / "m")
+    lines = res.msh_path.read_text().splitlines()
+    for k in range(lines.index("$Elements") + 2, len(lines)):
+        f = lines[k].split()
+        if len(f) > 1 and f[1] == "2":                        # a triangle
+            ntags = int(f[2])
+            nodes = f[3 + ntags:]
+            nodes[-1], nodes[-2] = nodes[-2], nodes[-1]
+            lines[k] = " ".join(f[:3 + ntags] + nodes)
+            break
+    bad = tmp_path / "bad.msh"
+    bad.write_text("\n".join(lines) + "\n")
+    with pytest.raises(ValueError, match="wrongly oriented"):
+        export_mfem_mesh(dataclasses.replace(res, msh_path=bad), tmp_path / "x")
+    export_mfem_mesh(res, tmp_path / "good")

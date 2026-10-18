@@ -14,8 +14,9 @@ diagonal (GLL quadrature, with one exact correction at r = 0, below),
 the centrifugal term is likewise diagonal because w / r^2 = 1, and the
 radial stiffness is banded with half-bandwidth ngll - 1.  Boundary
 conditions are natural (Neumann) unless Robin coefficients are given,
-in which case kappa_r f' -+ gamma f = 0 at the inner/outer boundary
-adds gamma kappa_r w f g to the form there.
+in which case f' -+ gamma f = 0 at the inner/outer boundary adds
+gamma kappa_r w f g to the form there; gamma is an inverse length,
+whatever kappa_r is.
 
 Because M is diagonal, the generalised problem A_l Phi = M Phi Theta
 symmetrises into the banded ordinary problem S = M^-1/2 A_l M^-1/2 for
@@ -124,7 +125,7 @@ class RadialOperatorFamily:
     None, one gamma for both boundaries, or a pair (inner, outer) with
     None meaning Neumann; an inner Robin term is ignored on a ball.
 
-    The spectral methods are `eigvalsh(l)`, `eig(l, theta_max=None)`,
+    The spectral methods are `eigvalsh(l)`, `eig(l, *, theta_max, count)`,
     `apply_power(l, s, v)`, `inner(l, s, u, v)` and `logdet(l)`; the
     direct ones `apply(l, v)` for A_l v and `solve(l, b)` for A_l^-1 b;
     `white_noise(l, rng=...)` draws M^-1/2 z; `ndof`, `nodes`, `mass`,
@@ -303,17 +304,40 @@ class RadialOperatorFamily:
             self._vals[l] = v
         return self._vals[l]
 
-    def eig(self, l: int, *, theta_max: float | None = None
-            ) -> tuple[np.ndarray, np.ndarray]:
+    def eig(self, l: int, *, theta_max: float | None = None,
+            count: int | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Eigenpairs (theta, Phi) of A_l Phi = M Phi Theta, cached.
 
         Phi has the active-dof eigenvectors in its columns, ascending in
         theta and M-orthonormal.  With `theta_max`, only the eigenvalues
-        theta <= theta_max are computed; the cache keeps the widest range
-        requested so far and hands out truncated views of it.
+        theta <= theta_max are computed; with `count`, the `count`
+        smallest, selected by index so that none is lost to the rounding
+        of a bound.  The cache keeps the widest range requested so far
+        and hands out truncated views of it.
         """
-        want = np.inf if theta_max is None else float(theta_max)
+        if theta_max is not None and count is not None:
+            raise ValueError("give at most one of theta_max and count")
         cached = self._pairs.get(l)
+        if count is not None:
+            count = int(count)
+            if count < 1:
+                raise ValueError(f"count must be positive, got {count}")
+            if cached is None or (cached[0].size < count and not np.isinf(cached[2])):
+                band, mass = self.pencil(l)
+                s = 1.0 / np.sqrt(mass)
+                S = self._scaled(band, s)
+                if count >= S.shape[1]:
+                    theta, Y = eig_banded(S, lower=False)
+                    self._vals.setdefault(l, theta)
+                    have = np.inf
+                else:
+                    theta, Y = eig_banded(S, lower=False, select="i",
+                                          select_range=(0, count - 1))
+                    have = float(theta[-1])
+                self._pairs[l] = (theta, s[:, None] * Y, have)
+            theta, Phi, _ = self._pairs[l]
+            return theta[:count], Phi[:, :count]
+        want = np.inf if theta_max is None else float(theta_max)
         if cached is None or cached[2] < want:
             band, mass = self.pencil(l)
             s = 1.0 / np.sqrt(mass)
@@ -372,14 +396,15 @@ class RadialOperatorFamily:
     def white_noise(self, l: int, *, rng: Any = None,
                     size: int | None = None) -> np.ndarray:
         """White noise of L^2(w dr) on the active dofs: M^-1/2 z with z
-        standard normal, of shape (n,) or (n, size).  Its covariance is
-        M^-1, so <f, white> is N(0, |f|^2) for every nodal f.  `rng` is
-        anything `np.random.default_rng` accepts."""
+        standard normal, of shape (n,) or (n, size), column j of a batch
+        being the j-th of `size` successive draws from the generator.  Its
+        covariance is M^-1, so <f, white> is N(0, |f|^2) for every nodal
+        f.  `rng` is anything `np.random.default_rng` accepts."""
         rng = np.random.default_rng(rng)
         s = 1.0 / np.sqrt(self.mass(l))
         if size is None:
             return s * rng.standard_normal(s.size)
-        return s[:, None] * rng.standard_normal((s.size, int(size)))
+        return s[:, None] * rng.standard_normal((int(size), s.size)).T
 
     def apply_power(self, l: int, s: float, v: ArrayLike) -> np.ndarray:
         """A_l^s v on active-dof values v of shape (n,) or (n, k), through

@@ -296,3 +296,10 @@ def test_a_number_adds_as_a_rank_0_weight_0_constant():
     with pytest.raises(ValueError, match="cannot add"):
         1 - rho
     assert np.allclose((rho * (1 + delta))(r), 1.0 + r)
+
+
+def test_radial_fields_on_intervals_equal_to_their_tolerance_combine():
+    a = RadialField((0.5, 1.0), polynomial_layer((0.5, 1.0), [1.0, 2.0]), rtol=1e-6)
+    b = RadialField((0.5, 1.0 + 1e-7), polynomial_layer((0.5, 1.0 + 1e-7), [3.0]),
+                    rtol=1e-6)
+    assert np.isclose((a + b)(0.75), 1.0 + 2.0 * 0.75 + 3.0)

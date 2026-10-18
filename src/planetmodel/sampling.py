@@ -31,23 +31,44 @@ nodes instead, and `fields=None` samples the names every layer holds.
 **Angular grids** are node arrays first.  `kind` and `lmax` say what
 family the nodes came from and what band the grid resolves; the arrays
 are the truth, and a consumer with its own grid hands its nodes over as
-a `custom` grid.  The Gauss-Legendre grid resolves degrees up to `lmax`
-with `lmax + 1` colatitudes; its longitude rule is the trapezoid rule
-on `nphi` equally spaced points, exact for `exp(i (m - m') phi)` only
-while `|m - m'| < nphi`, so resolving orders `|m| <= lmax` needs
-`nphi >= 2 lmax + 1`, and that bound is the default: the count
-pyshtools' Gauss-Legendre grid has, so that `planetmodel.harmonics` can
-transform on the grid as it is.  The weight convention is
+a `custom` grid.  Colatitudes lie in [0, pi], so either pole may be a
+node, and longitudes in [0, 2 pi).  Three families are shipped, each
+with its colatitude weights:
+
+    gauss_legendre(lmax)       lmax + 1 Gauss-Legendre colatitudes, no pole
+    driscoll_healy(lmax)       2 lmax + 2 equally spaced from the north
+                               pole, which is a node, to one step short of
+                               the south pole (Driscoll and Healy's grid)
+    equiangular(ntheta, nphi)  equally spaced midpoints, no pole (Fejer's
+                               first rule), or both poles with poles=True
+                               (Clenshaw-Curtis)
+
+The weight convention is
 
     integral over S^2 of f dOmega  ~=  sum_i w_i sum_j (2 pi / nphi) f_ij,
 
 so `weights` are colatitude weights against sin(theta) dtheta, the
 Legendre weights on x = cos(theta) for a Gauss grid, and the longitude
-rule is the consumer's own trapezoid.  The equiangular grid claims no
-band and carries no weights.
+rule is the consumer's own trapezoid, exact for `exp(i (m - m') phi)`
+only while `|m - m'| < nphi`.  The band is the highest degree the grid
+determines, so that a field of that band is recovered exactly by
+analysis on it: `lmax` for the Gauss-Legendre and Driscoll-Healy grids,
+ntheta - 1 for the equiangular midpoints and ntheta - 2 with the poles,
+and never more than (nphi - 1) // 2, since resolving orders `|m| <=
+lmax` needs `nphi >= 2 lmax + 1`.  Every shipped weight rule integrates
+the polynomials in cos(theta) of degree below ntheta exactly, so the
+weights integrate every field of the grid's band exactly.  On the
+Gauss-Legendre and Driscoll-Healy grids they also integrate the product
+of two fields of the band; the equiangular grids reach their band only
+through the upsampling analysis of `planetmodel.harmonics`.
+
+At a pole node the frame (e_theta, e_phi) depends on the longitude, so
+a component of rank 1 or above is sampled there as the limit along its
+own longitude's meridian: the columns differ while the vector does not.
 """
 from __future__ import annotations
 
+import numbers
 from collections import abc
 from collections.abc import Iterable
 from dataclasses import KW_ONLY, dataclass
@@ -65,11 +86,11 @@ from .mesh1d.mesh import RadialMesh
 from .model import Model
 from .units import Dimensions, Scales
 
-__all__ = ["AngularGrid", "gauss_legendre", "equiangular", "Sample", "sample",
-           "KINDS", "MISSING"]
+__all__ = ["AngularGrid", "gauss_legendre", "driscoll_healy", "equiangular",
+           "Sample", "sample", "KINDS", "MISSING"]
 
 #: The families an angular grid can come from.
-KINDS = ("gauss_legendre", "equiangular", "custom")
+KINDS = ("gauss_legendre", "driscoll_healy", "equiangular", "custom")
 
 #: What `sample` does on a layer lacking a field.
 MISSING = ("refuse", "nan")
@@ -85,18 +106,21 @@ def _readonly(a: ArrayLike, *, name: str) -> np.ndarray:
     return a
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class AngularGrid:
     """A product angular node set: colatitudes times longitudes.
 
-    `colatitudes` are strictly increasing inside the open interval
-    (0, pi) and `longitudes` strictly increasing inside [0, 2 pi), both
-    in radians and stored read-only.  `kind` names the family the nodes
-    came from and `lmax` the band the grid resolves, when it is that
-    kind of grid; `weights`, when present, are colatitude weights in the
-    convention of the module docstring.  `gauss_legendre` and
-    `equiangular` build the two shipped families; anything else is a
-    `custom` grid, and nothing downstream treats one differently.
+    `colatitudes` are strictly increasing in [0, pi], so that either
+    pole may be a node, and `longitudes` strictly increasing in
+    [0, 2 pi), both in radians and stored read-only.  `kind` names the
+    family the nodes came from and `lmax` the band the grid resolves,
+    when it is that kind of grid; `weights`, when present, are
+    colatitude weights in the convention of the module docstring.
+    `gauss_legendre`, `driscoll_healy` and `equiangular` build the
+    shipped families; anything else is a `custom` grid, which the
+    spherical-harmonic transforms (and so the harmonic lateral rule)
+    refuse.  Two grids are equal when their nodes, kind, band and
+    weights are.
     """
 
     colatitudes: np.ndarray
@@ -109,11 +133,12 @@ class AngularGrid:
     def __post_init__(self) -> None:
         theta = _readonly(self.colatitudes, name="colatitudes")
         phi = _readonly(self.longitudes, name="longitudes")
+        if not (np.all(np.isfinite(theta)) and np.all(np.isfinite(phi))):
+            raise ValueError("the nodes must be finite")
         if not np.all(np.diff(theta) > 0.0):
             raise ValueError("colatitudes must be strictly increasing")
-        if theta[0] <= 0.0 or theta[-1] >= np.pi:
-            raise ValueError("colatitudes must lie strictly inside (0, pi): "
-                             "the poles are not sample points")
+        if theta[0] < 0.0 or theta[-1] > np.pi:
+            raise ValueError("colatitudes must lie in [0, pi]")
         if not np.all(np.diff(phi) > 0.0):
             raise ValueError("longitudes must be strictly increasing")
         if phi[0] < 0.0 or phi[-1] >= 2.0 * np.pi:
@@ -122,6 +147,8 @@ class AngularGrid:
             raise ValueError(f"kind must be one of {KINDS}, got {self.kind!r}")
         lmax = self.lmax
         if lmax is not None:
+            if not isinstance(lmax, numbers.Integral) or isinstance(lmax, bool):
+                raise TypeError(f"lmax must be an integer, got {lmax!r}")
             lmax = int(lmax)
             if lmax < 0:
                 raise ValueError(f"lmax must be non-negative, got {lmax}")
@@ -131,10 +158,30 @@ class AngularGrid:
             if w.shape != theta.shape:
                 raise ValueError(f"weights must have one entry per colatitude, "
                                  f"{theta.size}, got {w.size}")
+            if not np.all(np.isfinite(w)):
+                raise ValueError("weights must be finite")
         object.__setattr__(self, "colatitudes", theta)
         object.__setattr__(self, "longitudes", phi)
         object.__setattr__(self, "lmax", lmax)
         object.__setattr__(self, "weights", w)
+
+    def __eq__(self, other: object) -> bool:
+        """Equal nodes, kind, band and weights."""
+        if not isinstance(other, AngularGrid):
+            return NotImplemented
+        if self is other:
+            return True
+        same_weights = (self.weights is None and other.weights is None) or (
+            self.weights is not None and other.weights is not None
+            and np.array_equal(self.weights, other.weights))
+        return (self.kind == other.kind and self.lmax == other.lmax and same_weights
+                and np.array_equal(self.colatitudes, other.colatitudes)
+                and np.array_equal(self.longitudes, other.longitudes))
+
+    def __hash__(self) -> int:
+        """The hash of the nodes, the kind and the band."""
+        return hash((self.kind, self.lmax, self.colatitudes.tobytes(),
+                     self.longitudes.tobytes()))
 
     @property
     def ntheta(self) -> int:
@@ -145,6 +192,34 @@ class AngularGrid:
     def nphi(self) -> int:
         """The number of longitudes."""
         return self.longitudes.size
+
+    @property
+    def pole_nodes(self) -> tuple[bool, bool]:
+        """Whether the north pole and the south pole are nodes, in that order."""
+        return bool(self.colatitudes[0] == 0.0), bool(self.colatitudes[-1] == np.pi)
+
+    def mean(self, values: ArrayLike) -> np.ndarray:
+        """The mean over the sphere of values at the nodes, by the grid's
+        quadrature: shape (..., ntheta, nphi) to (...).
+
+        The colatitude weights against sin(theta) dtheta and, in
+        longitude, the periodic trapezoid, 2 pi / nphi for equally spaced
+        longitudes and half the spacing to either neighbour otherwise;
+        divided by 4 pi.  A grid without weights has no quadrature and
+        is refused.
+        """
+        if self.weights is None:
+            raise ValueError(f"{self!r} carries no colatitude weights, so it has "
+                             "no quadrature; use a grid of a shipped kind, or "
+                             "give the weights")
+        v = np.asarray(values)
+        if v.ndim < 2 or v.shape[-2:] != (self.ntheta, self.nphi):
+            raise ValueError(f"values must have trailing shape "
+                             f"{(self.ntheta, self.nphi)}, got {v.shape}")
+        phi = self.longitudes
+        gaps = np.diff(np.append(phi, phi[0] + 2.0 * np.pi))
+        dphi = 0.5 * (gaps + np.roll(gaps, 1))
+        return np.einsum("...ij,i,j->...", v, self.weights, dphi) / (4.0 * np.pi)
 
     def __repr__(self) -> str:
         band = "" if self.lmax is None else f", lmax={self.lmax}"
@@ -157,9 +232,9 @@ def gauss_legendre(lmax: int, *, nphi: int | None = None) -> AngularGrid:
     `lmax + 1` Gauss-Legendre colatitudes in x = cos(theta), sorted so
     that theta increases, with the Legendre weights alongside, and
     `nphi` equally spaced longitudes from zero, 2 lmax + 1 by default,
-    the count pyshtools' Gauss-Legendre grid has.  An explicit `nphi`
-    below that bound is refused: at 2 lmax the orders +lmax and -lmax
-    are one discrete mode and cannot be told apart.
+    the fewest that resolve the orders.  An explicit `nphi` below that
+    bound is refused: at 2 lmax the orders +lmax and -lmax are one
+    discrete mode and cannot be told apart.
     """
     lmax = int(lmax)
     if lmax < 0:
@@ -180,19 +255,97 @@ def gauss_legendre(lmax: int, *, nphi: int | None = None) -> AngularGrid:
                        weights=w[order])
 
 
-def equiangular(ntheta: int, nphi: int) -> AngularGrid:
-    """Midpoint colatitudes and equally spaced longitudes.
+def driscoll_healy(lmax: int, *, sampling: int = 1) -> AngularGrid:
+    """The Driscoll-Healy grid resolving degrees and orders up to `lmax`.
 
-    theta_i = pi (i + 1/2) / ntheta keeps both poles out, as the open
-    interval demands; phi_j = 2 pi j / nphi.  No band is claimed and no
-    weights are carried.
+    n = 2 lmax + 2 equally spaced colatitudes theta_i = pi i / n, from
+    the north pole, which is a node, to one step short of the south
+    pole, which is not; n equally spaced longitudes from zero for
+    `sampling=1`, or 2 n for `sampling=2`, the grid equally spaced in
+    both angles.  The weights are Driscoll and Healy's, exact for the
+    polynomials in cos(theta) of degree below n; the north pole's is
+    zero.
+    """
+    lmax, sampling = int(lmax), int(sampling)
+    if lmax < 0:
+        raise ValueError(f"lmax must be non-negative, got {lmax}")
+    if sampling not in (1, 2):
+        raise ValueError(f"sampling must be 1 or 2, got {sampling}")
+    n = 2 * lmax + 2
+    theta = np.pi * np.arange(n) / n
+    nphi = sampling * n
+    phi = 2.0 * np.pi * np.arange(nphi) / nphi
+    return AngularGrid(theta, phi, kind="driscoll_healy", lmax=lmax,
+                       weights=_driscoll_healy_weights(n))
+
+
+def equiangular(ntheta: int, nphi: int, *, poles: bool = False) -> AngularGrid:
+    """Equally spaced colatitudes and longitudes, with weights and a band.
+
+    By default the colatitudes are the midpoints theta_i = pi (i + 1/2)
+    / ntheta, both poles left out, with the weights of Fejer's first
+    rule; `poles=True` makes both poles nodes, theta_i = pi i / (ntheta
+    - 1) for ntheta of at least two, with the Clenshaw-Curtis weights.
+    Either rule is exact for the polynomials in cos(theta) of degree
+    below ntheta.  The longitudes are phi_j = 2 pi j / nphi.  The band
+    is ntheta - 1 for the midpoints and ntheta - 2 with the poles, and
+    at most (nphi - 1) // 2.
     """
     ntheta, nphi = int(ntheta), int(nphi)
     if ntheta < 1 or nphi < 1:
         raise ValueError("ntheta and nphi must be positive")
-    theta = np.pi * (np.arange(ntheta) + 0.5) / ntheta
+    if poles:
+        if ntheta < 2:
+            raise ValueError("an equiangular grid with both poles needs ntheta "
+                             f">= 2, got {ntheta}")
+        theta = np.linspace(0.0, np.pi, ntheta)          # the poles exactly
+        weights, band = _clenshaw_curtis_weights(ntheta), ntheta - 2
+    else:
+        theta = np.pi * (np.arange(ntheta) + 0.5) / ntheta
+        weights, band = _fejer_weights(ntheta), ntheta - 1
     phi = 2.0 * np.pi * np.arange(nphi) / nphi
-    return AngularGrid(theta, phi, kind="equiangular")
+    return AngularGrid(theta, phi, kind="equiangular",
+                       lmax=min(band, (nphi - 1) // 2), weights=weights)
+
+
+# -- colatitude weights against sin(theta) dtheta, summing to 2 ------------
+# Each is a cosine sum accumulated term by term, O(n^2) work in O(n) memory.
+
+def _fejer_weights(n: int) -> np.ndarray:
+    """Fejer's first rule on the n midpoints theta_k = pi (k + 1/2) / n:
+    w_k = (2 / n) (1 - 2 sum_{j=1}^{n // 2} cos(2 j theta_k) / (4 j^2 - 1))."""
+    theta = np.pi * (np.arange(n) + 0.5) / n
+    s = np.zeros(n)
+    for j in range(1, n // 2 + 1):
+        s += np.cos(2 * j * theta) / (4 * j * j - 1)
+    return (2.0 / n) * (1.0 - 2.0 * s)
+
+
+def _clenshaw_curtis_weights(n: int) -> np.ndarray:
+    """Clenshaw-Curtis on the n nodes theta_k = pi k / N, N = n - 1:
+    w_k = (c_k / N) (1 - sum_{j=1}^{N // 2} b_j cos(2 j theta_k) /
+    (4 j^2 - 1)), with c_k = 1 at the poles and 2 between, b_j = 1 for
+    j = N / 2 and 2 otherwise."""
+    N = n - 1
+    theta = np.pi * np.arange(n) / N
+    s = np.zeros(n)
+    for j in range(1, N // 2 + 1):
+        b = 1.0 if 2 * j == N else 2.0
+        s += b * np.cos(2 * j * theta) / (4 * j * j - 1)
+    c = np.full(n, 2.0)
+    c[0] = c[-1] = 1.0
+    return (c / N) * (1.0 - s)
+
+
+def _driscoll_healy_weights(n: int) -> np.ndarray:
+    """Driscoll and Healy's weights on the n nodes theta_k = pi k / n, n
+    even: w_k = (4 / n) sin(theta_k) sum_{j=0}^{n/2 - 1} sin((2 j + 1)
+    theta_k) / (2 j + 1)."""
+    theta = np.pi * np.arange(n) / n
+    s = np.zeros(n)
+    for j in range(n // 2):
+        s += np.sin((2 * j + 1) * theta) / (2 * j + 1)
+    return (4.0 / n) * np.sin(theta) * s
 
 
 @dataclass(frozen=True)
@@ -209,7 +362,8 @@ class Sample:
     3)`, or None for an identity geometry.  `characters` and
     `dimensions` say what each array is, `scales` what its numbers are
     in, and `layer_names` names the layers the nodes refer to.  Every
-    array and mapping is read-only.
+    array and mapping the sample holds or hands out is read-only; the
+    radial mesh is the mesh's own.
     """
 
     radial: RadialMesh
@@ -240,13 +394,17 @@ class Sample:
 
     @property
     def element_layer(self) -> np.ndarray:
-        """The skeleton layer of every element, shape (nspec,)."""
-        return self.radial.layer
+        """The skeleton layer of every element, shape (nspec,), read-only."""
+        out = self.radial.layer.view()
+        out.setflags(write=False)
+        return out
 
     @property
     def node_layer(self) -> np.ndarray:
-        """The skeleton layer of every flat node, shape (nnode,)."""
-        return np.repeat(self.radial.layer, self.radial.ngll)
+        """The skeleton layer of every flat node, shape (nnode,), read-only."""
+        out = np.repeat(self.radial.layer, self.radial.ngll)
+        out.setflags(write=False)
+        return out
 
     def stored_shape(self, name: str) -> tuple[int, ...]:
         """The trailing axes a field's array carries beyond the nodes."""

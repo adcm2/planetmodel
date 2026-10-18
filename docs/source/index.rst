@@ -33,11 +33,46 @@ Installation
    pip install planetmodel
 
 The base install depends on numpy and scipy alone.  Meshing, MFEM
-export, spherical-harmonic grid transforms and plotting are extras:
+export, spherical-harmonic grid transforms, the model file and plotting
+are extras:
 
 .. code-block:: bash
 
-   pip install "planetmodel[meshing,mfem,harmonics,plot]"
+   pip install "planetmodel[meshing,mfem,harmonics,netcdf,plot]"
+
+File formats
+============
+
+The files the library writes for codes in other languages, described
+for their readers:
+
+* :doc:`formats/model_file`: a model in one netCDF file, its fields on
+  angular grids at radial nodes, and its mapping.
+* :doc:`formats/mesh_manifest`: the JSON beside every mesh, saying what
+  the mesh's numbered attributes and the field files beside it are.
+
+.. toctree::
+   :maxdepth: 2
+   :caption: File formats
+   :hidden:
+
+   formats/model_file
+   formats/mesh_manifest
+
+The C++ library
+===============
+
+:doc:`cpp` reads the model file, the mesh manifest and decks in C++, and
+writes model files, so that a solver in C++ can take a model from the
+Python and hand its own fields back; its reference is built beside these
+pages.
+
+.. toctree::
+   :maxdepth: 2
+   :caption: The C++ library
+   :hidden:
+
+   cpp
 
 .. toctree::
    :maxdepth: 4

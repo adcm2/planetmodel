@@ -52,8 +52,8 @@ jobs:
           SKIP: no-commit-to-branch,pytest
         run: pre-commit run --all-files --show-diff-on-failure --color=always
 
-  # The fast suite: numpy and scipy, plus the `plot` and `harmonics` extras
-  # so that the plotting and pyshtools tests run rather than skip.  Every
+  # The fast suite: numpy and scipy, plus the `plot`, `harmonics` and `netcdf` extras
+  # so that the plotting and grid-transform tests run rather than skip.  Every
   # platform and every supported Python.
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.python-version }})
@@ -79,7 +79,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics"
+        run: poetry install --with dev --extras "plot harmonics netcdf maps"
 
       - name: Test with pytest
         # The default selection is the fast suite (pyproject's addopts).
@@ -111,7 +111,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics"
+        run: poetry install --with dev --extras "plot harmonics netcdf"
 
       - name: Step numpy and scipy down to their floors
         run: pip install "numpy==2.0.*" "scipy==1.15.*"
@@ -142,7 +142,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics meshing mfem"
+        run: poetry install --with dev --extras "plot harmonics meshing mfem netcdf"
 
       # gmsh's wheel needs the X and OpenGL libraries even headless.
       - name: Install gmsh's system libraries
@@ -152,6 +152,120 @@ jobs:
 
       - name: Test the meshing and export suites
         run: poetry run pytest -m "gmsh or mfem"
+
+  # The C++ library in cpp/: the fixtures written by the Python first, then
+  # the library's own tests and its consumer builds, under the two
+  # compilers its codes use, with warnings as errors.  The fixtures are
+  # required here, so a test that would skip for want of one fails.
+  cpp:
+    name: C++ library (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: g++-14
+          - compiler: clang++-18
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # netCDF-C for the model file; gmsh's wheel needs the X and OpenGL
+      # libraries even headless, for the meshes behind the manifests.
+      - name: Install netCDF-C, the compilers and gmsh's system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libnetcdf-dev g++-14 clang-18 \
+            libglu1-mesa libxrender1 libxcursor1 libxft2 libxinerama1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: |
+          pip install poetry
+          poetry config virtualenvs.create false
+
+      - name: Install dependencies
+        run: poetry install --with dev --extras "netcdf meshing mfem"
+
+      - name: Write the fixtures
+        run: poetry run python cpp/tests/make_fixtures.py
+
+      - name: Configure
+        run: >
+          cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+          -DPLANETMODEL_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build/cpp -j 4
+
+      - name: Test
+        env:
+          PLANETMODEL_REQUIRE_FIXTURES: "1"
+        run: ctest --test-dir build/cpp --output-on-failure -j 4
+
+      # What the C++ writer wrote, validated and read by the Python.
+      - name: The Python reads what the C++ wrote
+        env:
+          PLANETMODEL_CPP_WRITTEN: build/cpp/tests/written
+        run: poetry run pytest -q tests/test_cpp_written.py
+
+      # The example reader, on a file the Python wrote.
+      - name: The example reads a Python model file
+        run: build/cpp/examples/planetmodel_read_model cpp/tests/fixtures/model_stacked.nc
+
+      # The library is fetched from the repository at a tag, never from
+      # PyPI, so the Python package leaves it out.
+      - name: The package leaves cpp/ out
+        if: matrix.compiler == 'g++-14'
+        run: |
+          poetry build -o dist
+          if tar -tzf dist/*.tar.gz | grep -q '/cpp/'; then
+            echo "the sdist contains cpp/"; exit 1
+          fi
+          if unzip -l dist/*.whl | grep -q ' cpp/'; then
+            echo "the wheel contains cpp/"; exit 1
+          fi
+
+  # The C++ reference, by the Doxyfile Read the Docs builds it by: every
+  # warning, an undocumented public name among them, fails the job, and the
+  # warnings are repeated as annotations so that the checks view shows them.
+  cpp-docs:
+    name: C++ reference (Doxygen)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Doxygen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y doxygen
+          doxygen --version
+
+      - name: Build the reference
+        working-directory: cpp
+        env:
+          PLANETMODEL_DOCS_OUTPUT: ${{ github.workspace }}/build/docs
+          PLANETMODEL_VERSION: ci
+        run: |
+          # Doxygen makes the last directory of its output, not the ones above
+          mkdir -p "$PLANETMODEL_DOCS_OUTPUT"
+          set +e
+          doxygen docs/Doxyfile 2> doxygen.log
+          status=$?
+          set -e
+          cat doxygen.log
+          if [ "$status" -ne 0 ]; then
+            head -n 30 doxygen.log | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+            exit "$status"
+          fi
 
   # Everything, including whatever is marked slow.  Run by hand: Actions ->
   # CI -> Run workflow.  Worth doing before a release.
@@ -174,7 +288,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics meshing mfem"
+        run: poetry install --with dev --extras "plot harmonics meshing mfem netcdf"
 
       - name: Install gmsh's system libraries
         run: |

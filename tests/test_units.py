@@ -135,3 +135,44 @@ def test_scales_are_frozen_floats():
     assert isinstance(s.length, float)
     with pytest.raises(Exception):
         s.length = 3.0
+
+
+def test_temperature_is_the_fourth_base_dimension():
+    from planetmodel.units import BASE, TEMPERATURE
+    assert BASE == ("mass", "length", "time", "temperature")
+    assert TEMPERATURE == Dimensions(temperature=1)
+    assert TEMPERATURE.unit_string() == "K" and str(TEMPERATURE) == "Theta^1"
+    assert (TEMPERATURE / Dimensions(time=1)).unit_string() == "s-1 K"
+    assert not TEMPERATURE.is_dimensionless
+    s = Scales(length=2.0, temperature=1500.0)
+    assert s.factor(TEMPERATURE) == 1500.0 and not s.is_si
+    assert "temperature=1500" in repr(s)
+    assert Scales.SI.temperature == 1.0 and Scales() == Scales.SI
+    g = Scales.geophysical(6.371e6)
+    assert g.temperature == 1.0
+    assert Scales.geophysical(6.371e6, temperature=1600.0).temperature == 1600.0
+    with pytest.raises(ValueError, match="temperature"):
+        Scales(temperature=0.0)
+
+
+def test_a_temperature_field_converts():
+    from planetmodel import LayeredIsotropicElastic, RadialField
+    m = LayeredIsotropicElastic([0.0, 0.5, 1.0], rho=[10.0, 4.0], vp=[9.0, 7.0],
+                                vs=[4.0, 3.0])
+    hot = RadialField((0.5, 1.0), lambda r: 3000.0 - 2000.0 * r)
+    m = m.with_field(1, "temperature", hot)
+    c = m.converted(Scales(length=2.0, temperature=1000.0))
+    want = (3000.0 - 2000.0 * 0.8) / 1000.0
+    assert c.layer(1)["temperature"](0.4) == pytest.approx(want)
+    back = c.converted(Scales.SI)
+    assert back.layer(1)["temperature"](0.75) == pytest.approx(1500.0)
+
+
+def test_numpy_scalars_are_numbers():
+    import numpy as np
+
+    assert Scales(length=np.int64(2), mass=np.float32(3.0)).length == 2.0
+    assert Dimensions(mass=np.int64(1)) == MASS
+    assert MASS ** np.int64(2) == Dimensions(mass=2)
+    with pytest.raises(ValueError):
+        Scales(length=True)

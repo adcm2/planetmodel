@@ -20,8 +20,13 @@ Modules reached by name, one level down:
   catalogue    PREM, LayeredIsotropicElastic and MineosModel, model types
   deck         tabulated models: decks, their formats, fields by interpolation
   sampling     a model on a radial mesh times an angular grid
-  harmonics    real spherical harmonics; grid transforms via pyshtools (optional)
-  plotting     radial profiles drawn one way, radius upward (matplotlib, optional)
+  lateral      values between the nodes of an angular grid: the lateral rules
+  modelfile    the model file: a model in one netCDF file (netCDF4, optional)
+  harmonics    real spherical harmonics; grid transforms via ducc0 (optional)
+  slices       a field on a sphere, a section or a profile; spectra and
+               correlations by degree
+  plotting     profiles, sections, maps and spectra drawn (matplotlib and
+               cartopy, optional), and VTK files for ParaView
   mesh1d       radial spectral-element meshes (GLL), nodal values, gravity
   mesh3d       2D and 3D meshes via gmsh, and MFEM export
   randomfield  Matern random fields on balls, annuli and layers
@@ -40,6 +45,7 @@ from .behaviours import (
 from .catalogue import PREM, LayeredIsotropicElastic, MineosModel
 from .character import DENSITY, ELASTIC, SCALAR, STRESS, VECTOR, Character, Symmetry
 from .deck import (
+    GIA,
     MINEOS,
     Deck,
     DeckFormat,
@@ -56,6 +62,7 @@ from .displacement import (
     flattening,
     layer_linear,
 )
+from .expansions import HarmonicField, HarmonicFunction
 from .fields import (
     AnalyticField,
     ComposedField,
@@ -64,8 +71,10 @@ from .fields import (
     RadialField,
     constant_field,
 )
+from .frames import from_geographic, geographic
 from .geometry import Geometry, InterfaceInfo, LayerInfo
-from .harmonics import analyse_grid, real_harmonics, synthesise, synthesise_grid
+from .gridded import GriddedDisplacement, GriddedField, GriddedFunction
+from .harmonics import real_harmonics, synthesise
 from .layerfunction import (
     LayerFunction,
     NumericLayer,
@@ -87,9 +96,11 @@ from .mapping import (
     validity_lattice,
 )
 from .materials import ElasticField, elastic_moduli, is_fluid, kappa_mu, moduli
+from .means import spherical_mean, spherically_averaged
 from .mesh1d import RadialMesh
 from .mesh1d.gravity import gravity, gravity_fields, mass
 from .model import CoarseningFit, Layer, Model
+from .perturbation import PerturbedField, perturbed, unperturbed
 from .pushforward import PulledBackField, PushedForwardField, pull_back, push_forward
 from .rheology import (
     dispersive_moduli,
@@ -98,7 +109,14 @@ from .rheology import (
     is_viscoelastic,
     reference_omega,
 )
-from .sampling import AngularGrid, Sample, equiangular, gauss_legendre, sample
+from .sampling import (
+    AngularGrid,
+    Sample,
+    driscoll_healy,
+    equiangular,
+    gauss_legendre,
+    sample,
+)
 from .skeleton import CoarseningMap, Location, Skeleton
 from .units import EARTH_MEAN_DENSITY, G_SI, Dimensions, Scales
 from .vocabulary import CONSTANTS, VOCABULARY, Constant, FieldSpec
@@ -148,6 +166,16 @@ __all__ = [
     "AnalyticField",
     "ComposedField",
     "constant_field",
+    "GriddedField",
+    "GriddedFunction",
+    "GriddedDisplacement",
+    "HarmonicField",
+    "HarmonicFunction",
+    "PerturbedField",
+    "perturbed",
+    "unperturbed",
+    "spherical_mean",
+    "spherically_averaged",
     "ElasticField",
     "is_fluid",
     "moduli",
@@ -185,6 +213,7 @@ __all__ = [
     "Deck",
     "DeckFormat",
     "MINEOS",
+    "GIA",
     "read_deck",
     "write_deck",
     "deck_layers",
@@ -195,11 +224,12 @@ __all__ = [
     "Sample",
     "sample",
     "gauss_legendre",
+    "driscoll_healy",
     "equiangular",
+    "geographic",
+    "from_geographic",
     "real_harmonics",
     "synthesise",
-    "synthesise_grid",
-    "analyse_grid",
     "gravity",
     "mass",
     "gravity_fields",

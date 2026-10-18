@@ -95,6 +95,8 @@ VOCABULARY: dict[str, FieldSpec] = {
         meaning="the second elasticity tensor, static, Voigt-reduced in the "
                 "spherical frame"),
     "viscosity": FieldSpec(SCALAR, units.VISCOSITY, meaning="dynamic viscosity"),
+    "temperature": FieldSpec(SCALAR, units.TEMPERATURE,
+                             meaning="absolute temperature"),
     "g": FieldSpec(SCALAR, units.GRAVITY,
                    meaning="gravitational acceleration of the spherically "
                            "symmetric reference, radially inward, by magnitude"),

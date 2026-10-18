@@ -51,7 +51,7 @@ testing.check_model(earthlike)
 # %% [markdown]
 # ## An ellipsoidal planet
 #
-# `flattening(f, rmax=...)` is the displacement `h = -(2f/3) r P2(cos
+# `flattening(f)` is the displacement `h = -(2f/3) r P2(cos
 # theta)`, with `P2` the degree-2 Legendre polynomial, and it carries its
 # derivatives in closed form. It moves the pole of a sphere of radius
 # `r` inward to `r (1 - 2f/3)` and the equator outward to `r (1 + f/3)`,
@@ -67,7 +67,7 @@ testing.check_model(earthlike)
 # folding.
 
 # %%
-oblate = earthlike.stretched(flattening(1 / 300, rmax=1.0))
+oblate = earthlike.stretched(flattening(1 / 300))
 print(oblate.geometry.validity())
 X = cartesian_points([1.0, 1.0], [0.0, np.pi / 2], [0.0, 0.0])
 polar, equatorial = np.linalg.norm(oblate.geometry.mapping(X), axis=-1)

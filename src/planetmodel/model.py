@@ -15,7 +15,7 @@ the function that needs a field asks the layer for it.  Behaviour
 shared by groups of models is a free function of a layer or a model.
 
 Units live here and nowhere else.  A field is numbers; the model's
-`scales` say what one stored unit of length, mass and time is in SI,
+`scales` say what one stored unit of each base dimension is in SI,
 and `converted` re-expresses the whole model, geometry included, in
 other scales, by name and exactly for polynomial layers.  A constant is
 read in the model's units, `G` included.
@@ -23,7 +23,8 @@ read in the model's units, `G` included.
 Surgery goes through the geometry's own and carries the fields: a
 split layer's fields are re-stated on each part, a cut layer's on its
 remainder, and appended shells hold the fields they are given.  Every
-change is a copy that validates again.
+change is a copy, and every change that can break the model's
+invariants (its fields, its layering) validates the copy again.
 
 A model type is a class derived from `Model` alone, plus the stateless
 behaviour mixins of `planetmodel.behaviours` that wrap the free
@@ -249,7 +250,7 @@ class Model:
 
     @property
     def scales(self) -> Scales:
-        """What one stored unit of length, mass and time is in SI."""
+        """What one stored unit of each base dimension is in SI."""
         return self._scales
 
     @property

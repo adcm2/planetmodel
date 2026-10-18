@@ -51,7 +51,8 @@ def test_shell_refusals():
         MeshSpec(g, COARSE, shells=[Shell(radius=1.5, name="a"),
                                     Shell(radius=1.4, name="b")])
     with pytest.raises(ValueError, match="unique"):
-        MeshSpec(g, COARSE, shells=[Shell(ratio=0.2), Shell(ratio=0.2)])
+        MeshSpec(g, COARSE, shells=[Shell(ratio=0.2, name="x"),
+                                    Shell(ratio=0.2, name="x")])
     with pytest.raises(TypeError, match="Shell instances"):
         MeshSpec(g, COARSE, shells=[0.2])
 

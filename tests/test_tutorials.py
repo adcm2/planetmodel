@@ -33,6 +33,23 @@ def test_core_tutorials(script):
     run(script)
 
 
+@pytest.mark.netcdf
+@pytest.mark.maps
+def test_the_model_file_tutorial():
+    """Not strict: netCDF4 1.7.4 warns under numpy 2.5 when it writes."""
+    pytest.importorskip("netCDF4")
+    pytest.importorskip("cartopy")
+    run("12_a_laterally_varying_model.py", strict=False)
+
+
+@pytest.mark.maps
+@pytest.mark.harmonics
+def test_the_pictures_tutorial():
+    pytest.importorskip("cartopy")
+    pytest.importorskip("ducc0")
+    run("13_pictures.py")
+
+
 @pytest.mark.gmsh
 @pytest.mark.mfem
 @pytest.mark.parametrize("script", ["04_a_mesh_for_mfem.py", "09_fields_for_mfem.py"])

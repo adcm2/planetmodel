@@ -19,14 +19,14 @@ a shell and of the layers of a skeleton, by Karhunen-Loeve expansion in
 those bases, with an exact marginal standard deviation.  The shell
 fields are expanded in the real orthonormal harmonics of
 `planetmodel.harmonics`, whose grid synthesis needs the `harmonics`
-extra (pyshtools); everything else here is numpy and scipy.  `fields`
+extra (ducc0); everything else here is numpy and scipy.  `fields`
 states the construction of the samplers, `basis` that of the bases.
 
     grf = RadialGRF(r1, r2, nu, lam, sigma=sigma)
     grf.to_field(grf.sample(rng=rng))              # a RadialField
     shell = SphericalGRF(r1, r2, nu, lam, lmax=24)
-    shell.to_field(shell.sample(rng=rng))          # an AnalyticField
-    shell.sample_grid(gauss_legendre(24), rng=rng)   # nodes x grid, pyshtools
+    shell.to_field(shell.sample(rng=rng))          # a HarmonicField
+    shell.sample_grid(gauss_legendre(24), rng=rng)   # nodes x grid, ducc0
     LayeredGRF(model, nu, lam, layers=mantle).sample(rng=rng)
 
     mesh = padded_mesh(a, b, pad=2 * matern_reach(nu, lam), weight="one")

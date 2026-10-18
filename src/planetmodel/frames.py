@@ -20,6 +20,11 @@ engineering-strain factors; `bond_matrix` is the (6, 6) matrix that
 moves such components between frames, `voigt_to_tensor` and
 `tensor_to_voigt` go between the two forms.
 
+Geographic coordinates are degrees: latitude 90 - theta, north positive,
+and longitude phi east in [0, 360).  `geographic` and `from_geographic`
+are the one definition of the conversion, the poles landing exactly on
+theta = 0 and pi and any longitude range reduced to one turn.
+
 Nothing here depends on the rest of the package.
 """
 from __future__ import annotations
@@ -30,9 +35,9 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 __all__ = ["spherical_frame", "spherical_coordinates", "cartesian_points",
-           "rotate_slots", "rotation_subscripts", "MAX_RANK",
-           "VOIGT_PAIRS", "bond_matrix", "voigt_to_tensor", "tensor_to_voigt",
-           "SphericalFunction"]
+           "geographic", "from_geographic", "wrapped", "rotate_slots",
+           "rotation_subscripts", "MAX_RANK", "VOIGT_PAIRS", "bond_matrix",
+           "voigt_to_tensor", "tensor_to_voigt", "SphericalFunction"]
 
 #: A function of (r, theta, phi), given broadcast float arrays and returning
 #: something array-like at each point: a displacement, a formula, a relief's
@@ -82,8 +87,10 @@ def spherical_coordinates(X: ArrayLike
         raise ValueError(f"expected points of shape (..., 3), got {X.shape}")
     x, y, z = X[..., 0], X[..., 1], X[..., 2]
     r = np.sqrt(x * x + y * y + z * z)
-    safe = np.where(r > 0.0, r, 1.0)
-    theta = np.arccos(np.clip(z / safe, -1.0, 1.0))
+    # atan2 keeps theta accurate near the polar axis, where arccos(z / r)
+    # loses it: a point a distance d from the axis has theta to about
+    # 1e-16 relative, not 1e-16 / theta
+    theta = np.where(r > 0.0, np.arctan2(np.hypot(x, y), z), 0.5 * np.pi)
     phi = np.arctan2(y, x)
     return r, theta, phi, spherical_frame(theta, phi)
 
@@ -96,6 +103,48 @@ def cartesian_points(r: ArrayLike, theta: ArrayLike, phi: ArrayLike) -> np.ndarr
     st, ct = np.sin(theta), np.cos(theta)
     return np.stack([r * st * np.cos(phi), r * st * np.sin(phi), r * ct],
                     axis=-1)
+
+
+def wrapped(x: ArrayLike, *, start: float = 0.0,
+            period: float = 2.0 * np.pi) -> np.ndarray:
+    """Angles reduced into [start, start + period), by whole periods.
+
+    np.mod alone can round a small negative offset up to the period
+    itself; that case is brought back to `start`.
+    """
+    d = np.mod(np.asarray(x, dtype=float) - start, period)
+    return np.asarray(start + np.where(d >= period, d - period, d))
+
+
+def geographic(theta: ArrayLike, phi: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
+    """(theta, phi) in radians -> (latitude, longitude) in degrees.
+
+    Latitude is 90 - theta in degrees, north positive; longitude is phi
+    in degrees east, reduced into [0, 360).  theta must lie in [0, pi].
+    With `from_geographic` this is the one definition of the conversion.
+    """
+    theta, phi = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                     np.asarray(phi, dtype=float))
+    if np.any(theta < 0.0) or np.any(theta > np.pi):
+        raise ValueError("colatitudes must lie in [0, pi]")
+    return np.asarray(90.0 - np.rad2deg(theta)), wrapped(np.rad2deg(phi), period=360.0)
+
+
+def from_geographic(latitude: ArrayLike, longitude: ArrayLike
+                    ) -> tuple[np.ndarray, np.ndarray]:
+    """(latitude, longitude) in degrees -> (theta, phi) in radians.
+
+    theta = 90 - latitude in radians, the poles at exactly 0 and pi;
+    phi is the longitude east in radians, from any range (-180 to 180,
+    0 to 360, or beyond) reduced into [0, 2 pi).  Latitude must lie in
+    [-90, 90].
+    """
+    latitude, longitude = np.broadcast_arrays(np.asarray(latitude, dtype=float),
+                                              np.asarray(longitude, dtype=float))
+    if np.any(np.abs(latitude) > 90.0):
+        raise ValueError("latitudes must lie in [-90, 90]")
+    theta = np.asarray(np.clip(np.deg2rad(90.0 - latitude), 0.0, np.pi))
+    return theta, wrapped(np.deg2rad(longitude))
 
 
 def rotation_subscripts(rank: int) -> str:

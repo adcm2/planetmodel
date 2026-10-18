@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from planetmodel import PREM, Skeleton, real_harmonics, synthesise, testing
+from planetmodel.expansions import HarmonicField
 from planetmodel.randomfield import LayeredGRF, RadialGRF, SphericalGRF
 
 
@@ -36,6 +37,28 @@ def test_radial_grf_normalisation_and_stats():
         RadialGRF(0.5, 1.0, -1.0, 0.1)
     with pytest.raises(ValueError):
         g.to_layer(u[0, :3])
+
+
+def test_a_batch_is_successive_draws():
+    """For the sampler and both white noises, a batch of `size` is `size`
+    successive single draws from one generator: the same normals, so the
+    same samples to the rounding of the matrix product, which differs
+    between a product with a vector and one with a matrix."""
+    from planetmodel.randomfield import RadialOperatorFamily, SpectralBasis, padded_mesh
+    g = RadialGRF(0.5, 1.0, 1.0, 0.1)
+    fam = RadialOperatorFamily(padded_mesh(0.5, 1.0, pad=0.3, weight="r2", ngll=5,
+                                           drmax=0.1), kappa=0.02, weight="r2")
+    basis = SpectralBasis(fam, 2, nmodes=5)
+    cases = ((lambda rng: g.sample(rng=rng), lambda rng: g.sample(rng=rng, size=3)),
+             (lambda rng: basis.white_noise(rng=rng),
+              lambda rng: basis.white_noise(rng=rng, size=3).T),
+             (lambda rng: fam.white_noise(2, rng=rng),
+              lambda rng: fam.white_noise(2, rng=rng, size=3).T))
+    for single, batch in cases:
+        rng = np.random.default_rng(4)
+        each = np.array([single(rng) for _ in range(3)])
+        assert np.allclose(batch(np.random.default_rng(4)), each, rtol=0.0,
+                           atol=1e-13 * np.abs(each).max())
 
 
 def test_the_samplers_are_built_on_their_bases():
@@ -162,6 +185,7 @@ def test_shell_as_a_field():
     assert np.max(np.abs(pp(g.r[j]) - c[..., j])) < 1e-12
     field = g.to_field(c, name="dv")
     testing.check_field(field)
+    assert isinstance(field, HarmonicField) and field.lmax == 8
     assert field.name == "dv" and field.interval == (0.7, 1.0)
     r = np.array([0.75, 0.9])
     theta = np.array([0.3, 1.2])

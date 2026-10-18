@@ -152,3 +152,32 @@ def test_family_on_radialmesh():
     v = np.ones(fam.ndof(2))
     assert fam.inner(2, 1.0, v, v) > fam.inner(2, 0.0, v, v) > 0.0
     assert "cached degrees: [2]" in repr(fam)
+
+
+def test_interval_robin_spectrum():
+    """f' = +-gamma f at the ends of [0, L] under weight one: the
+    eigenvalues 1 + kappa w^2 with (w^2 - g^2) sin(wL) = 2 g w cos(wL)."""
+    L, kap, gam = 1.0, 0.04, 2.0
+    fam = RadialOperatorFamily(Mesh1D([0.0, L], ngll=6, drmax=0.05), kappa=kap,
+                               weight="one", robin=gam)
+
+    def f(w):
+        return (w ** 2 - gam ** 2) * np.sin(w * L) - 2.0 * gam * w * np.cos(w * L)
+
+    xs = np.linspace(1e-6, 15.0, 30000)
+    v = f(xs)
+    roots = [brentq(f, a, b) for a, b, va, vb in zip(xs[:-1], xs[1:], v[:-1], v[1:])
+             if va * vb < 0][:4]
+    assert np.allclose(fam.eigvalsh(0)[:4], 1.0 + kap * np.array(roots) ** 2,
+                       rtol=1e-8)
+
+
+def test_eig_by_count_keeps_every_mode_asked_for():
+    from planetmodel.randomfield import SpectralBasis
+
+    fam = RadialOperatorFamily(Mesh1D([0.0, 1.0], ngll=10, drmax=0.01), kappa=1.0)
+    for k in (1, 2, 3, 5):
+        assert SpectralBasis(fam, 0, nmodes=k).nmodes == k
+        theta, Phi = fam.eig(0, count=k)
+        assert theta.size == k == Phi.shape[1]
+        assert np.allclose(theta, fam.eigvalsh(0)[:k], rtol=1e-9)

@@ -84,7 +84,8 @@ held to the same call.
 pip install planetmodel                     # numpy and scipy only
 pip install 'planetmodel[meshing]'          # 2D and 3D meshes via gmsh
 pip install 'planetmodel[mfem]'             # export to MFEM (PyMFEM)
-pip install 'planetmodel[harmonics]'        # grid transforms via pyshtools and ducc0
+pip install 'planetmodel[harmonics]'        # spherical-harmonic grid transforms via ducc0
+pip install 'planetmodel[netcdf]'           # the model file (netCDF4)
 pip install 'planetmodel[plot]'             # matplotlib, for the figures
 pip install 'planetmodel[notebook]'         # ipykernel, to run tutorials cell by cell
 ```
@@ -108,17 +109,18 @@ print(gravity(m, [r_cmb, 6371e3]))                 # gravity at the CMB and surf
 
 # Reshape the model: non-dimensionalise it, flatten it by 1/300, and
 # lay a radial spectral-element mesh over it.
-nd = m.nondimensionalised().stretched(flattening(1 / 300, rmax=1.0))
+nd = m.nondimensionalised().stretched(flattening(1 / 300))
 mesh = RadialMesh(nd, ngll=5, drmax=0.05)
 print(mesh.nodal(nd, "rho").shape)      # density at every mesh node
 ```
 
 ## Where to go next
 
-- `examples/tutorials/`: eleven walkthroughs, from a skeleton to random
-  fields and deck files, each a `# %%` script that runs headless.
-- `src/planetmodel/mesh3d/manifest.py`: the manifest beside every mesh,
-  its schema described from the consumer's side.
+- `examples/tutorials/`: twelve walkthroughs, from a skeleton to random
+  fields, deck files and a laterally varying model in a model file, each
+  a `# %%` script that runs headless.
+- `docs/source/formats/`: the model file and the manifest beside every
+  mesh, described for the codes that read them (also on Read the Docs).
 - `CONTRIBUTING.md`: the development setup, the hooks, the test
   selections and how a release is made.
 

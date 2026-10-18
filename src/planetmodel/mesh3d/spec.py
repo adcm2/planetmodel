@@ -71,8 +71,10 @@ class Shell:
     Exactly one of `ratio` and `radius` gives the outer radius b of the
     shell: `ratio` is b / a - 1 with a the radius of the boundary the
     shell is attached to (the geometry's outer boundary, or the previous
-    shell's), `radius` is b itself.  `name` names the layer; its outer
-    boundary takes the default interface name.
+    shell's), `radius` is b itself.  `name` names the layer: by default
+    `buffer`, or `buffer_<k>` for the k-th shell, counted from one, when
+    a spec has more than one; its outer boundary takes the default
+    interface name.
     """
 
     _: KW_ONLY
@@ -80,8 +82,8 @@ class Shell:
     ratio: float | None = None
     #: b, the outer radius of the shell, in the geometry's lengths.
     radius: float | None = None
-    #: The layer's name in the mesh and the manifest.
-    name: str = "buffer"
+    #: The layer's name in the mesh and the manifest; None for the default.
+    name: str | None = None
 
     def __post_init__(self) -> None:
         if (self.ratio is None) == (self.radius is None):
@@ -542,12 +544,22 @@ class MeshSpec:
                 raise ValueError(
                     f"refinements[{i}] has far_size ({fine.far_size}) below its "
                     f"size ({fine.size}): it would coarsen towards its target")
+            try:
+                probe = np.shape(fine(np.zeros((1, self.dimension))))
+            except Exception as error:
+                raise ValueError(
+                    f"refinements[{i}] cannot be evaluated at points of a "
+                    f"{self.dimension}-dimensional mesh: {error}") from error
+            if probe != (1,):
+                raise ValueError(
+                    f"refinements[{i}] returns shape {probe} for one point; a "
+                    "refinement returns one size per point")
         inner = float(self.geometry.skeleton.boundaries[-1])
-        for shell in self.shells:
+        for name, shell in zip(self.shell_names, self.shells):
             outer = shell.outer_radius(inner)
             if not outer > inner:
                 raise ValueError(
-                    f"shell {shell.name!r} has outer radius {outer:g}, not above "
+                    f"shell {name!r} has outer radius {outer:g}, not above "
                     f"the boundary it is attached to at {inner:g}")
             inner = outer
         self.domain     # names must be unique across the geometry and the shells
@@ -561,6 +573,14 @@ class MeshSpec:
             inner = shell.outer_radius(inner)
             radii.append(inner)
         return tuple(radii)
+
+    @property
+    def shell_names(self) -> list[str]:
+        """The layer names of the shells, the defaults of `Shell` filled in."""
+        many = len(self.shells) > 1
+        return [shell.name if shell.name is not None
+                else (f"buffer_{k}" if many else "buffer")
+                for k, shell in enumerate(self.shells, start=1)]
 
     @property
     def outer_radius(self) -> float:
@@ -582,7 +602,7 @@ class MeshSpec:
         sk = g.skeleton.extended(self.shell_radii)
         return Geometry(
             sk, mapping=g.mapping,
-            layer_names=[lay.name for lay in g.layers] + [s.name for s in self.shells],
+            layer_names=[lay.name for lay in g.layers] + self.shell_names,
             interface_names=[f.name for f in g.interfaces] + [None] * len(self.shells),
             rtol=g.rtol, check=False)
 

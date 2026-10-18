@@ -62,8 +62,9 @@ def lagrange_basis(nodes: ArrayLike, x: ArrayLike) -> np.ndarray:
     """Values L[j, i] = l_i(x_j) of the Lagrange basis at points x.
 
     Uses the second barycentric form for stability; points coinciding
-    with a node are handled exactly.  Useful for interpolating a
-    spectral-element solution off its nodes.
+    with a node, or so near one that the barycentric quotient would
+    overflow, take that node's basis exactly.  Useful for interpolating
+    a spectral-element solution off its nodes.
     """
     nodes = np.asarray(nodes, dtype=float)
     x = np.atleast_1d(np.asarray(x, dtype=float))
@@ -72,7 +73,7 @@ def lagrange_basis(nodes: ArrayLike, x: ArrayLike) -> np.ndarray:
     wb = 1.0 / diff.prod(axis=1)          # barycentric weights
     d = x[:, None] - nodes[None, :]
     L = np.zeros((x.size, nodes.size))
-    hit = d == 0.0
+    hit = np.abs(d) <= np.abs(wb)[None, :] * (nodes.size / np.finfo(float).max)
     on_node = hit.any(axis=1)
     L[on_node] = hit[on_node]
     off = ~on_node

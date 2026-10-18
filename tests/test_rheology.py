@@ -92,3 +92,50 @@ def test_frozen_model():
         frozen(model, 0.0)
     with pytest.raises(ValueError):
         frozen(model, 1.0, reference_omega=-1.0)
+
+
+def test_a_frozen_model_is_not_frozen_again():
+    cold = frozen(PREM(ocean=False), 1e-3)
+    with pytest.raises(ValueError, match="already frozen"):
+        frozen(cold, 1e-3)
+
+
+def test_a_frozen_model_refuses_what_would_leave_its_moduli_stale():
+    """Replacing rho, a velocity or a Q field would rebuild or outdate the
+    complex moduli, and coarsening would refit them from the real
+    velocities; a field the moduli do not depend on is still attached."""
+    from planetmodel.rheology import is_frozen
+
+    warm = PREM(ocean=False)
+    cold = frozen(warm, 2 * np.pi / 3600.0)
+    assert is_frozen(cold) and not is_frozen(warm)
+    lay = cold.layer("lower_mantle")
+    iv = lay.interval
+    for name in ("rho", "vsv", "L", "qmu"):
+        with pytest.raises(ValueError, match=f"frozen at omega.*derived from '{name}'"):
+            cold.with_field("lower_mantle", name, lay[name], replace=True)
+    with pytest.raises(ValueError, match="frozen at omega.*viscosity"):
+        cold.with_field("lower_mantle", "viscosity",
+                        constant_field(iv, 1e21, name="viscosity"))
+    with pytest.raises(ValueError, match="frozen at omega.*coarsening"):
+        cold.coarsened(drop=["d771"])
+    tagged = cold.with_field("lower_mantle", "tracer", constant_field(iv, 1.0))
+    assert tagged.layer("lower_mantle")["L"] is lay["L"]
+    # the way out the refusal names: change the elastic model, freeze again
+    vsv = warm.layer("lower_mantle")["vsv"]
+    slow = warm.with_field("lower_mantle", "vsv", 0.9 * vsv, replace=True)
+    assert frozen(slow, 2 * np.pi / 3600.0).layer("lower_mantle")["L"].dtype == complex
+
+
+def test_moduli_conversions_keep_complex_numbers():
+    from planetmodel.materials import kappa_mu_from_moduli, moduli_from_velocities
+
+    cold = frozen(PREM(ocean=False), 1e-3).layer("lower_mantle")
+    r = 5e6
+    five = [cold[n](r) for n in ("A", "C", "F", "L", "N")]
+    kappa, mu = kappa_mu_from_moduli(*five)
+    k_field, mu_field = kappa_mu(cold)
+    assert np.iscomplexobj(mu) and np.isclose(mu, mu_field(r), rtol=1e-12)
+    assert np.isclose(kappa, k_field(r), rtol=1e-12)
+    out = moduli_from_velocities(1.0, 2.0 + 0.1j, 1.0)
+    assert np.isclose(out["C"], (2.0 + 0.1j) ** 2)

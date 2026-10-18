@@ -158,3 +158,102 @@ def test_every_public_name_has_a_docstring():
         if rows:
             offenders[str(path.relative_to(root))] = rows
     assert not offenders, f"undocumented public names: {offenders}"
+
+
+# No top-level name needs an extra (standing rule 10): anything that does
+# is reached through its module.  Read from the source: a function needs
+# an extra when it imports one, when its module imports one at the top,
+# or when it calls by name, outside any branch, a function that does, in
+# its own module or through a name imported from another module of the
+# package.  A call inside an `if`, a conditional expression, a `try` or a
+# `match` is an option the caller may take, not a need.  Calls through
+# attributes (`self.f()`, `module.f()`) are not followed.
+def _module_name(path, root):
+    parts = list(path.relative_to(root.parent).with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts), path.name == "__init__.py"
+
+
+def _resolve(mod, is_package, node):
+    """The absolute module an `ImportFrom` names."""
+    if not node.level:
+        return node.module or ""
+    base = mod.split(".") if is_package else mod.split(".")[:-1]
+    base = base[:len(base) - (node.level - 1)]
+    return ".".join(base + ([node.module] if node.module else []))
+
+
+_BRANCHES = (ast.If, ast.IfExp, ast.Try, ast.Match)
+
+
+def _unconditional_calls(fn):
+    """The names a function calls outside every branch of its body."""
+    names, stack = set(), list(ast.iter_child_nodes(fn))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, _BRANCHES):
+            continue
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            names.add(node.func.id)
+        stack.extend(ast.iter_child_nodes(node))
+    return names
+
+
+def _needs_extra(extra_modules):
+    root = Path(planetmodel.__file__).parent
+    extras = set(extra_modules)
+    imports_extra = lambda n: (
+        isinstance(n, ast.Import) and any(a.name.split(".")[0] in extras
+                                          for a in n.names)
+        or isinstance(n, ast.ImportFrom) and not n.level
+        and (n.module or "").split(".")[0] in extras)
+    calls, needs = {}, set()
+    for path in sorted(root.rglob("*.py")):
+        mod, is_package = _module_name(path, root)
+        tree = ast.parse(path.read_text())
+        heavy = any(imports_extra(n) for n in tree.body)
+        names = {}
+        for n in tree.body:
+            if isinstance(n, ast.ImportFrom) and n.level:
+                for a in n.names:
+                    names[a.asname or a.name] = (_resolve(mod, is_package, n), a.name)
+        defs = [(n.name, n) for n in tree.body if isinstance(n, ast.FunctionDef)]
+        for cls in (n for n in tree.body if isinstance(n, ast.ClassDef)):
+            defs += [(f"{cls.name}.{f.name}", f) for f in cls.body
+                     if isinstance(f, ast.FunctionDef)]
+        local = {name for name, _ in defs}
+        for name, fn in defs:
+            key = (mod, name)
+            if heavy or any(imports_extra(n) for n in ast.walk(fn)):
+                needs.add(key)
+            called = _unconditional_calls(fn)
+            calls[key] = ({(mod, c) for c in called if c in local}
+                          | {names[c] for c in called if c in names})
+    grown = True
+    while grown:
+        more = {k for k, callees in calls.items() if callees & needs} - needs
+        needs |= more
+        grown = bool(more)
+    return needs
+
+
+def test_no_top_level_function_needs_an_extra(extra_modules):
+    needs = _needs_extra(extra_modules)
+    # the analysis sees what it should: these do need an extra
+    assert ("planetmodel.harmonics", "analyse_grid") in needs
+    assert ("planetmodel.randomfield.fields", "SphericalGRF.sample_grid") in needs
+    assert ("planetmodel.mesh3d.layered", "build_layered_mesh") in needs
+    offenders = []
+    for name in planetmodel.__all__:
+        obj = getattr(planetmodel, name)
+        if inspect.isfunction(obj):
+            keys = [(obj.__module__, obj.__qualname__)]
+        elif inspect.isclass(obj):
+            keys = [(obj.__module__, f"{obj.__qualname__}.{m}")
+                    for m in ("__init__", "__post_init__", "__new__")]
+        else:
+            continue
+        if any(k in needs for k in keys):
+            offenders.append(name)
+    assert not offenders, f"top-level names needing an extra: {offenders}"

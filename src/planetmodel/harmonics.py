@@ -24,68 +24,184 @@ out as a vector: by degree, then the cosine harmonics of orders
 Two routes.  `real_harmonics` and `synthesise` evaluate the basis at
 arbitrary points through scipy, vectorised over the points: the
 definition, and the oracle everything else is held to.  `synthesise_grid`
-and `analyse_grid` go between coefficients and values on a
-Gauss-Legendre `AngularGrid` through pyshtools, with the ducc0 backend
-selected where it is installed: fast transforms, exact for a field
-band-limited to the grid's degree, needing the `harmonics` extra.  The
-grid is `gauss_legendre(lmax)` of `planetmodel.sampling`, whose nodes
-are pyshtools' GLQ nodes and whose 2 lmax + 1 longitudes are the count
-pyshtools takes.
+and `analyse_grid` go between coefficients and values on a grid of a
+shipped kind -- Gauss-Legendre, Driscoll-Healy, or equiangular with or
+without the poles, from `planetmodel.sampling` -- through ducc0's
+transforms: fast, exact for a field band-limited to the grid's band,
+and needing the `harmonics` extra.  The longitudes may start anywhere
+and number anything from 2 lmax + 1 up, provided they are equally
+spaced.  `synthesise_points` is the fast counterpart of `synthesise` at
+arbitrary points, through ducc0's non-uniform synthesis, accurate to
+about `POINT_EPSILON` of the field's largest value rather than to
+rounding, and `synthesise_points_gradient` gives the two angular derivatives
+there the same way.  ducc0 holds complex coefficients a_lm for m >= 0 in healpy's
+order, with the Condon-Shortley phase; the real ones here are
+
+    a_l0 = c[0, l, 0],    a_lm = (-1)^m (c[0, l, m] - i c[1, l, m]) / sqrt 2,
+
+and that is the whole of the conversion.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import ModuleType
 from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike
-from scipy.special import sph_harm_y
+from scipy.special import sph_harm_y_all
+
+from .frames import wrapped
 
 if TYPE_CHECKING:
     from .sampling import AngularGrid
 
-__all__ = ["real_harmonics", "synthesise", "synthesise_grid", "analyse_grid",
-           "packing"]
+__all__ = ["real_harmonics", "real_harmonics_gradient", "synthesise",
+           "synthesise_gradient", "synthesise_grid", "analyse_grid",
+           "synthesise_points", "synthesise_points_gradient", "packing",
+           "POINT_EPSILON"]
+
+#: The relative accuracy asked of ducc0's synthesis at arbitrary points.
+POINT_EPSILON = 1e-13
+
+#: A basis of the real harmonics: (lmax, theta, phi) -> (2, L + 1, L + 1) + points.
+type Basis = Callable[[int, np.ndarray, np.ndarray], np.ndarray]
+
+
+def _complex_basis(lmax: int, theta: np.ndarray, phi: np.ndarray, *,
+                   gradient: bool) -> tuple[np.ndarray, ...]:
+    """scipy's complex harmonics of orders 0 ... lmax, the Condon-Shortley
+    phase removed: (L + 1, L + 1) + points, with their (d/dtheta, d/dphi)
+    when `gradient` asks."""
+    m = np.arange(lmax + 1).reshape((1, -1) + (1,) * theta.ndim)
+    sign = (-1.0) ** m
+    if not gradient:
+        Y = sph_harm_y_all(lmax, lmax, theta, wrapped(phi))
+        return (sign * Y[:, :lmax + 1],)
+    Y, dY = sph_harm_y_all(lmax, lmax, theta, wrapped(phi), diff_n=1)
+    return (sign * Y[:, :lmax + 1], sign * dY[:, :lmax + 1, ..., 0],
+            sign * dY[:, :lmax + 1, ..., 1])
+
+
+def _real(y: np.ndarray, lmax: int) -> np.ndarray:
+    """The real basis (2, L + 1, L + 1) + points from the complex one."""
+    out = np.zeros((2,) + y.shape)
+    scale = np.full(lmax + 1, np.sqrt(2.0))
+    scale[0] = 1.0
+    scale = scale.reshape((1, -1) + (1,) * (y.ndim - 2))
+    out[0] = scale * y.real
+    out[1] = np.sqrt(2.0) * y.imag
+    out[1][:, 0] = 0.0
+    keep = np.arange(lmax + 1)[None, :] <= np.arange(lmax + 1)[:, None]
+    return out * keep.reshape(keep.shape + (1,) * (y.ndim - 2))
+
+
+def _points(lmax: int, theta: ArrayLike, phi: ArrayLike
+            ) -> tuple[int, np.ndarray, np.ndarray]:
+    """The degree and the points broadcast together, checked."""
+    lmax = int(lmax)
+    if lmax < 0:
+        raise ValueError("lmax must be non-negative")
+    theta, phi = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                     np.asarray(phi, dtype=float))
+    return lmax, theta, phi
 
 
 def real_harmonics(lmax: int, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
     """The basis up to degree `lmax` at colatitudes `theta` and longitudes
     `phi` (broadcast together): shape (2, lmax + 1, lmax + 1) + points."""
-    lmax = int(lmax)
-    if lmax < 0:
-        raise ValueError("lmax must be non-negative")
-    theta = np.asarray(theta, dtype=float)
-    phi = np.asarray(phi, dtype=float)
-    shape = np.broadcast_shapes(theta.shape, phi.shape)
-    theta = np.broadcast_to(theta, shape)
-    phi = np.broadcast_to(phi, shape)
-    out = np.zeros((2, lmax + 1, lmax + 1) + shape)
-    for l in range(lmax + 1):
-        m = np.arange(l + 1)
-        y = sph_harm_y(l, m.reshape((-1,) + (1,) * len(shape)), theta[None], phi[None])
-        sign = ((-1.0) ** m).reshape((-1,) + (1,) * len(shape))
-        y = y * sign
-        out[0, l, 0] = y[0].real
-        if l:
-            out[0, l, 1:l + 1] = np.sqrt(2.0) * y[1:].real
-            out[1, l, 1:l + 1] = np.sqrt(2.0) * y[1:].imag
-    return out
+    lmax, theta, phi = _points(lmax, theta, phi)
+    return _real(_complex_basis(lmax, theta, phi, gradient=False)[0], lmax)
 
 
-def synthesise(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
-    """sum_lm c_lm Y_lm(theta, phi) for coefficients of shape
-    (2, lmax + 1, lmax + 1), or that shape followed by the points' shape
-    when the coefficients vary from point to point."""
+def real_harmonics_gradient(lmax: int, theta: ArrayLike, phi: ArrayLike
+                            ) -> tuple[np.ndarray, np.ndarray]:
+    """(d/dtheta, d/dphi) of the basis up to degree `lmax`, each of the
+    shape `real_harmonics` gives, through scipy's derivatives of the
+    complex harmonics."""
+    lmax, theta, phi = _points(lmax, theta, phi)
+    _, dt, dp = _complex_basis(lmax, theta, phi, gradient=True)
+    return _real(dt, lmax), _real(dp, lmax)
+
+
+def _coefficients(coeffs: ArrayLike) -> np.ndarray:
+    """A coefficient array (2, L + 1, L + 1, ...) as floats, or the error."""
     c = np.asarray(coeffs, dtype=float)
     if c.ndim < 3 or c.shape[0] != 2 or c.shape[1] != c.shape[2]:
         raise ValueError("coefficients must have shape (2, lmax + 1, lmax + 1, ...)")
-    Y = real_harmonics(c.shape[1] - 1, theta, phi)
-    if c.ndim == 3:
-        c = np.broadcast_to(c.reshape(c.shape + (1,) * (Y.ndim - 3)), Y.shape)
-    if c.shape != Y.shape:
-        raise ValueError(f"coefficients of shape {c.shape} do not match points "
-                         f"of shape {Y.shape[3:]}")
-    return np.einsum("slm...,slm...->...", c, Y)
+    return c
+
+
+def _contract(c: np.ndarray, theta: np.ndarray, phi: np.ndarray,
+              basis: Basis, *, index: np.ndarray | None = None) -> np.ndarray:
+    """sum_slm c[slm] B_slm at flat points, a block of points at a time so
+    that the basis never holds more than `_BLOCK` entries; `c` is
+    (2, L + 1, L + 1), or that followed by one column per point, or by
+    columns that `index` picks for each point."""
+    L = c.shape[1] - 1
+    out = np.empty(theta.size)
+    step = max(1, _BLOCK // (2 * (L + 1) ** 2))
+    for i in range(0, theta.size, step):
+        block = slice(i, i + step)
+        B = basis(L, theta[block], phi[block])
+        if c.ndim == 3:
+            out[block] = np.einsum("slm,slmp->p", c, B)
+        else:
+            columns = c[..., block] if index is None else c[..., index[block]]
+            out[block] = np.einsum("slmp,slmp->p", columns, B)
+    return out
+
+
+#: The basis entries evaluated at once by a synthesis at points.
+_BLOCK = 1 << 22
+
+
+def synthesise_gradient(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """(d/dtheta, d/dphi) of sum_lm c_lm Y_lm at points, for coefficients
+    of shape (2, lmax + 1, lmax + 1): the derivatives of `synthesise`,
+    through scipy, a block of points at a time."""
+    c = _coefficients(coeffs)
+    if c.ndim != 3:
+        raise ValueError("coefficients must have shape (2, lmax + 1, lmax + 1)")
+    theta, phi = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                     np.asarray(phi, dtype=float))
+    t, p, L = theta.ravel(), phi.ravel(), c.shape[1] - 1
+    dt, dp = np.empty(t.size), np.empty(t.size)
+    step = max(1, _BLOCK // (4 * (L + 1) ** 2))
+    for i in range(0, t.size, step):
+        block = slice(i, i + step)
+        bt, bp = real_harmonics_gradient(L, t[block], p[block])
+        dt[block] = np.einsum("slm,slmp->p", c, bt)
+        dp[block] = np.einsum("slm,slmp->p", c, bp)
+    return dt.reshape(theta.shape), dp.reshape(theta.shape)
+
+
+def synthesise(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike, *,
+               index: ArrayLike | None = None) -> np.ndarray:
+    """sum_lm c_lm Y_lm(theta, phi) for coefficients of shape
+    (2, lmax + 1, lmax + 1), or that shape followed by the points' shape
+    when the coefficients vary from point to point, or followed by one
+    axis of n columns with `index`, of the points' shape, naming each
+    point's column (so that coefficients shared by many points are held
+    once).  Through scipy, a block of points at a time."""
+    c = _coefficients(coeffs)
+    theta, phi = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                     np.asarray(phi, dtype=float))
+    shape = theta.shape
+    if index is not None:
+        idx = np.broadcast_to(np.asarray(index, dtype=np.intp), shape).ravel()
+        if c.ndim != 4 or (idx.size and not 0 <= idx.min() <= idx.max() < c.shape[3]):
+            raise ValueError("with index, coefficients have shape (2, l + 1, l + 1, "
+                             "n) and index picks columns in 0..n-1")
+        return _contract(c, theta.ravel(), phi.ravel(), real_harmonics,
+                         index=idx).reshape(shape)
+    if c.ndim > 3:
+        if c.shape[3:] != shape:
+            raise ValueError(f"coefficients of shape {c.shape} do not match points "
+                             f"of shape {shape}")
+        c = c.reshape(c.shape[:3] + (-1,))
+    return _contract(c, theta.ravel(), phi.ravel(), real_harmonics).reshape(shape)
 
 
 def packing(lmax: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -105,79 +221,122 @@ def packing(lmax: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return np.array(s), np.array(l), np.array(m)
 
 
-# -- grids, through pyshtools ---------------------------------------------------
+# -- grids, through ducc0 ------------------------------------------------------
 
-def _pyshtools() -> ModuleType:
-    """pyshtools with the ducc0 backend selected where present; imported
-    here and nowhere else in planetmodel."""
+def _sht() -> ModuleType:
+    """ducc0's spherical-harmonic transforms; ducc0 is imported here and
+    nowhere else in planetmodel."""
     try:
-        import pyshtools
+        import ducc0
     except ImportError as exc:  # pragma: no cover - exercised by the extra
         raise ImportError(
             "the grid synthesis and analysis of planetmodel.harmonics need "
-            "pyshtools.  Install it with:\n"
+            "ducc0.  Install it with:\n"
             "    pip install 'planetmodel[harmonics]'      "
             "(or: poetry install --extras harmonics)"
         ) from exc
-    if pyshtools.backends.preferred_backend() != "ducc":
-        try:
-            import ducc0  # noqa: F401
-            pyshtools.backends.select_preferred_backend("ducc")
-        except ImportError:  # pragma: no cover - the shtools backend serves
-            pass
-    return pyshtools
+    return ducc0.sht
 
 
-def _glq(grid: AngularGrid) -> int:
-    """The band of a Gauss-Legendre grid pyshtools can transform on, or a
-    ValueError naming what is wrong."""
-    if grid.kind != "gauss_legendre" or grid.lmax is None:
+def _rings(grid: AngularGrid) -> str:
+    """ducc0's name for the grid's ring layout, once its colatitudes are
+    checked against its kind's own, or a ValueError naming what is wrong.
+    An equiangular grid is Clenshaw-Curtis with its poles and Fejer's
+    first rule without."""
+    from .sampling import driscoll_healy, equiangular, gauss_legendre
+
+    kinds = ("gauss_legendre", "driscoll_healy", "equiangular")
+    if grid.kind not in kinds or grid.lmax is None:
         raise ValueError(
-            f"grid synthesis and analysis take a Gauss-Legendre grid with a "
-            f"band, gauss_legendre(lmax); got a {grid.kind!r} grid")
-    lmax = int(grid.lmax)
-    if grid.nphi != 2 * lmax + 1:
+            f"grid synthesis and analysis take a grid of a shipped kind with a "
+            f"band, one of {kinds}; got a {grid.kind!r} grid")
+    nt = grid.ntheta
+    if grid.kind == "gauss_legendre":
+        name, own = "GL", gauss_legendre(nt - 1)
+    elif grid.kind == "driscoll_healy":
+        name, own = "DH", driscoll_healy(max(nt // 2 - 1, 0))
+    elif grid.pole_nodes[0] and nt >= 2:
+        name, own = "CC", equiangular(nt, grid.nphi, poles=True)
+    else:
+        name, own = "F1", equiangular(nt, grid.nphi)
+    if own.ntheta != nt or not np.allclose(grid.colatitudes, own.colatitudes,
+                                           rtol=0.0, atol=1e-12):
         raise ValueError(
-            f"a Gauss-Legendre grid of band {lmax} is transformed with "
-            f"2 lmax + 1 = {2 * lmax + 1} longitudes; this grid has {grid.nphi}: "
-            f"build it as gauss_legendre({lmax})")
-    x = np.polynomial.legendre.leggauss(lmax + 1)[0]
-    if not np.allclose(np.cos(grid.colatitudes), np.sort(x)[::-1], atol=1e-12):
+            f"the {nt} colatitudes are not those of a {grid.kind!r} grid "
+            f"({name} rings in ducc0's terms)")
+    if grid.lmax > own.lmax:
         raise ValueError(
-            f"the colatitudes are not the {lmax + 1} Gauss-Legendre nodes of "
-            f"band {lmax}, north to south")
-    return lmax
+            f"a {grid.kind!r} grid of {nt} colatitudes resolves degrees up to "
+            f"{own.lmax}, not the {grid.lmax} it claims")
+    if grid.nphi < 2 * grid.lmax + 1:
+        raise ValueError(
+            f"a grid of band {grid.lmax} needs at least 2 lmax + 1 = "
+            f"{2 * grid.lmax + 1} longitudes to resolve its orders; this grid "
+            f"has {grid.nphi}")
+    if not np.allclose(np.diff(grid.longitudes), 2.0 * np.pi / grid.nphi,
+                       rtol=0.0, atol=1e-12):
+        raise ValueError("the longitudes are not equally spaced around the circle")
+    return name
+
+
+def _healpy(lmax: int) -> tuple[np.ndarray, np.ndarray]:
+    """(l, m) of each complex coefficient in healpy's order: m outermost,
+    then l = m ... lmax."""
+    m = np.concatenate([np.full(lmax + 1 - k, k) for k in range(lmax + 1)])
+    l = np.concatenate([np.arange(k, lmax + 1) for k in range(lmax + 1)])
+    return l, m
+
+
+def _to_complex(c: np.ndarray) -> np.ndarray:
+    """ducc0's coefficients of real ones of shape (2, L + 1, L + 1, K):
+    shape (K, 1, nalm), one row per trailing index."""
+    l, m = _healpy(c.shape[1] - 1)
+    scale = np.where(m == 0, 1.0, (-1.0) ** m / np.sqrt(2.0))[:, None]
+    a = scale * (c[0, l, m] - 1j * np.where(m == 0, 0.0, 1.0)[:, None] * c[1, l, m])
+    return np.ascontiguousarray(a.T[:, None, :])
+
+
+def _to_real(a: np.ndarray, lmax: int) -> np.ndarray:
+    """Real coefficients (2, lmax + 1, lmax + 1, K) of ducc0's (K, nalm)."""
+    l, m = _healpy(lmax)
+    scale = np.where(m == 0, 1.0, (-1.0) ** m * np.sqrt(2.0))[:, None]
+    c = np.zeros((2, lmax + 1, lmax + 1, a.shape[0]))
+    c[0, l, m] = scale * a.T.real
+    c[1, l, m] = np.where(m == 0, 0.0, -1.0)[:, None] * scale * a.T.imag
+    return c
 
 
 def synthesise_grid(coeffs: ArrayLike, grid: AngularGrid) -> np.ndarray:
-    """Values on a Gauss-Legendre grid from coefficients, through pyshtools.
+    """Values on a grid of a shipped kind from coefficients, through ducc0.
 
     `coeffs` has shape (2, l + 1, l + 1) or that followed by any extra
     axes, a radial axis say, with l at most the grid's band; the result
     has the extra axes first and then (ntheta, nphi), the layout of a
     sample.  Exact for a field band-limited to the grid's degree.
     """
-    sh = _pyshtools()
-    lmax = _glq(grid)
+    sht = _sht()
+    rings = _rings(grid)
     c = np.asarray(coeffs, dtype=float)
     if c.ndim < 3 or c.shape[0] != 2 or c.shape[1] != c.shape[2]:
         raise ValueError("coefficients must have shape (2, l + 1, l + 1, ...)")
-    if c.shape[1] - 1 > lmax:
+    L = c.shape[1] - 1
+    if L > grid.lmax:
         raise ValueError(
-            f"coefficients to degree {c.shape[1] - 1} on a grid of band {lmax}: "
-            "the grid cannot hold them; use gauss_legendre(l) with l at least "
-            f"{c.shape[1] - 1}")
+            f"coefficients to degree {L} on a grid of band {grid.lmax}: the grid "
+            f"cannot hold them; use a grid of band at least {L}")
     extra = c.shape[3:]
-    flat = c.reshape(c.shape[:3] + (-1,))
-    out = np.empty((flat.shape[3], grid.ntheta, grid.nphi))
-    for k in range(flat.shape[3]):
-        out[k] = sh.expand.MakeGridGLQ(flat[..., k], lmax=lmax, norm=4, csphase=1)
+    alm = _to_complex(c.reshape(c.shape[:3] + (-1,)))
+    out = np.empty((alm.shape[0], grid.ntheta, grid.nphi))
+    for k in range(alm.shape[0]):
+        out[k] = sht.synthesis_2d(alm=alm[k], spin=0, lmax=L, geometry=rings,
+                                  ntheta=grid.ntheta, nphi=grid.nphi,
+                                  phi0=float(grid.longitudes[0]))[0]
     return out.reshape(extra + (grid.ntheta, grid.nphi))
 
 
 def analyse_grid(values: ArrayLike, grid: AngularGrid, *,
                  lmax: int | None = None) -> np.ndarray:
-    """Coefficients from values on a Gauss-Legendre grid, through pyshtools.
+    """Coefficients from values on a grid of a shipped kind, through ducc0.
 
     `values` has shape (..., ntheta, nphi), any extra axes first; the
     result is (2, lmax + 1, lmax + 1) followed by the extra axes, with
@@ -185,8 +344,9 @@ def analyse_grid(values: ArrayLike, grid: AngularGrid, *,
     The inverse of `synthesise_grid` for a field band-limited to the
     grid; a projection otherwise.
     """
-    sh = _pyshtools()
-    band = _glq(grid)
+    sht = _sht()
+    rings = _rings(grid)
+    band = grid.lmax
     lmax = band if lmax is None else int(lmax)
     if not 0 <= lmax <= band:
         raise ValueError(f"lmax must lie in 0..{band}, got {lmax}")
@@ -196,10 +356,71 @@ def analyse_grid(values: ArrayLike, grid: AngularGrid, *,
             f"values must have trailing shape {(grid.ntheta, grid.nphi)}, "
             f"got {v.shape}")
     extra = v.shape[:-2]
-    flat = v.reshape((-1,) + v.shape[-2:])
-    zero, w = sh.expand.SHGLQ(band)
-    out = np.empty((flat.shape[0], 2, lmax + 1, lmax + 1))
+    flat = v.reshape((-1, 1) + v.shape[-2:])
+    a = np.empty((flat.shape[0], (lmax + 1) * (lmax + 2) // 2), dtype=complex)
     for k in range(flat.shape[0]):
-        out[k] = sh.expand.SHExpandGLQ(flat[k], w, zero, norm=4, csphase=1,
-                                       lmax_calc=lmax)
-    return np.moveaxis(out, 0, -1).reshape((2, lmax + 1, lmax + 1) + extra)
+        a[k] = sht.analysis_2d(map=np.ascontiguousarray(flat[k]), spin=0,
+                               lmax=lmax, geometry=rings,
+                               phi0=float(grid.longitudes[0]))[0]
+    return _to_real(a, lmax).reshape((2, lmax + 1, lmax + 1) + extra)
+
+
+def _points_and_coefficients(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike
+                             ) -> tuple[np.ndarray, int, np.ndarray,
+                                        tuple[int, ...], tuple[int, ...]]:
+    """ducc0's coefficients (K, 1, nalm), their degree, and the points
+    (P, 2) for a synthesis at arbitrary points, with the extra and point
+    shapes to restore."""
+    c = np.asarray(coeffs, dtype=float)
+    if c.ndim < 3 or c.shape[0] != 2 or c.shape[1] != c.shape[2]:
+        raise ValueError("coefficients must have shape (2, l + 1, l + 1, ...)")
+    theta, phi = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                     np.asarray(phi, dtype=float))
+    if np.any(theta < 0.0) or np.any(theta > np.pi):
+        raise ValueError("colatitudes must lie in [0, pi]")
+    loc = np.ascontiguousarray(np.stack([theta.ravel(), wrapped(phi.ravel())],
+                                        axis=-1))
+    alm = _to_complex(c.reshape(c.shape[:3] + (-1,)))
+    return alm, c.shape[1] - 1, loc, c.shape[3:], theta.shape
+
+
+def synthesise_points(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike
+                      ) -> np.ndarray:
+    """sum_lm c_lm Y_lm at arbitrary points, fast, through ducc0.
+
+    `coeffs` has shape (2, l + 1, l + 1) or that followed by any extra
+    axes; `theta` in [0, pi] and `phi`, in any range, broadcast
+    together.  The result has the extra axes first and then the points'
+    shape.  It agrees with `synthesise` to about `POINT_EPSILON` of the
+    field's largest value, the accuracy asked of ducc0's non-uniform
+    synthesis, at a cost nearly independent of the number of points.
+    """
+    sht = _sht()
+    alm, L, loc, extra, points = _points_and_coefficients(coeffs, theta, phi)
+    out = np.empty((alm.shape[0], loc.shape[0]))
+    if loc.shape[0]:
+        for k in range(alm.shape[0]):
+            out[k] = sht.synthesis_general(alm=alm[k], spin=0, lmax=L, loc=loc,
+                                           epsilon=POINT_EPSILON)[0]
+    return out.reshape(extra + points)
+
+
+def synthesise_points_gradient(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """(d/dtheta, d/dphi) of sum_lm c_lm Y_lm at arbitrary points, through
+    ducc0, in the layout and to the accuracy of `synthesise_points`.
+
+    ducc0 gives the gradient's components d/dtheta and (1 / sin theta)
+    d/dphi; the second is multiplied by sin theta here, so that at a pole
+    d/dphi is zero, as it is for any field smooth there.
+    """
+    sht = _sht()
+    alm, L, loc, extra, points = _points_and_coefficients(coeffs, theta, phi)
+    dt = np.zeros((alm.shape[0], loc.shape[0]))
+    dp = np.zeros((alm.shape[0], loc.shape[0]))
+    if loc.shape[0] and L > 0:
+        for k in range(alm.shape[0]):
+            g = sht.synthesis_general(alm=alm[k], spin=1, lmax=L, loc=loc,
+                                      epsilon=POINT_EPSILON, mode="DERIV1")
+            dt[k], dp[k] = g[0], g[1] * np.sin(loc[:, 0])
+    return dt.reshape(extra + points), dp.reshape(extra + points)

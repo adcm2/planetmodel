@@ -3,11 +3,10 @@ import subprocess
 import sys
 
 
-def test_import_is_light():
+def test_import_is_light(extra_modules):
     code = (
         "import sys, planetmodel\n"
-        "heavy = [m for m in ('matplotlib', 'gmsh', 'netCDF4', 'mfem', 'pyshtools')"
-        " if m in sys.modules]\n"
+        f"heavy = [m for m in {extra_modules!r} if m in sys.modules]\n"
         "assert not heavy, heavy\n"
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)

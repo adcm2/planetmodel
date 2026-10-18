@@ -30,7 +30,8 @@ from pathlib import Path
 
 import numpy as np
 
-from planetmodel import SCALAR, PREM, testing
+from planetmodel import (PREM, SCALAR, Geometry, Model, Skeleton, equiangular, slices,
+                         testing)
 from planetmodel.randomfield import LayeredGRF, RadialGRF, SphericalGRF
 
 FIGURES = Path(__file__).resolve().parent.parent / "figures"
@@ -134,7 +135,9 @@ for x in r:
 # scaled so that the standard deviation at any point of the truncated
 # field is exactly `sigma`. A horizontal length scale `lam_h`, different
 # from the radial one, gives structure that is correlated over a
-# different distance horizontally than radially. The example is on a
+# different distance horizontally than radially. `to_field` turns a
+# sample into a `HarmonicField`, the sum of the harmonics with those
+# coefficients, exact at every point. The example is on a
 # shell of unit outer radius so that the picture is easy to read. The
 # standard deviation of a map at one radius is close to the requested
 # value of 1, as one draw from the field should be.
@@ -146,22 +149,19 @@ print(shell, "| coefficients:", coeffs.shape)
 random_field = shell.to_field(coeffs, character=SCALAR, name="dv")
 testing.check_field(random_field)
 
-# a map at one radius and a meridional slice through the shell
-lat = np.linspace(-89.5, 89.5, 90)
-lon = np.linspace(0.0, 360.0, 181)
-theta = np.deg2rad(90.0 - lat)[:, None]
-phi = np.deg2rad(lon)[None, :]
-surface_map = random_field.evaluate(0.9, theta, phi)
-rr = np.linspace(0.55, 1.0, 60)[:, None]
-tt = np.linspace(0.0, np.pi, 181)[None, :]
-slice_values = random_field.evaluate(rr, tt, 0.0)
-print("map std at r = 0.9:", surface_map.std().round(3), "(sigma = 1)")
+# a model of the one shell holding the field, sliced on a sphere at one
+# radius and through the centre (planetmodel.slices; tutorial 13)
+shell_model = Model(Geometry(Skeleton([0.55, 1.0])), [{"dv": random_field}])
+surface = slices.sphere(shell_model, "dv", radius=0.9, grid=equiangular(90, 180))
+disc = slices.section(shell_model, "dv", (0.5 * np.pi, 0.0), azimuth=0.0,
+                      length=2 * np.pi, n=60, m=361)
+print("map std at r = 0.9:", surface.values.std().round(3), "(sigma = 1)")
 
 # %% [markdown]
 # `sample_grid` draws a sample directly on a Gauss-Legendre grid, as an
 # array of mesh nodes by grid points, using the fast spherical-harmonic
-# transform of pyshtools (the `harmonics` extra, with ducc0 as its
-# backend where that is installed). `analyse_grid` is the inverse
+# transforms of ducc0 (the `harmonics` extra). The transforms themselves
+# are reached through `planetmodel.harmonics`. `analyse_grid` is the inverse
 # transform for a field band-limited at the grid's degree, and the two
 # round-trip to rounding error. The average of the square of one sample
 # over the sphere is an estimate of `sigma^2` from a single draw, and
@@ -169,7 +169,8 @@ print("map std at r = 0.9:", surface_map.std().round(3), "(sigma = 1)")
 
 # %%
 try:
-    from planetmodel import analyse_grid, gauss_legendre, synthesise_grid
+    from planetmodel import gauss_legendre
+    from planetmodel.harmonics import analyse_grid, synthesise_grid
     grid = gauss_legendre(shell.lmax)
     on_grid = shell.sample_grid(grid, rng=rng)
     back = analyse_grid(on_grid, grid)
@@ -233,22 +234,21 @@ if plt is not None:
     ax.set_ylabel("radius [km]")
     ax.legend()
 
-    ax = axes[1, 0]
-    im = ax.pcolormesh(lon, lat, surface_map, cmap="RdBu_r", vmin=-3, vmax=3,
-                       shading="auto")
-    ax.set_xlabel("longitude")
-    ax.set_ylabel("latitude")
-    ax.set_title("shell field at r = 0.9")
-    fig.colorbar(im, ax=ax)
+    from planetmodel.plotting import section, sphere_map
+    axes[1, 0].remove()
+    axes[1, 1].remove()
+    try:
+        import cartopy.crs as ccrs
+        ax = fig.add_subplot(2, 2, 3, projection=ccrs.Robinson())
+        sphere_map(ax, surface, cmap="RdBu_r", vmin=-3, vmax=3, colorbar=True)
+        ax.set_title("shell field at r = 0.9")
+    except ImportError:
+        print("the map needs the maps extra (cartopy); left out")
 
-    ax = axes[1, 1]
-    x = rr * np.sin(tt)
-    z = rr * np.cos(tt)
-    im = ax.pcolormesh(x, z, slice_values, cmap="RdBu_r", vmin=-3, vmax=3,
-                       shading="gouraud")
-    ax.set_aspect("equal")
-    ax.set_title("meridional slice, phi = 0")
-    fig.colorbar(im, ax=ax)
+    ax = fig.add_subplot(2, 2, 4, projection="polar")
+    section(ax, disc, cmap="RdBu_r", vmin=-3, vmax=3, colorbar=True)
+    ax.set_rticks([0.6, 0.8, 1.0])
+    ax.set_title("the plane through the poles")
     fig.tight_layout()
     out = FIGURES / "tutorial_10_random_fields.png"
     fig.savefig(out, dpi=110)

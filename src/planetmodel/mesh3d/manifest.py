@@ -18,16 +18,22 @@ The schema is `planetmodel.mesh.manifest/5`, with these blocks:
   refinements[] name, size, far_size, decay_width, points, digest
   fields[]      name, file, fe_space, vdim, ordering, rank, weight,
                 voigt, unit, layers, radial_degree
-  scales        length, mass, time in SI; null until a model is exported
+  scales        length, mass, time, temperature in SI; null until a model
+                is exported (temperature, where absent, is a kelvin)
   constants     the model's constants in its units; empty until then
+  model         file, schema: a model file beside the manifest, on the
+                mesh's reference skeleton (layer n of the file is
+                attribute n + 1); null, or absent, where none was
+                written
   meta          whatever the spec's `meta` carried
 
 `fluid`, `kind`, `values` and `radial_degree` are read from the model,
 so the model export writes them and everything else writes null: null
 means "no model has said", never "no".  `fluid` is the vanishing of
-shear in the exported fields (`materials.is_fluid`), a statement about
-this model's description, not about any one timescale; a shell is not
-fluid.  `kind` classifies an interface from those flags (KINDS below);
+every shear-bearing field of the model's layer (`materials.is_fluid`),
+whichever fields are exported: a statement about this model's
+description, not about any one timescale; a shell is not fluid.
+`kind` classifies an interface from those flags (KINDS below);
 `values` holds the one-sided values of each exported real scalar radial
 field, `{name: [below, above]}`; `radial_degree` is the degree in r
 that reproduces a scalar field within each layer holding it.
@@ -57,6 +63,10 @@ from dataclasses import KW_ONLY, asdict, dataclass, field, fields as _fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, get_type_hints
 
+import numpy as np
+
+from ..character import Character
+from ..fields import stored_shape
 from ..units import Dimensions, Scales, unit_string
 
 if TYPE_CHECKING:
@@ -295,10 +305,11 @@ def mesh_block(file: str | Path, *, format: str, nodes: str,
 
 
 def scales_block(scales: Scales) -> dict[str, float]:
-    """The `scales` record: what one stored unit of length, mass and time
-    is in SI, so that every field value and constant is in those units."""
+    """The `scales` record: what one stored unit of length, mass, time and
+    temperature is in SI, so that every field value and constant is in
+    those units."""
     return {"length": float(scales.length), "mass": float(scales.mass),
-            "time": float(scales.time)}
+            "time": float(scales.time), "temperature": float(scales.temperature)}
 
 
 def constants_block(model: Model) -> dict[str, float]:
@@ -326,6 +337,8 @@ class MeshManifest:
     scales: dict[str, float] | None = None
     #: The model's constants in its units; empty until a model is exported.
     constants: dict[str, float] = field(default_factory=dict)
+    #: The model file beside the mesh, `{file, schema}`, or None.
+    model: dict[str, str] | None = None
     #: The spec's `meta`, copied through.
     meta: dict[str, Any] = field(default_factory=dict)
     schema: str = SCHEMA
@@ -445,6 +458,9 @@ class MeshManifest:
             lines.append("  scales      " + _pairs(self.scales)
                          + (", constants " + _pairs(self.constants)
                             if self.constants else ""))
+        if self.model is not None:
+            lines.append(f"  model       {self.model.get('file', '?')} "
+                         f"({self.model.get('schema', '?')})")
         if self.meta:
             lines.append("  meta        " + _pairs(self.meta))
         return "\n".join(lines)
@@ -579,6 +595,9 @@ def validate_structure(manifest: MeshManifest) -> None:
     for i, lay in enumerate(manifest.layers):
         if lay["attribute"] != i + 1:
             fail(f"layers[{i}].attribute is {lay['attribute']}, expected {i + 1}")
+        if not 0.0 <= lay["r_inner"] < lay["r_outer"]:
+            fail(f"layers[{i}] runs from {lay['r_inner']} to {lay['r_outer']}, "
+                 "not 0 <= r_inner < r_outer")
         if i and lay["r_inner"] != manifest.layers[i - 1]["r_outer"]:
             fail(f"layers[{i}] starts at {lay['r_inner']} but the "
                  f"layer below ends at {manifest.layers[i - 1]['r_outer']}")
@@ -588,6 +607,10 @@ def validate_structure(manifest: MeshManifest) -> None:
         fail(f"{n_faces} interfaces for {n_layers} layers; a full mesh has one "
              "per layer and a hollow mesh one more")
     first = n_faces - n_layers          # 1 when the inner boundary is a face
+    if (manifest.layers[0]["r_inner"] > 0.0) != bool(first):
+        fail(f"{n_faces} interfaces for {n_layers} layers starting at r = "
+             f"{manifest.layers[0]['r_inner']}: a full mesh starts at the centre "
+             "and a hollow one has a face on its inner boundary")
     for i, face in enumerate(manifest.interfaces):
         if face["attribute"] != i + 1:
             fail(f"interfaces[{i}].attribute is {face['attribute']}, expected "
@@ -627,17 +650,36 @@ def validate_structure(manifest: MeshManifest) -> None:
         d = e["radial_degree"]
         if d is not None and d < 0:
             fail(f"fields[{i}].radial_degree is {d}, not a degree")
+        try:
+            shape = stored_shape(Character(e["rank"], e["weight"], voigt=e["voigt"]))
+        except ValueError as error:
+            fail(f"fields[{i}] has no character: {error}")
+        stored = int(np.prod(shape, dtype=int))
+        # a vector of the mesh's own space, the displacement in 2D, has two
+        if e["vdim"] != stored and not (e["rank"] == 1 and e["vdim"] == 2):
+            fail(f"fields[{i}].vdim is {e['vdim']}, but a field of rank "
+                 f"{e['rank']}{'' if e['voigt'] else ' without Voigt form'} "
+                 f"stores {stored} components")
     if m["displacement"] is not None and m["displacement"] not in names:
         fail(f"mesh.displacement names {m['displacement']!r}, which fields "
              "holds no record for")
+    if m["displacement"] is not None and m["nodes"] == "physical":
+        fail("mesh.displacement is recorded with physical nodes; a mesh whose "
+             "nodes are already moved has no displacement to apply")
     for i, face in enumerate(manifest.interfaces):
         for key in face["values"] or {}:
             if key not in names:
                 fail(f"interfaces[{i}].values names {key!r}, which fields "
                      "holds no record for")
 
+    if manifest.model is not None:
+        _check_record(manifest.model, {"file": (str,), "schema": (str,)}, "model",
+                      fail)
     if manifest.scales is not None:
         _check_record(manifest.scales, _SCALES_FIELDS, "scales", fail)
+        kelvin = manifest.scales.get("temperature", 1.0)
+        if not _typed(kelvin, (int, float)):
+            fail(f"scales.temperature is {kelvin!r}, not int or float")
     if not isinstance(manifest.constants, dict):
         fail("constants must be an object")
     for key, value in manifest.constants.items():

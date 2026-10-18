@@ -60,7 +60,7 @@ model = LayeredIsotropicElastic(
     interface_names=["icb", "cmb", "surface"])
 moduli = elastic_moduli(model.layer("mantle"))
 model = model.with_field("mantle", "elastic_moduli", moduli)
-model = model.stretched(flattening(0.05, rmax=1.0))
+model = model.stretched(flattening(0.05))
 print(model)
 print("mass:", mass(model))
 

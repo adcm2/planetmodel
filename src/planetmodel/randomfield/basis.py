@@ -60,10 +60,6 @@ from .operator import RadialOperatorFamily
 
 __all__ = ["SpectralBasis", "SphericalBasis"]
 
-#: Relative margin by which a select-by-value eigenvalue bound exceeds the
-#: last eigenvalue wanted, so that roundoff cannot drop it.
-_SELECT_RTOL = 1e-12
-
 #: How far outside the physical interval, relative to its length, a radius
 #: handed to `evaluate` may fall and still count as an endpoint.
 _INTERVAL_RTOL = 1e-12
@@ -146,8 +142,11 @@ class SpectralBasis:
             k = max(int(np.argmax(small)) if small.any() else vals.size, 1)
         if k == vals.size:
             return fam.eig(l)
-        theta, Phi = fam.eig(l, theta_max=float(vals[k - 1]) * (1.0 + _SELECT_RTOL))
-        return theta[:k], Phi[:, :k]
+        theta, Phi = fam.eig(l, count=k)
+        if theta.size != k:
+            raise RuntimeError(f"degree {l}: asked for {k} eigenpairs, the solver "
+                               f"returned {theta.size}")
+        return theta, Phi
 
     @property
     def nmodes(self) -> int:
@@ -227,11 +226,13 @@ class SpectralBasis:
 
     def white_noise(self, *, rng: Any = None, size: int | None = None) -> np.ndarray:
         """Coefficients of white noise of the space, independent standard
-        normals of shape (nmodes,) or (nmodes, size).  `rng` is anything
-        `np.random.default_rng` accepts."""
+        normals of shape (nmodes,) or (nmodes, size), column j of a batch
+        being the j-th of `size` successive draws from the generator.
+        `rng` is anything `np.random.default_rng` accepts."""
         rng = np.random.default_rng(rng)
-        shape = self.nmodes if size is None else (self.nmodes, int(size))
-        return rng.standard_normal(shape)
+        if size is None:
+            return rng.standard_normal(self.nmodes)
+        return rng.standard_normal((int(size), self.nmodes)).T
 
     def __repr__(self) -> str:
         r1, r2 = self.restriction.interval

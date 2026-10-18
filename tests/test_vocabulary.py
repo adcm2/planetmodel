@@ -9,7 +9,7 @@ from planetmodel.vocabulary import CONSTANTS, VOCABULARY, Constant, FieldSpec, s
 EXPECTED_NAMES = {
     "rho", "vp", "vs", "vpv", "vsv", "vph", "vsh", "eta", "qkappa", "qmu",
     "kappa", "mu", "A", "C", "F", "L", "N", "elastic_moduli", "viscosity", "g",
-    "drho_dphi0",
+    "drho_dphi0", "temperature",
 }
 
 
@@ -28,6 +28,8 @@ def test_characters_and_dimensions_are_what_the_physics_says():
     assert spec("vpv").character is SCALAR
     assert spec("vpv").dimensions == units.VELOCITY
     assert spec("qmu").dimensions == units.DIMENSIONLESS
+    assert spec("temperature").character is SCALAR
+    assert spec("temperature").dimensions == units.TEMPERATURE
     assert spec("eta").dimensions == units.DIMENSIONLESS
     assert spec("elastic_moduli").character is ELASTIC
     assert spec("elastic_moduli").dimensions == units.MODULUS

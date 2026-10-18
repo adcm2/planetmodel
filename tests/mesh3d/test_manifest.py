@@ -122,8 +122,32 @@ def test_scales_and_constants_blocks_come_from_the_model():
                                     vs=[1.0, 0.0],
                                     scales=Scales(length=1.0, mass=2.0, time=0.5))
     assert sc.scales_block(model.scales) == {"length": 1.0, "mass": 2.0,
-                                             "time": 0.5}
+                                             "time": 0.5, "temperature": 1.0}
     assert sc.constants_block(model) == {"G": pytest.approx(G_SI / (0.5 * 4.0))}
+
+
+def test_a_scales_block_without_temperature_still_validates(tmp_path):
+    card = card_for(full_geometry())
+    card.scales = {"length": 2.0, "mass": 3.0, "time": 4.0}
+    sc.validate_structure(card)
+    card.scales = dict(card.scales, temperature=1500.0)
+    sc.validate_structure(card)
+    card.scales["temperature"] = "hot"
+    with pytest.raises(ValueError, match="scales.temperature"):
+        sc.validate_structure(card)
+
+
+def test_an_older_manifest_without_a_model_block_still_reads(tmp_path):
+    import json
+    card = exported_card(full_geometry())
+    path = sc.write(tmp_path / "old", card)
+    data = json.loads(path.read_text())
+    data.pop("model")
+    path.write_text(json.dumps(data))
+    assert sc.read(path).model is None
+    card.model = {"file": "old.model.nc"}
+    with pytest.raises(ValueError, match="model.schema"):
+        sc.validate_structure(card)
 
 
 def test_default_names_reach_the_entries():
@@ -246,6 +270,22 @@ def test_validate_structure_checks_the_entries_and_their_consistency():
     bad.fields.pop(0)
     with pytest.raises(ValueError, match="mesh.displacement names"):
         sc.validate_structure(bad)
+    bad = copy.deepcopy(card)
+    bad.layers[0]["r_inner"] = 0.3
+    with pytest.raises(ValueError, match="full mesh starts at the centre"):
+        sc.validate_structure(bad)
+    bad = copy.deepcopy(card)
+    bad.layers[2]["r_outer"] = 0.7
+    with pytest.raises(ValueError, match="not 0 <= r_inner < r_outer"):
+        sc.validate_structure(bad)
+    bad = copy.deepcopy(card)
+    bad.mesh["nodes"] = "physical"
+    with pytest.raises(ValueError, match="physical nodes"):
+        sc.validate_structure(bad)
+    bad = copy.deepcopy(card)
+    bad.fields[1]["vdim"] = 36
+    with pytest.raises(ValueError, match=r"fields\[1\].vdim is 36"):
+        sc.validate_structure(bad)
 
 
 def test_validate_structure_checks_the_model_read_records():
@@ -301,9 +341,10 @@ def test_the_json_is_flat_numbers_and_strings(tmp_path):
     data = json.loads(path.read_text())
     assert data["schema"] == sc.SCHEMA
     assert set(data) == {"schema", "mesh", "layers", "interfaces",
-                         "refinements", "fields", "scales", "constants", "meta"}
+                         "refinements", "fields", "scales", "constants", "model",
+                         "meta"}
     assert isinstance(data["layers"][0]["r_inner"], float)
-    assert data["fields"] == [] and data["scales"] is None
+    assert data["fields"] == [] and data["scales"] is None and data["model"] is None
 
 
 # ------------------------------------------------------------- describe
@@ -326,7 +367,8 @@ def test_describe_is_a_readable_summary_and_str():
         "rank 1 weight 0  1       layers [1, 2]" in lines
     assert "    rho           m.rho.gf           L2_3D_P2 vdim 1 byNODES  " \
         "rank 0 weight 1  kg m-3  layers [1, 2]" in lines
-    assert "scales      length 1, mass 1, time 1, constants G 6.6743e-11" in text
+    assert ("scales      length 1, mass 1, time 1, temperature 1, "
+            "constants G 6.6743e-11") in text
     assert "meta        run 1" in text
     # a bare mesh lists no fields and no scales
     bare = card_for(full_geometry())

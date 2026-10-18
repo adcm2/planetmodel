@@ -1,7 +1,9 @@
 """Sampling: a model evaluated on radial times angular nodes.
 
-The angular grids are the node sets they claim, Gauss-Legendre exact
-to its band and equiangular at the midpoints; the radial nodes are the
+The angular grids are the node sets they claim, each kind's weights
+exact for the polynomials in cos(theta) its rule promises and so for
+the harmonics of its band, with the poles admitted as nodes; the
+radial nodes are the
 mesh's per-element nodes with both one-sided values kept at every
 interface; a direction-free field is stored on `(node,)` and says so,
 a direction-dependent one equals its formula at every product point;
@@ -15,6 +17,7 @@ from math import factorial
 
 import numpy as np
 import pytest
+from numpy.polynomial.legendre import legval
 from scipy.special import lpmv
 
 from planetmodel import RadialMesh, Skeleton
@@ -23,8 +26,8 @@ from planetmodel.character import DENSITY, VECTOR
 from planetmodel.displacement import flattening
 from planetmodel.fields import AnalyticField
 from planetmodel.frames import spherical_frame
-from planetmodel.sampling import (AngularGrid, Sample, equiangular, gauss_legendre,
-                                  sample)
+from planetmodel.sampling import (AngularGrid, Sample, driscoll_healy, equiangular,
+                                  gauss_legendre, sample)
 from planetmodel.testing import check_sample
 from planetmodel.units import DENSITY as KG_M3
 from planetmodel.units import Scales
@@ -85,7 +88,7 @@ def coarse_prem(grid):
 
 @pytest.fixture(scope="module")
 def stretched(grid):
-    m = three_layers().stretched(flattening(0.01, rmax=A))
+    m = three_layers().stretched(flattening(0.01))
     return m, sample(m, grid, drmax=0.25 * A)
 
 
@@ -134,19 +137,86 @@ def test_gauss_legendre_refuses_too_few_longitudes():
 
 def test_equiangular_grid():
     g = equiangular(16, 32)
-    assert g.kind == "equiangular" and g.lmax is None and g.weights is None
+    assert g.kind == "equiangular" and g.lmax == 15
     assert g.ntheta == 16 and g.nphi == 32
-    assert 0 < g.colatitudes[0] and g.colatitudes[-1] < np.pi
+    assert g.pole_nodes == (False, False)
     assert np.allclose(g.colatitudes, np.pi * (np.arange(16) + 0.5) / 16)
     assert np.allclose(g.longitudes, 2 * np.pi * np.arange(32) / 32)
+    assert equiangular(16, 21).lmax == 10          # the orders bound the band
     with pytest.raises(ValueError, match="positive"):
         equiangular(0, 4)
 
 
+def test_equiangular_grid_with_poles():
+    g = equiangular(9, 20, poles=True)
+    assert g.pole_nodes == (True, True) and g.lmax == 7
+    assert g.colatitudes[0] == 0.0 and g.colatitudes[-1] == np.pi
+    assert np.allclose(g.colatitudes, np.pi * np.arange(9) / 8)
+    assert equiangular(2, 1, poles=True).lmax == 0
+    with pytest.raises(ValueError, match="ntheta >= 2"):
+        equiangular(1, 4, poles=True)
+
+
+def test_driscoll_healy_grid():
+    g = driscoll_healy(5)
+    assert g.kind == "driscoll_healy" and g.lmax == 5
+    assert g.ntheta == 12 and g.nphi == 12
+    assert g.pole_nodes == (True, False)
+    assert np.allclose(g.colatitudes, np.pi * np.arange(12) / 12)
+    assert g.weights[0] == 0.0
+    g2 = driscoll_healy(5, sampling=2)
+    assert g2.nphi == 24 and np.array_equal(g2.colatitudes, g.colatitudes)
+    with pytest.raises(ValueError, match="sampling"):
+        driscoll_healy(5, sampling=3)
+    with pytest.raises(ValueError, match="non-negative"):
+        driscoll_healy(-1)
+
+
+SHIPPED = [gauss_legendre(6), gauss_legendre(5, nphi=14), driscoll_healy(5),
+           driscoll_healy(4, sampling=2), equiangular(9, 20), equiangular(10, 21),
+           equiangular(9, 20, poles=True), equiangular(10, 21, poles=True)]
+
+
+@pytest.mark.parametrize("g", SHIPPED, ids=repr)
+def test_weights_integrate_the_polynomials_their_rule_promises(g):
+    """Against the exact integrals: int_{-1}^{1} P_l = 2 delta_l0, for
+    every degree below ntheta."""
+    x = np.cos(g.colatitudes)
+    for l in range(g.ntheta):
+        c = np.zeros(l + 1)
+        c[l] = 1.0
+        want = 2.0 if l == 0 else 0.0
+        assert abs(np.sum(g.weights * legval(x, c)) - want) < 1e-13, l
+
+
+@pytest.mark.parametrize("g", SHIPPED, ids=repr)
+def test_every_harmonic_of_the_band_integrates_exactly(g):
+    t, p = g.colatitudes[:, None], g.longitudes[None, :]
+    w = g.weights[:, None] * (2 * np.pi / g.nphi)
+    for l in range(g.lmax + 1):
+        for m in range(l + 1):
+            got = np.sum(w * real_harmonic(l, m, t, p))
+            want = np.sqrt(4 * np.pi) if l == 0 else 0.0
+            assert abs(got - want) < 1e-13, (l, m)
+
+
+@pytest.mark.parametrize("g", [driscoll_healy(4), driscoll_healy(3, sampling=2)],
+                         ids=repr)
+def test_driscoll_healy_integrates_products_to_its_band(g):
+    t, p = g.colatitudes[:, None], g.longitudes[None, :]
+    w = g.weights[:, None] * (2 * np.pi / g.nphi)
+    pairs = [(l, m) for l in range(g.lmax + 1) for m in range(l + 1)]
+    for l1, m1 in pairs:
+        for l2, m2 in pairs:
+            got = np.sum(w * real_harmonic(l1, m1, t, p) * real_harmonic(l2, m2, t, p))
+            want = 1.0 if (l1, m1) == (l2, m2) else 0.0
+            assert abs(got - want) < 1e-13, (l1, m1, l2, m2)
+
+
 @pytest.mark.parametrize("bad", [
     dict(colatitudes=[2.0, 1.0], longitudes=[0.0]),
-    dict(colatitudes=[0.0, 1.0], longitudes=[0.0]),
-    dict(colatitudes=[1.0, np.pi], longitudes=[0.0]),
+    dict(colatitudes=[-0.1, 1.0], longitudes=[0.0]),
+    dict(colatitudes=[1.0, 3.2], longitudes=[0.0]),
     dict(colatitudes=[1.0], longitudes=[0.0, 2 * np.pi]),
     dict(colatitudes=[1.0], longitudes=[-0.1]),
     dict(colatitudes=[1.0], longitudes=[0.5, 0.2]),
@@ -167,6 +237,12 @@ def test_angular_grid_arrays_are_read_only():
     with pytest.raises(ValueError):
         gauss_legendre(3).weights[0] = 0.5
     assert "custom" in repr(AngularGrid([1.0], [0.0]))
+
+
+def test_angular_grid_admits_the_poles():
+    g = AngularGrid([0.0, 1.0, np.pi], [0.0, 3.0])
+    assert g.pole_nodes == (True, True)
+    assert AngularGrid([1.0, 2.0], [0.0]).pole_nodes == (False, False)
 
 
 # ------------------------------------------------------------ layout
@@ -332,6 +408,35 @@ def test_a_radial_stretch_samples_to_h_e_r(stretched, grid):
     check_sample(s, m)
 
 
+@pytest.mark.parametrize("g", [driscoll_healy(3), equiangular(7, 8, poles=True)],
+                         ids=repr)
+def test_a_grid_with_poles_samples_one_vector_at_each(g):
+    """At a pole node the spherical components are the limits along each
+    longitude's meridian: they differ from column to column, while the
+    vector they make, and every scalar, is one value."""
+    steady = lambda r, t, p: np.stack(np.broadcast_arrays(
+        1.0 + 0.0 * r, 2.0 + 0.0 * t, 3.0 * r / A + 0.0 * p), axis=-1)
+    m = three_layers().stretched(flattening(0.01))
+    for layer in m.layers:
+        m = m.with_field(layer.index, "rho3d",
+                         AnalyticField(layer.interval, scalar_fn, character=DENSITY))
+        m = m.with_field(layer.index, "steady",
+                         AnalyticField(layer.interval, steady, character=VECTOR,
+                                       frame="cartesian"))
+    s = sample(m, g, drmax=0.25 * A)
+    check_sample(s, m)
+    R = spherical_frame(g.colatitudes[:, None], g.longitudes[None, :])
+    for name in ("steady", None):
+        v = s.fields[name] if name else s.displacement
+        cart = np.einsum("tpij,ntpj->ntpi", R, v)
+        for row in [i for i, pole in zip((0, -1), g.pole_nodes) if pole]:
+            assert np.ptp(cart[:, row], axis=1).max() < 1e-12 * A
+            if name:
+                assert np.ptp(v[:, row, :, 1], axis=1).max() > 0.1   # e_theta turns
+    for row in [i for i, pole in zip((0, -1), g.pole_nodes) if pole]:
+        assert np.ptp(s.fields["rho3d"][:, row], axis=1).max() < 1e-12
+
+
 def test_an_identity_geometry_has_no_displacement(plain):
     assert plain.displacement is None
     check_sample(plain, three_layers())
@@ -368,7 +473,7 @@ def test_the_band_sizes_the_radial_mesh(grid):
     s = sample(three_layers(), grid, fields=["rho"])
     assert s.radial.drmax == pytest.approx(0.1 * A / (grid.lmax + 1))
     assert s.radial.ngll == 5
-    g = equiangular(4, 8)
+    g = AngularGrid(np.linspace(0.1, 3.0, 4), 2 * np.pi * np.arange(8) / 8)
     with pytest.raises(ValueError, match="carries no band"):
         sample(three_layers(), g, fields=["rho"])
     s = sample(three_layers(), g, fields=["rho"], drmax=0.5 * A)
@@ -466,3 +571,19 @@ def test_check_sample_catches_a_wrong_displacement(stretched, plain):
                      three_layers())
     with pytest.raises(AssertionError, match="writable"):
         check_sample(dataclasses.replace(s, displacement=u), m)
+
+
+def test_grids_compare_by_value_and_refuse_what_is_not_a_grid():
+    from planetmodel import AngularGrid, gauss_legendre
+
+    assert gauss_legendre(2) == gauss_legendre(2) != gauss_legendre(3)
+    assert hash(gauss_legendre(2)) == hash(gauss_legendre(2))
+    assert gauss_legendre(2) in [gauss_legendre(4), gauss_legendre(2)]
+    g = gauss_legendre(2)
+    assert AngularGrid(g.colatitudes, g.longitudes) != g          # kind and band
+    with pytest.raises(ValueError, match="finite"):
+        AngularGrid([np.nan], [0.0])
+    with pytest.raises(ValueError, match="finite"):
+        AngularGrid([0.5, 1.0], [0.0], weights=[1.0, np.inf])
+    with pytest.raises(TypeError, match="integer"):
+        AngularGrid([0.5, 1.0], [0.0], lmax=2.7)

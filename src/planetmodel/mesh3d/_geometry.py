@@ -21,7 +21,23 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 __all__ = ["ConcentricGeometry", "build_concentric", "entity_radius",
-           "outer_face_of"]
+           "outer_face_of", "default_atol"]
+
+
+#: OCC pads every bounding box by roughly this much, absolutely: the
+#: same 1e-7 whether the radius is 0.2 or 6e6.  A matching tolerance
+#: must clear it, so a purely relative one would be too tight for a
+#: domain of radius near one.
+_OCC_BBOX_PAD = 1e-7
+
+
+def default_atol(r_outer: float) -> float:
+    """The matching tolerance for a domain of the given outer radius.
+
+    Generous against OCC's absolute bounding-box padding, and still far
+    tighter than any interface separation worth meshing.
+    """
+    return max(10.0 * _OCC_BBOX_PAD, 1e-9 * float(r_outer))
 
 
 @dataclass(frozen=True)
@@ -89,7 +105,7 @@ def build_concentric(radii: ArrayLike, *, dimension: int = 3) -> ConcentricGeome
         cells = [tag for _, tag in gmsh.model.getEntities(dimension)]
         inner = [tag for tag in cells
                  if abs(entity_radius(dimension, tag) - radii[0])
-                 <= 1e-6 * radii[-1]]
+                 <= default_atol(radii[-1])]
         if len(inner) != 1:
             raise RuntimeError(
                 f"expected one solid of radius {radii[0]} to remove for the "

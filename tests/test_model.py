@@ -128,7 +128,7 @@ def test_geometry_changes_keep_the_fields():
     with pytest.raises(ValueError, match="another skeleton"):
         m.with_geometry(Geometry(Skeleton([0.0, 0.4, 1.0])))
     assert m.renamed(layers={"core": "ic"}).layer("ic").index == 0
-    s = m.stretched(flattening(0.01, rmax=1.0))
+    s = m.stretched(flattening(0.01))
     assert not s.geometry.is_identity
     assert s.layer(1)["rho"](0.7) == m.layer(1)["rho"](0.7)
     assert s.with_mapping(m.geometry.mapping).geometry.is_identity
@@ -177,7 +177,7 @@ def test_extended_shells_hold_what_they_are_given():
 
 
 def test_surgery_needs_an_identity_mapping_where_the_geometry_does():
-    s = model().stretched(flattening(0.01, rmax=1.0))
+    s = model().stretched(flattening(0.01))
     with pytest.raises(ValueError, match="identity"):
         s.extended([1.2])
     assert s.refined([0.75]).nlayers == 3
@@ -207,7 +207,7 @@ def test_conversion_is_by_name_and_exact():
 
 
 def test_conversion_carries_the_mapping():
-    s = model().stretched(flattening(0.01, rmax=1.0))
+    s = model().stretched(flattening(0.01))
     big = s.converted(Scales(length=0.5))
     assert np.allclose(big.skeleton.boundaries, SK.boundaries * 2.0)
     X = np.array([[0.0, 0.0, 1.4]])
@@ -218,7 +218,7 @@ def test_conversion_carries_the_mapping():
 
 @pytest.mark.parametrize("m", [
     model(),
-    model().stretched(flattening(0.01, rmax=1.0)),
+    model().stretched(flattening(0.01)),
     model().with_field(1, "a", AnalyticField(SK.interval(1),
                                             lambda r, t, p: r * np.cos(t), name="a"),
                        ).with_field(1, "v", RadialField(SK.interval(1), [1.0, 0.0, 0.5],

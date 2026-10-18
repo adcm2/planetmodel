@@ -8,6 +8,7 @@ imports of the rest of the package happen inside the functions.
 """
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 __all__ = ["check_displacement", "check_mapping", "check_geometry",
            "check_layer_function", "check_field", "check_model",
            "check_refinement", "check_sample", "check_spectral_basis",
-           "check_spherical_basis"]
+           "check_spherical_basis", "check_model_file"]
 
 
 def _rel(a: ArrayLike, b: ArrayLike, *, rtol: float, floor: float = 1.0) -> bool:
@@ -44,8 +45,10 @@ def check_displacement(h: RadialDisplacement, skeleton: Skeleton, *,
     polar axis; continuity across every declared knot inside the
     skeleton; `radial_derivative`, when present,
     against a central difference away from the knots and free of
-    undeclared kinks; and the shape of `angular_gradient`.  Every
-    tolerance is relative to the skeleton's span or to the value.
+    undeclared kinks; the shape of `angular_gradient`; and, when present,
+    `scaled(k)` against k h(r / k, theta, phi), with its knots and
+    derivatives.  Every tolerance is relative to the skeleton's span or
+    to the value.
     """
     lo, hi = float(skeleton.boundaries[0]), float(skeleton.boundaries[-1])
     span = hi - lo
@@ -68,7 +71,7 @@ def check_displacement(h: RadialDisplacement, skeleton: Skeleton, *,
             f"h is not single-valued at the pole theta = {pole:.3g}: it varies "
             "with phi there")
 
-    knots = tuple(getattr(h, "knots", ()))
+    knots = tuple(sorted(float(k) for k in getattr(h, "knots", ())))
     eps = 1e-6 * span
     for k in knots:
         if not lo < k < hi:
@@ -112,6 +115,42 @@ def check_displacement(h: RadialDisplacement, skeleton: Skeleton, *,
         assert np.shape(gt) == shape and np.shape(gp) == shape, (
             "angular_gradient components have the wrong shape")
 
+    if callable(getattr(h, "scaled", None)):
+        _check_scaled_displacement(h, r, theta, phi, knots, span=span, scale=scale)
+
+
+def _check_scaled_displacement(h: RadialDisplacement, r: np.ndarray,
+                               theta: np.ndarray, phi: np.ndarray,
+                               knots: tuple[float, ...], *, span: float,
+                               scale: float) -> None:
+    """`h.scaled(k)` is k h(r / k, theta, phi), its knots k times h's and
+    its derivatives h's read at r / k, the angular ones times k; radii
+    are kept clear of the knots, where dh/dr is one-sided."""
+    k = 2.5
+    hk = h.scaled(k)
+    away = np.all([np.abs(r - x) > 1e-3 * span for x in knots], axis=0) \
+        if knots else np.ones(r.shape, dtype=bool)
+    rk = r[away.ravel()].reshape(-1, 1, 1)
+    want = np.asarray(h(rk, theta, phi), dtype=float)
+    got = np.asarray(hk(k * rk, theta, phi), dtype=float)
+    assert np.allclose(got, k * want, rtol=0.0, atol=1e-12 * k * scale), (
+        "scaled(k) is not k h(r / k, theta, phi)")
+    got_knots = sorted(float(x) for x in getattr(hk, "knots", ()))
+    assert np.allclose(got_knots, [k * x for x in knots], rtol=1e-12, atol=0.0), (
+        "scaled(k) does not carry the knots multiplied by k")
+    if hasattr(h, "radial_derivative") and hasattr(hk, "radial_derivative"):
+        want = np.asarray(h.radial_derivative(rk, theta, phi), dtype=float)
+        got = np.asarray(hk.radial_derivative(k * rk, theta, phi), dtype=float)
+        assert _rel(got, want, rtol=1e-9), (
+            "scaled(k).radial_derivative is not dh/dr at r / k")
+    if hasattr(h, "angular_gradient") and hasattr(hk, "angular_gradient"):
+        for got, want in zip(hk.angular_gradient(k * rk, theta, phi),
+                             h.angular_gradient(rk, theta, phi)):
+            want = k * np.asarray(want, dtype=float)
+            assert _rel(np.asarray(got, dtype=float), want, rtol=1e-9,
+                        floor=1e-12 * k * scale), (
+                "scaled(k).angular_gradient is not k times h's at r / k")
+
 
 def check_mapping(m: Mapping, points: ArrayLike, *, rtol: float = 1e-6,
                   step: float | None = None) -> None:
@@ -119,8 +158,9 @@ def check_mapping(m: Mapping, points: ArrayLike, *, rtol: float = 1e-6,
 
     Checks the shapes; `deformation_gradient` against a central
     difference of `m` with `F[i, j] = d m_i / d X_j`; `jacobian` against
-    det F; and, when present, `displacement` against m(X) - X and
-    `inverse` as a round trip.  The difference step is 1e-6 of each
+    det F; and, when present, `displacement` against m(X) - X,
+    `inverse` as a round trip, and `scaled(k)` against k m(X / k) with
+    the same F and J.  The difference step is 1e-6 of each
     point's radius unless `step` gives one step for every point.
     """
     X = np.asarray(points, dtype=float)
@@ -168,6 +208,16 @@ def check_mapping(m: Mapping, points: ArrayLike, *, rtol: float = 1e-6,
             assert np.allclose(back, X, atol=1e-6 * scale, rtol=0.0), (
                 "inverse(m(X)) does not return X")
 
+    if callable(getattr(m, "scaled", None)):
+        k = 2.5
+        mk = m.scaled(k)
+        assert np.allclose(np.asarray(mk(k * X), dtype=float), k * x, rtol=0.0,
+                           atol=1e-12 * k * scale), "scaled(k) is not k m(X / k)"
+        assert _rel(np.asarray(mk.deformation_gradient(k * X), dtype=float), F,
+                    rtol=1e-9), "scaled(k) does not keep F"
+        assert np.allclose(np.asarray(mk.jacobian(k * X), dtype=float), J,
+                           rtol=1e-9, atol=1e-9), "scaled(k) does not keep J"
+
 
 def check_geometry(geometry: Geometry) -> None:
     """Hold a Geometry to its invariants and its numbering.
@@ -176,7 +226,8 @@ def check_geometry(geometry: Geometry) -> None:
     checks on), that names are unique, that the interfaces sit on the
     skeleton's boundaries with consistent `between`, that `scaled(k)`
     round-trips, and that the mapping passes `check_mapping` on the
-    validity lattice.
+    validity lattice's angles, at radii inside every span between the
+    boundaries and the declared knots.
     """
     from .frames import cartesian_points
     from .geometry import Geometry
@@ -206,11 +257,14 @@ def check_geometry(geometry: Geometry) -> None:
     twice = geometry.scaled(k).scaled(1.0 / k)
     assert np.allclose(twice.skeleton.boundaries, b, rtol=1e-12), (
         "scaled(k).scaled(1/k) does not restore the skeleton")
-    # points well inside every layer, away from the boundaries where the
-    # mapping's gradient may jump
+    # points well inside every span between the boundaries and the
+    # declared knots, where the mapping's gradient may jump
     _, theta, phi = validity_lattice(sk, n_theta=5, n_phi=4)
+    tol = geometry.rtol * sk.span
+    cuts = np.unique(np.concatenate([b, np.asarray(geometry.knots(), dtype=float)]))
+    cuts = cuts[np.concatenate([[True], np.diff(cuts) > tol])]
     r = np.concatenate([lo + (hi - lo) * np.array([0.25, 0.5, 0.75])
-                        for lo, hi in zip(b[:-1], b[1:])])[:, None, None]
+                        for lo, hi in zip(cuts[:-1], cuts[1:])])[:, None, None]
     X = cartesian_points(r, theta, phi)
     assert np.allclose(twice.mapping(X), geometry.mapping(X), rtol=1e-10,
                        atol=1e-10 * max(1.0, float(sk.span))), (
@@ -490,7 +544,8 @@ def check_model(model: Model, *, rng: np.random.Generator | None = None) -> None
                       and model.spec(n).dimensions is not None for n in names)
     if convertible:
         other = Scales(length=3.0 * model.scales.length,
-                       mass=0.5 * model.scales.mass, time=2.0 * model.scales.time)
+                       mass=0.5 * model.scales.mass, time=2.0 * model.scales.time,
+                       temperature=1.5 * model.scales.temperature)
         back = model.converted(other).converted(model.scales)
         assert np.allclose(back.skeleton.boundaries, model.skeleton.boundaries,
                            rtol=1e-12), "conversion does not restore the skeleton"
@@ -536,11 +591,12 @@ def check_sample(sample: Sample, model: Model, *,
     """Hold a Sample to its layout and to the model it was taken from.
 
     Layout: the radial mesh lies over the model's skeleton and the nodes
-    are its per-element GLL nodes flattened; the angular nodes increase
-    inside their open ranges; every field is float64 and read-only,
-    shaped `(nnode,) + c` exactly when every layer holding it declares
-    itself radial and `(nnode, ntheta, nphi) + c` otherwise, with `c`
-    the stored shape of its character.  Metadata: the characters and
+    are its per-element GLL nodes flattened; the angular nodes increase,
+    colatitudes in [0, pi] and longitudes in [0, 2 pi); every field is
+    float64 and read-only, shaped `(nnode,) + c` exactly when every
+    layer holding it declares itself radial and `(nnode, ntheta, nphi)
+    + c` otherwise, with `c` the stored shape of its character.
+    Metadata: the characters and
     dimensions are those of the model's fields and specs, the scales
     and layer names the model's.  Values: NaN on every node of a layer
     lacking the field and finite everywhere else; `n` random (node,
@@ -576,8 +632,8 @@ def check_sample(sample: Sample, model: Model, *,
     assert np.array_equal(sample.node_layer, node_layer), (
         "node_layer is not element_layer repeated over the nodes")
     theta, phi = grid.colatitudes, grid.longitudes
-    assert np.all(np.diff(theta) > 0) and 0 < theta[0] and theta[-1] < np.pi, (
-        "colatitudes are not increasing inside (0, pi)")
+    assert np.all(np.diff(theta) > 0) and 0 <= theta[0] and theta[-1] <= np.pi, (
+        "colatitudes are not increasing in [0, pi]")
     assert np.all(np.diff(phi) > 0) and 0 <= phi[0] and phi[-1] < 2 * np.pi, (
         "longitudes are not increasing inside [0, 2 pi)")
     ntheta, nphi = theta.size, phi.size
@@ -874,3 +930,142 @@ def check_spherical_basis(basis: SphericalBasis, *,
     junk[~seen] = 1.0
     assert np.array_equal(basis.analyse(junk), basis.analyse(full)), (
         "analyse reads entries that belong to no harmonic")
+
+
+def check_model_file(path: str | os.PathLike[str], model: Model, *,
+                     rng: np.random.Generator | None = None, n: int = 48,
+                     rtol: float = 1e-12) -> None:
+    """Hold a model file to the model it was written from.
+
+    Checks the structure (`validate_structure`); the skeleton, the layer
+    and interface names and the scales; that every variable is held on
+    the layers its `layers` attribute names, NaN elsewhere, by fields of
+    the model of the stated character; that a lateral variable names in
+    `radial_layers` exactly the layers where the model's field is radial,
+    and reads back radial there; that its values at `n` random
+    entries of the file's own nodes are the model's there, the
+    reference and the perturbation of a perturbed field apart, and so
+    are its polar values; that the geometry group holds the mapping's
+    reliefs at its nodes, and a displacement variable the mapping's
+    displacement; and that the model read back from the file takes the
+    stored values at those nodes, for every variable read by a local
+    rule.  Tolerances are `rtol` of a variable's largest value.  netCDF4
+    is imported here.
+    """
+    from .frames import cartesian_points, spherical_frame
+    from .modelfile import read_model, read_model_file, validate_structure
+
+    rng = np.random.default_rng(0) if rng is None else rng
+    validate_structure(path)
+    data = read_model_file(path)
+    assert np.allclose(data.skeleton.boundaries, model.skeleton.boundaries,
+                       rtol=1e-15), "the file's skeleton is not the model's"
+    assert data.layer_names == tuple(lay.name for lay in model.geometry.layers), (
+        "the file's layer names are not the model's")
+    assert data.interface_names == tuple(f.name for f in model.geometry.interfaces), (
+        "the file's interface names are not the model's")
+    assert data.scales == model.scales, (
+        f"the file is in {data.scales!r}, the model in {model.scales!r}")
+    assert data.rtol == model.geometry.rtol, (
+        f"the file states rtol {data.rtol!r}, the model's geometry has "
+        f"{model.geometry.rtol!r}")
+    back = read_model(path)
+
+    def stored_against(values: np.ndarray, want: np.ndarray, what: str) -> None:
+        scale = max(float(np.nanmax(np.abs(values))) if values.size else 0.0, 1e-300)
+        assert np.allclose(values, want, rtol=0.0, atol=rtol * scale), (
+            f"{what}: the file's values are not the model's at its nodes")
+
+    for k, part in enumerate(data.parts):
+        mesh, grid = part.mesh, part.grid
+        r_all = mesh.r.ravel()
+        node_layer = np.repeat(mesh.layer, mesh.ngll)
+        for name, var in part.variables.items():
+            if name.endswith(("_poles", "_perturbation")) or name == "displacement":
+                continue
+            holders = [int(i) for i in np.atleast_1d(var.attributes["layers"])]
+            values = var.values
+            for i in part.layers:
+                on = node_layer == i
+                if i not in holders:
+                    assert np.all(np.isnan(values[on])), (
+                        f"part_{k}/{name} is not NaN on layer {i}, which lacks it")
+                    continue
+                field = model.layer(i)[name]
+                c = field.character
+                stated = (int(var.attributes["rank"]), int(var.attributes["weight"]),
+                          bool(var.attributes["voigt"]))
+                assert stated == (c.rank, c.weight, bool(c.voigt)), (
+                    f"part_{k}/{name} states the character {stated}, the model's "
+                    f"field on layer {i} is {c}")
+                pert_name = var.attributes.get("perturbation")
+                reference = getattr(field, "reference", None)
+                source = reference if (pert_name and reference is not None) else field
+                idx = rng.choice(np.flatnonzero(on), size=min(n, int(on.sum())),
+                                 replace=False)
+                r = r_all[idx]
+                if values.ndim == 1 + len(source.stored_shape):
+                    th = np.full(r.shape, 0.5 * np.pi)
+                    want = source.evaluate(r, th, np.zeros_like(r))
+                    stored_against(values[idx], want, f"part_{k}/{name}")
+                    got = back.layer(i)[name]
+                    got = getattr(got, "reference", got)
+                    stored_against(values[idx], got.evaluate(r, th, np.zeros_like(r)),
+                                   f"part_{k}/{name} read back")
+                else:
+                    it = rng.integers(grid.ntheta, size=idx.size)
+                    ip = rng.integers(grid.nphi, size=idx.size)
+                    t, p = grid.colatitudes[it], grid.longitudes[ip]
+                    stored_against(values[idx, it, ip], source.evaluate(r, t, p),
+                                   f"part_{k}/{name}")
+                    if var.attributes.get("lateral_interpolation") != "harmonic":
+                        stored_against(values[idx, it, ip],
+                                       back.layer(i)[name].evaluate(r, t, p),
+                                       f"part_{k}/{name} read back")
+                    listed = i in {int(j) for j in np.atleast_1d(
+                        var.attributes.get("radial_layers", []))}
+                    radial = bool(getattr(source, "is_radial", False))
+                    assert listed == radial, (
+                        f"part_{k}/{name}: layer {i} is "
+                        f"{'' if listed else 'not '}in radial_layers, but the "
+                        f"model's field there is {'' if radial else 'not '}radial")
+                    assert not listed or getattr(back.layer(i)[name], "is_radial",
+                                                 False), (
+                        f"part_{k}/{name}: layer {i} is in radial_layers but does "
+                        "not read back radial")
+                poles = part.variables.get(f"{name}_poles")
+                if poles is not None:
+                    want = source.evaluate(r[:, None], np.array([0.0, np.pi]),
+                                           np.zeros(2), frame="cartesian")
+                    stored_against(poles.values[idx], want, f"part_{k}/{name}_poles")
+                if pert_name and reference is not None:
+                    pv = part.variables[pert_name]
+                    d = field.perturbation
+                    if pv.values.ndim == 1:
+                        want = d.evaluate(r, np.full(r.shape, 0.5 * np.pi),
+                                          np.zeros_like(r))
+                        stored_against(pv.values[idx], want, f"part_{k}/{pert_name}")
+                    else:
+                        it = rng.integers(grid.ntheta, size=idx.size)
+                        ip = rng.integers(grid.nphi, size=idx.size)
+                        t, p = grid.colatitudes[it], grid.longitudes[ip]
+                        stored_against(pv.values[idx, it, ip], d.evaluate(r, t, p),
+                                       f"part_{k}/{pert_name}")
+        disp = part.variables.get("displacement")
+        if disp is not None:
+            it = rng.integers(grid.ntheta, size=n)
+            ip = rng.integers(grid.nphi, size=n)
+            idx = rng.integers(r_all.size, size=n)
+            X = cartesian_points(r_all[idx], grid.colatitudes[it], grid.longitudes[ip])
+            R = spherical_frame(grid.colatitudes[it], grid.longitudes[ip])
+            u = np.einsum("pji,pj->pi", R, model.geometry.mapping(X) - X)
+            stored_against(disp.values[idx, it, ip], u, f"part_{k}/displacement")
+    if data.geometry is not None:
+        g = data.geometry
+        h = model.geometry.mapping.h
+        theta = g.grid.colatitudes[:, None]
+        phi = g.grid.longitudes[None, :]
+        for j, radius in enumerate(g.radii):
+            want = np.broadcast_to(h(np.full(theta.shape, radius), theta, phi),
+                                   g.values[j].shape)
+            stored_against(g.values[j], want, f"geometry/boundary_displacement[{j}]")

@@ -8,6 +8,8 @@ from planetmodel.layerfunction import PolynomialLayer
 from planetmodel import testing
 from planetmodel.materials import elastic_moduli, is_fluid, kappa_mu, moduli
 from planetmodel.mesh1d.gravity import gravity, mass
+from planetmodel.geometry import Geometry
+from planetmodel.skeleton import Skeleton
 from planetmodel.testing import check_model
 from planetmodel.units import Scales
 
@@ -400,3 +402,63 @@ def test_coarsening_across_the_cmb_is_refused():
         bare = bare.without_field(name)
     with pytest.raises(ValueError, match="elastic description"):
         bare.coarsened(drop=[0])
+
+
+def test_a_velocity_of_the_other_symmetry_is_refused():
+    """vp on a transversely isotropic layer and vpv on an isotropic one,
+    added or replaced, would contradict the velocities held; the ways out
+    the refusals name both work."""
+    from planetmodel import constant_field
+
+    m = PREM(ocean=False)
+    iv = m.layer("lid").interval
+    for replace in (False, True):
+        with pytest.raises(ValueError,
+                           match=r"'lid'.*'vp' would contradict.*isotropic"):
+            m.with_field("lid", "vp", constant_field(iv, 8e3, name="vp"),
+                         replace=replace)
+    lid = m.isotropic().with_field("lid", "vp", constant_field(iv, 8e3, name="vp"),
+                                   replace=True).layer("lid")
+    assert not any(n in lid for n in ("vpv", "vph", "vsv", "vsh", "eta"))
+    assert np.isclose(np.sqrt(lid["C"](6300e3) / lid["rho"](6300e3)), 8e3)
+
+    iso = LayeredIsotropicElastic([0.0, 1.0], rho=[1.0], vp=[2.0], vs=[1.0])
+    for replace in (False, True):
+        with pytest.raises(ValueError, match="'vpv' would contradict.*Love moduli"):
+            iso.with_field(0, "vpv", constant_field((0.0, 1.0), 3.0, name="vpv"),
+                           replace=replace)
+    ti = iso.with_field(0, "N", constant_field((0.0, 1.0), 2.0, name="N",
+                                               character=DENSITY), replace=True)
+    lay = ti.layer(0)
+    assert "vp" not in lay and "vs" not in lay
+    assert np.isclose(lay["vsh"](0.5), np.sqrt(2.0))
+    assert np.isclose(lay["vsv"](0.5), 1.0)
+
+
+def test_replacing_rho_makes_the_velocities_the_description():
+    """The moduli follow a new density at the velocities held, on a layer
+    given velocities and on one given kappa and mu."""
+    from planetmodel import Model, constant_field
+    from planetmodel.behaviours import Elastic
+
+    m = LayeredIsotropicElastic([0.0, 1.0], rho=[1.0], vp=[2.0], vs=[1.0])
+    heavy = m.with_field(0, "rho", constant_field((0.0, 1.0), 4.0, character=DENSITY),
+                         replace=True)
+    lay = heavy.layer(0)
+    assert np.isclose(lay["L"](0.5), 4.0) and np.isclose(lay["C"](0.5), 16.0)
+    assert np.isclose(lay["vs"](0.5), 1.0)
+
+    class ByModuli(Elastic, Model):
+        pass
+
+    iv = (0.0, 1.0)
+    km = ByModuli(Geometry(Skeleton([0.0, 1.0])), [{
+        "rho": constant_field(iv, 1.0, character=DENSITY),
+        "kappa": constant_field(iv, 3.0, character=DENSITY),
+        "mu": constant_field(iv, 1.0, character=DENSITY)}])
+    heavy = km.with_field(0, "rho", constant_field(iv, 4.0, character=DENSITY),
+                          replace=True)
+    lay = heavy.layer(0)
+    assert np.isclose(lay["vs"](0.5), 1.0) and np.isclose(lay["L"](0.5), 4.0)
+    assert "mu" not in lay and "kappa" not in lay      # the other families go
+    testing.check_model(heavy)

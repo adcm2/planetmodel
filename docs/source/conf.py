@@ -43,7 +43,7 @@ napoleon_use_ivar = True
 # The optional extras are not installed where the docs are built; their
 # importers (gmsh at the top of planetmodel.mesh3d, the rest inside the
 # functions that need them) document against these stand-ins.
-autodoc_mock_imports = ["gmsh", "mfem", "pyshtools", "ducc0", "matplotlib"]
+autodoc_mock_imports = ["gmsh", "mfem", "ducc0", "matplotlib"]
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -83,5 +83,38 @@ def _run_apidoc(_app: object) -> None:
     )
 
 
+# -- The C++ reference -------------------------------------------------------
+# Doxygen writes the reference of cpp/ by cpp/docs/Doxyfile, the file CI
+# builds it by, into docs/_doxygen/cpp-reference; html_extra_path copies it
+# beside these pages, where docs/source/cpp.rst links to it.  Without
+# Doxygen (a local build, say) the reference is left out with a warning.
+
+_DOXYGEN_OUT = os.path.join(_REPO_ROOT, "docs", "_doxygen")
+os.makedirs(_DOXYGEN_OUT, exist_ok=True)
+html_extra_path = [_DOXYGEN_OUT]
+
+
+def _run_doxygen(_app: object) -> None:
+    """Build the C++ reference, every warning a failure."""
+    import shutil
+    import subprocess
+    import tomllib
+
+    from sphinx.util import logging
+
+    doxygen = shutil.which("doxygen")
+    if doxygen is None:
+        logging.getLogger(__name__).warning(
+            "doxygen is not installed, so the C++ reference is left out")
+        return
+    with open(os.path.join(_REPO_ROOT, "pyproject.toml"), "rb") as f:
+        version = tomllib.load(f)["project"]["version"]
+    env = dict(os.environ, PLANETMODEL_DOCS_OUTPUT=_DOXYGEN_OUT,
+               PLANETMODEL_VERSION=version)
+    subprocess.run([doxygen, os.path.join("docs", "Doxyfile")],
+                   cwd=os.path.join(_REPO_ROOT, "cpp"), env=env, check=True)
+
+
 def setup(app: object) -> None:
     app.connect("builder-inited", _run_apidoc)
+    app.connect("builder-inited", _run_doxygen)
