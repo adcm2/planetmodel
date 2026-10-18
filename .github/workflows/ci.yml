@@ -153,6 +153,71 @@ jobs:
       - name: Test the meshing and export suites
         run: poetry run pytest -m "gmsh or mfem"
 
+  # The C++ library in cpp/: the fixtures written by the Python first, then
+  # the library's own tests and its consumer builds, under the two
+  # compilers its codes use, with warnings as errors.  The fixtures are
+  # required here, so a test that would skip for want of one fails.
+  cpp:
+    name: C++ library (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: g++-14
+          - compiler: clang++-18
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install netCDF-C and the compilers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libnetcdf-dev g++-14 clang-18
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: |
+          pip install poetry
+          poetry config virtualenvs.create false
+
+      - name: Install dependencies
+        run: poetry install --with dev --extras "netcdf"
+
+      - name: Write the fixtures
+        run: poetry run python cpp/tests/make_fixtures.py
+
+      - name: Configure
+        run: >
+          cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+          -DPLANETMODEL_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build/cpp -j 4
+
+      - name: Test
+        env:
+          PLANETMODEL_REQUIRE_FIXTURES: "1"
+        run: ctest --test-dir build/cpp --output-on-failure -j 4
+
+      # The library is fetched from the repository at a tag, never from
+      # PyPI, so the Python package leaves it out.
+      - name: The package leaves cpp/ out
+        if: matrix.compiler == 'g++-14'
+        run: |
+          poetry build -o dist
+          if tar -tzf dist/*.tar.gz | grep -q '/cpp/'; then
+            echo "the sdist contains cpp/"; exit 1
+          fi
+          if unzip -l dist/*.whl | grep -q ' cpp/'; then
+            echo "the wheel contains cpp/"; exit 1
+          fi
+
   # Everything, including whatever is marked slow.  Run by hand: Actions ->
   # CI -> Run workflow.  Worth doing before a release.
   full-tests:

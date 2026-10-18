@@ -23,6 +23,13 @@ netCDF file each: for a lateral case the grid (`colatitude`,
 Every case covers the poles, the longitude seam and points between
 nodes.  The local rules only: the C++ side does no spherical-harmonic
 work.
+
+**The facts the C++ restates** (`constants.txt`), one per line, a key
+and its value separated by spaces: the version, `G_SI`,
+`EARTH_MEAN_DENSITY`, and for each of a few scales, `scales <label>`
+with its four values, `factor <label> <m l t T> <value>` and
+`unit <label> <m l t T> <string>` for dimensions across the vocabulary,
+floats written to round-trip exactly.
 """
 from __future__ import annotations
 
@@ -32,6 +39,7 @@ from pathlib import Path
 import numpy as np
 
 import planetmodel as pm
+from planetmodel import units
 from planetmodel.lateral import LateralInterpolant
 from planetmodel.mesh1d import Mesh1D
 from planetmodel.modelfile import validate_structure, write_model
@@ -169,6 +177,37 @@ def model_files(directory: Path) -> list[Path]:
     ]
 
 
+#: The dimensions the units fixture covers: every named one, and powers
+#: and products the named ones do not reach.
+_DIMENSIONS = (units.DIMENSIONLESS, units.MASS, units.LENGTH, units.TIME,
+               units.FREQUENCY, units.DENSITY, units.VELOCITY, units.GRAVITY,
+               units.MODULUS, units.VISCOSITY, units.GRAVITATIONAL_CONSTANT,
+               units.TEMPERATURE, units.VELOCITY ** 2,
+               units.DENSITY * units.TEMPERATURE ** -1, units.LENGTH ** -7)
+
+
+def constants(directory: Path) -> list[Path]:
+    """The facts of the module docstring, under the SI scales, the Earth's
+    geophysical ones, and scales of no physical meaning with a
+    temperature."""
+    scales = {"si": pm.Scales.SI,
+              "earth": pm.Scales.geophysical(6371e3),
+              "odd": pm.Scales(length=3.5e4, mass=2.25e19, time=17.0,
+                               temperature=273.15)}
+    lines = [f"version {pm.__version__}", f"G_SI {units.G_SI!r}",
+             f"EARTH_MEAN_DENSITY {units.EARTH_MEAN_DENSITY!r}"]
+    for label, s in scales.items():
+        lines.append(f"scales {label} {s.length!r} {s.mass!r} {s.time!r} "
+                     f"{s.temperature!r}")
+        for d in _DIMENSIONS:
+            exps = f"{d.mass} {d.length} {d.time} {d.temperature}"
+            lines.append(f"factor {label} {exps} {s.factor(d)!r}")
+            lines.append(f"unit {label} {exps} {units.scaled_unit(d, s)}")
+    path = directory / "constants.txt"
+    path.write_text("\n".join(lines) + "\n")
+    return [path]
+
+
 def write_fixtures(directory: str | Path) -> list[Path]:
     """Every fixture into `directory`, each model file validated."""
     directory = Path(directory)
@@ -176,7 +215,8 @@ def write_fixtures(directory: str | Path) -> list[Path]:
     models = model_files(directory)
     for path in models:
         validate_structure(path)
-    return models + lateral_cases(directory) + radial_cases(directory)
+    return (models + lateral_cases(directory) + radial_cases(directory)
+            + constants(directory))
 
 
 if __name__ == "__main__":

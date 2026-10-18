@@ -45,3 +45,7 @@ docs/**/*.md
 
 # fixtures for the C++ readers, written by cpp/tests/make_fixtures.py
 cpp/tests/fixtures/
+
+# build trees of the C++ library (cmake -S cpp -B build/cpp, or one in cpp/)
+/build/
+/cpp/build*/
