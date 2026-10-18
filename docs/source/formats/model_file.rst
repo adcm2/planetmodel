@@ -143,6 +143,11 @@ attributes:
    * - ``lateral_interpolation``
      - ``linear``, ``cubic`` or ``harmonic`` (below), on a variable that
        varies with direction
+   * - ``radial_layers``
+     - on a variable that varies with direction, the layers on which the
+       field does not: its values there repeat over the grid, and a
+       reader may read one column of them as a field of the radius;
+       absent where there are none
    * - ``coordinates``
      - ``radius``
 

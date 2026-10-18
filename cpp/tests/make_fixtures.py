@@ -153,7 +153,7 @@ def model_files(directory: Path) -> list[Path]:
 
     relief = pm.GriddedFunction.sampled(bump, pm.gauss_legendre(16))
     stacked = two.stretched(pm.layer_linear(two.skeleton, [None, relief, relief]))
-    flattened = two.stretched(pm.flattening(0.01, rmax=1.0))
+    flattened = two.stretched(pm.flattening(0.01))
     return [
         write_model(directory / "model_prem.nc", prem, grid=pm.gauss_legendre(2)),
         write_model(directory / "model_prem_perturbed.nc", perturbed,

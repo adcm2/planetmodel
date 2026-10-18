@@ -407,6 +407,13 @@ class GriddedFunction:
         """The mean over the sphere of the function as its rule defines it."""
         return float(self._f.mean())
 
+    def scaled(self, k: float) -> "GriddedFunction":
+        """k times the function, on the same grid by the same rule: the
+        relief of a body k times the size."""
+        k = float(k)
+        return GriddedFunction(self.grid, k * self._data, lateral=self.lateral,
+                               poles=k * self._poles)
+
     def __repr__(self) -> str:
         return f"GriddedFunction({self.lateral} on {self.grid!r})"
 
@@ -535,6 +542,13 @@ class GriddedDisplacement(MappingBase):
     def jacobian(self, X: ArrayLike) -> np.ndarray:
         """J = det F."""
         return np.linalg.det(self.deformation_gradient(X))
+
+    def scaled(self, k: float) -> "GriddedDisplacement":
+        """k m(X / k): the skeleton and the fields' radii multiplied by k,
+        and the displacement with them."""
+        k = float(k)
+        return GriddedDisplacement(Skeleton(k * self._sk.boundaries),
+                                   [f.rescaled(k=k, v=k) for f in self._fields])
 
     def __repr__(self) -> str:
         return (f"GriddedDisplacement({len(self._fields)} layers, "

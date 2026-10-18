@@ -38,8 +38,13 @@ def offset_custom():
     return AngularGrid(np.linspace(0.2, 2.9, 9), phi)
 
 
+def fewest_longitudes():
+    """A custom grid with the three longitudes the bicubic rule needs."""
+    return AngularGrid(np.linspace(0.4, 2.7, 4), np.array([0.1, 2.0, 4.4]))
+
+
 GRIDS = [gauss_legendre(6), driscoll_healy(5), equiangular(8, 14),
-         equiangular(9, 14, poles=True), offset_custom()]
+         equiangular(9, 14, poles=True), offset_custom(), fewest_longitudes()]
 
 
 @pytest.mark.parametrize("method", LOCAL)

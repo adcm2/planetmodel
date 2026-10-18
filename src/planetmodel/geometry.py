@@ -37,8 +37,8 @@ from numpy.typing import ArrayLike
 
 from .displacement import RadialDisplacement, SphericalFunction
 from .frames import cartesian_points
-from .mapping import (IdentityMapping, Mapping, RadialStretch, ScaledMapping,
-                      SphericalSample, ValidityReport, validity, validity_lattice)
+from .mapping import (IdentityMapping, Mapping, RadialStretch, SphericalSample,
+                      ValidityReport, scaled_mapping, validity, validity_lattice)
 from .skeleton import CoarseningMap, Skeleton
 
 __all__ = ["Geometry", "LayerInfo", "InterfaceInfo", "Names", "Renames"]
@@ -284,7 +284,7 @@ class Geometry:
         """The same geometry with every length multiplied by k."""
         k = float(k)
         sk = Skeleton(self._sk.boundaries * k)
-        m = self._m if self.is_identity else ScaledMapping(self._m, k)
+        m = self._m if self.is_identity else scaled_mapping(self._m, k)
         return self._copy(skeleton=sk, mapping=m)
 
     # -- surgery ------------------------------------------------------------

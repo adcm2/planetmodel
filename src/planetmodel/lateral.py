@@ -82,11 +82,14 @@ Everything is numbers.
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike
 from scipy.interpolate import BSpline, NdBSpline, make_interp_spline
+from scipy.sparse import csc_array
+from scipy.sparse.linalg import SuperLU, splu
 
 from .frames import wrapped
 from .harmonics import (analyse_grid, real_harmonics, synthesise_points_gradient,
@@ -255,6 +258,31 @@ def _padded(v: np.ndarray, grid: AngularGrid, poles: np.ndarray
     return np.concatenate(theta_p), phi_p, np.concatenate(rows, axis=-2)
 
 
+@lru_cache(maxsize=8)
+def _periodic_cubic(grid: AngularGrid) -> tuple[np.ndarray, SuperLU]:
+    """The knots of the periodic cubic spline through a grid's longitudes
+    (the longitudes extended by whole turns) and the factorised
+    collocation matrix of its nphi free coefficients, coefficient j + nphi
+    being coefficient j: built once for each grid, and solved for every
+    column of values at once."""
+    phi = grid.longitudes
+    n = phi.size
+    j = np.arange(-3, n + 4)
+    t = phi[j % n] + 2.0 * np.pi * (j // n)
+    D = BSpline.design_matrix(phi, t, 3).tocoo()
+    return t, splu(csc_array((D.data, (D.row, D.col % n)), shape=(n, n)))
+
+
+def _periodic_spline(C: np.ndarray, grid: AngularGrid
+                     ) -> tuple[np.ndarray, np.ndarray]:
+    """(knots, coefficients) of the periodic cubic spline through the
+    values C of shape (nphi, ...) at the grid's longitudes, along axis 0."""
+    t, lu = _periodic_cubic(grid)
+    n = C.shape[0]
+    u = lu.solve(C.reshape(n, -1)).reshape(C.shape)
+    return t, u[np.arange(n + 3) % n]
+
+
 def _pole_slopes(theta: np.ndarray, phi: np.ndarray, V: np.ndarray
                  ) -> list[np.ndarray]:
     """The clamped slopes at the north and south poles, each of the shape
@@ -301,21 +329,17 @@ class LateralInterpolant:
             along_theta = make_interp_spline(theta_p, V, k=1, axis=0)
             along_phi = make_interp_spline(
                 phi_p, np.swapaxes(along_theta.c, 0, 1), k=1, axis=0)
-            k = 1
+            t_phi, c_phi, k = along_phi.t, along_phi.c, 1
         else:
             # the meridians through the grid's columns, clamped at the
-            # poles; then the periodic spline through the columns and the
-            # wrap, which repeats the first
+            # poles; then the periodic spline through the columns
             V = V[:, :-1]
             north, south = _pole_slopes(theta_p, grid.longitudes, V)
             along_theta = make_interp_spline(theta_p, V, k=3, axis=0,
                                              bc_type=([(1, north)], [(1, south)]))
-            C = np.swapaxes(along_theta.c, 0, 1)
-            along_phi = make_interp_spline(phi_p, np.concatenate([C, C[:1]]), k=3,
-                                           axis=0, bc_type="periodic")
+            t_phi, c_phi = _periodic_spline(np.swapaxes(along_theta.c, 0, 1), grid)
             k = 3
-        self._spline = NdBSpline((along_theta.t, along_phi.t),
-                                 np.swapaxes(along_phi.c, 0, 1), k)
+        self._spline = NdBSpline((along_theta.t, t_phi), np.swapaxes(c_phi, 0, 1), k)
         self._degree = k
 
     @property

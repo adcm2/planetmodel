@@ -43,7 +43,7 @@ from .fields import Field, FieldBase, check_frame, to_stored
 from .frames import (SphericalFunction, cartesian_points, rotate_slots,
                      spherical_coordinates, spherical_frame, tensor_to_voigt,
                      voigt_to_tensor)
-from .mapping import Mapping, ScaledMapping
+from .mapping import Mapping, scaled_mapping
 
 __all__ = ["push_forward", "pull_back", "full_components",
            "PushedForwardField", "PulledBackField"]
@@ -229,7 +229,7 @@ class PushedForwardField(FieldBase):
     def rescaled(self, *, k: float, v: float) -> "PushedForwardField":
         """The source rescaled by (k, v) under the mapping conjugated by k."""
         return PushedForwardField(self._source.rescaled(k=k, v=v),
-                                  ScaledMapping(self._mapping, k), name=self._name)
+                                  scaled_mapping(self._mapping, k), name=self._name)
 
     def renamed(self, name: str | None) -> "PushedForwardField":
         """The same field under `name`; None unnames it rather than
@@ -318,7 +318,7 @@ class PulledBackField(FieldBase):
         lo, hi = self._interval
         return PulledBackField(
             (k * lo, k * hi), lambda r, t, p: v * np.asarray(fn(r / k, t, p)),
-            ScaledMapping(self._mapping, k), character=self._character,
+            scaled_mapping(self._mapping, k), character=self._character,
             name=self._name, rtol=self._rtol)
 
     def renamed(self, name: str | None) -> "PulledBackField":

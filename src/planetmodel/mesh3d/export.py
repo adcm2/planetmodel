@@ -158,13 +158,32 @@ def jacobian_report(mesh: Any) -> dict[str, float]:
     for a folded one.  `negative_jacobians` counts the elements with a
     non-positive determinant somewhere.  A curved element can fold
     between corners that are individually fine, which is why the nodal
-    points are included.
+    points are included.  A mesh of one element geometry is read
+    through MFEM's geometric factors, all elements at once.
     """
+    low, high = _extreme_determinants(mesh)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(high > 0.0, low / high, -np.inf)
+    return {"min_ratio": float(ratio.min(initial=np.inf)),
+            "negative_jacobians": int(np.count_nonzero(low <= 0.0))}
+
+
+def _extreme_determinants(mesh: Any) -> tuple[np.ndarray, np.ndarray]:
+    """The least and the greatest Jacobian determinant of each element
+    over its quadrature points, of twice the mesh's order, and its nodes."""
     mfem = _mfem()
     fes = mesh.GetNodes().FESpace()
     order = _mesh_order(mesh)
-    worst = np.inf
-    negative = 0
+    if mesh.GetNE() and mesh.GetNumGeometries(mesh.Dimension()) == 1:
+        rules = (mfem.IntRules.Get(mesh.GetElementBaseGeometry(0), 2 * order),
+                 fes.GetFE(0).GetNodes())
+        # MFEM keeps the factors by rule, stale once the nodes have moved
+        mesh.DeleteGeometricFactors()
+        dets = np.concatenate([np.array(mesh.GetGeometricFactors(
+            rule, mfem.GeometricFactors.DETERMINANTS).detJ.GetDataArray(),
+            dtype=float).reshape(mesh.GetNE(), -1) for rule in rules], axis=1)
+        return dets.min(axis=1), dets.max(axis=1)
+    low, high = np.empty(mesh.GetNE()), np.empty(mesh.GetNE())
     for e in range(mesh.GetNE()):
         T = mesh.GetElementTransformation(e)
         rules = (mfem.IntRules.Get(mesh.GetElementBaseGeometry(e), 2 * order),
@@ -174,11 +193,8 @@ def jacobian_report(mesh: Any) -> dict[str, float]:
             for i in range(rule.GetNPoints()):
                 T.SetIntPoint(rule.IntPoint(i))
                 dets.append(T.Weight())
-        low, high = min(dets), max(dets)
-        if low <= 0.0:
-            negative += 1
-        worst = min(worst, low / high if high > 0.0 else -np.inf)
-    return {"min_ratio": float(worst), "negative_jacobians": int(negative)}
+        low[e], high[e] = min(dets), max(dets)
+    return low, high
 
 
 def _require_unfolded(mesh: Any, what: str) -> dict[str, float]:
@@ -310,6 +326,7 @@ def export_mfem_mesh(result: MeshResult, path_base: str | Path, *,
     moved = delivery == "physical" and not identity
     if moved:
         nodes.GetDataArray()[:] += displacement.GetDataArray()
+        mesh.NodesUpdated()
         quality = _require_unfolded(mesh, f"the mapping {mapping!r}")
     else:
         quality = jacobian_report(mesh)

@@ -16,9 +16,12 @@ the committed interface is three methods on Cartesian points of shape
 Anything exposing these is a Mapping.  An optional tier, discovered by
 attribute, adds `displacement(X) = m(X) - X`, `is_valid(...)`,
 `inverse(x)`, `linearise(delta, X=...)`, `knots` (radii where F may
-jump) and `is_identity`; MappingBase provides generic versions of the
-first two.  A radial mapping also carries `h`, its radial displacement,
-and `deformation_gradient_spherical(X)`.
+jump), `is_identity`, and `scaled(k)`, the mapping k m(X / k) of a body
+k times the size in the mapping's own form; MappingBase provides
+generic versions of the first two, and `scaled_mapping(m, k)` asks for
+`scaled` and falls back on a `ScaledMapping`.  A radial mapping also
+carries `h`, its radial displacement, and
+`deformation_gradient_spherical(X)`.
 
 Mappings are Cartesian-first because meshes and solvers are; the
 conversion to and from (r, theta, phi) happens once, through
@@ -45,7 +48,7 @@ __all__ = [
     "Mapping", "MappingBase", "IdentityMapping", "RadialStretch",
     "ScaledMapping", "ValidityReport", "MappingPerturbation",
     "validity_lattice", "outer_radius_of", "SphericalSample",
-    "R_FLOOR_FRACTION", "SIN_FLOOR", "validity",
+    "R_FLOOR_FRACTION", "SIN_FLOOR", "validity", "scaled_mapping",
 ]
 
 #: A set of points given as (r, theta, phi) arrays that broadcast against
@@ -56,6 +59,12 @@ type SphericalSample = tuple[ArrayLike, ArrayLike, ArrayLike]
 #: A point closer to the origin than this fraction of `rmax` is treated as
 #: the origin, where the radial frame is undefined.
 R_FLOOR_FRACTION = 1e-9
+
+#: The inverse of a radial stretch: at most this many widenings of each
+#: bracket by half, and this many safeguarded Newton steps, every one
+#: of which halves the bracket when it does not take the Newton step.
+_WIDENINGS = 60
+_ITERATIONS = 100
 
 #: sin(theta) below this is the polar axis, where the 1/(r sin theta)
 #: entry of F is taken as its limit along the meridian.
@@ -192,6 +201,17 @@ def validity(m: Mapping, *, X: ArrayLike | None = None,
     return MappingBase.is_valid(m, X=X, sample=sample)
 
 
+def scaled_mapping(m: Mapping, k: float) -> Mapping:
+    """m conjugated by a change of length scale, k m(X / k), for k > 0:
+    the mapping's own `scaled(k)` where it has one, which keeps its form
+    (a stack of boundary reliefs stays a stack), else a `ScaledMapping`."""
+    k = float(k)
+    if not k > 0.0:
+        raise ValueError(f"the scale factor must be positive, got {k}")
+    own = getattr(m, "scaled", None)
+    return own(k) if callable(own) else ScaledMapping(m, k)
+
+
 class MappingBase:
     """Generic implementations of the optional tier, built on m, F and J.
 
@@ -280,6 +300,10 @@ class IdentityMapping(MappingBase):
         """A float copy of x."""
         return np.array(np.asarray(x, dtype=float))
 
+    def scaled(self, k: float) -> "IdentityMapping":
+        """The identity, on a body of any size."""
+        return self
+
     def is_valid(self, *, X: ArrayLike | None = None,
                  sample: SphericalSample | None = None) -> ValidityReport:
         """Valid everywhere, whatever the sample."""
@@ -332,47 +356,51 @@ class RadialStretch(MappingBase):
         floor = self._floor()
         return np.where(r > floor, h / np.maximum(r, floor), dr)
 
-    def _parts(self, X: ArrayLike) -> tuple[np.ndarray, ...]:
-        """(r, theta, phi, R, h, dh/dr, dh/dtheta, dh/dphi) at X."""
+    def _radial(self, r: np.ndarray, theta: np.ndarray, phi: np.ndarray
+                ) -> tuple[np.ndarray, np.ndarray]:
+        """(h, dh/dr) at the points."""
+        return (np.asarray(self.h(r, theta, phi), dtype=float),
+                np.asarray(self.h.radial_derivative(r, theta, phi), dtype=float))
+
+    def _spherical(self, X: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
+        """(F in the local frame, the frame matrix R) at X."""
         r, theta, phi, R = spherical_coordinates(X)
-        h = np.asarray(self.h(r, theta, phi), dtype=float)
-        dr = np.asarray(self.h.radial_derivative(r, theta, phi), dtype=float)
+        h, dr = self._radial(r, theta, phi)
         dth, dph = self.h.angular_gradient(r, theta, phi)
-        return (r, theta, phi, R, h, dr,
-                np.asarray(dth, dtype=float), np.asarray(dph, dtype=float))
+        rs = np.maximum(r, self._floor())
+        F = np.zeros(np.shape(r) + (3, 3))
+        stretch = 1.0 + self._ratio(r, h, dr)
+        F[..., 0, 0] = 1.0 + dr
+        F[..., 0, 1] = np.asarray(dth, dtype=float) / rs
+        F[..., 0, 2] = _per_sin(self.h, r, theta, phi,
+                                np.asarray(dph, dtype=float)) / rs
+        F[..., 1, 1] = stretch
+        F[..., 2, 2] = stretch
+        return F, R
 
     def __call__(self, X: ArrayLike) -> np.ndarray:
         """The displaced points x = (r + h) e_r; the origin stays put."""
         X = np.asarray(X, dtype=float)
         r, theta, phi, _ = spherical_coordinates(X)
-        h = np.asarray(self.h(r, theta, phi), dtype=float)
         if np.any(r <= self._floor()):
-            dr = np.asarray(self.h.radial_derivative(r, theta, phi), dtype=float)
+            h, dr = self._radial(r, theta, phi)
             return X * (1.0 + self._ratio(r, h, dr))[..., None]
+        h = np.asarray(self.h(r, theta, phi), dtype=float)
         return X * (1.0 + h / r)[..., None]
 
     def deformation_gradient_spherical(self, X: ArrayLike) -> np.ndarray:
         """F in the local (e_r, e_theta, e_phi) frame, shape (..., 3, 3)."""
-        r, theta, phi, R, h, dr, dth, dph = self._parts(X)
-        rs = np.maximum(r, self._floor())
-        F = np.zeros(np.shape(r) + (3, 3))
-        stretch = 1.0 + self._ratio(r, h, dr)
-        F[..., 0, 0] = 1.0 + dr
-        F[..., 0, 1] = dth / rs
-        F[..., 0, 2] = _per_sin(self.h, r, theta, phi, dph) / rs
-        F[..., 1, 1] = stretch
-        F[..., 2, 2] = stretch
-        return F
+        return self._spherical(X)[0]
 
     def deformation_gradient(self, X: ArrayLike) -> np.ndarray:
         """F in Cartesian components, R F_sph R^T."""
-        _, _, _, R = spherical_coordinates(X)
-        F = self.deformation_gradient_spherical(X)
-        return np.einsum("...ik,...kl,...jl->...ij", R, F, R)
+        F, R = self._spherical(X)
+        return R @ F @ np.swapaxes(R, -1, -2)
 
     def jacobian(self, X: ArrayLike) -> np.ndarray:
         """J = (1 + dh/dr)(1 + h/r)^2."""
-        r, theta, phi, _, h, dr, _, _ = self._parts(X)
+        r, theta, phi, _ = spherical_coordinates(X)
+        h, dr = self._radial(r, theta, phi)
         return (1.0 + dr) * (1.0 + self._ratio(r, h, dr)) ** 2
 
     def is_valid(self, *, X: ArrayLike | None = None,
@@ -394,8 +422,7 @@ class RadialStretch(MappingBase):
         else:
             raise ValueError("give either points X or a (r, theta, phi) sample")
 
-        h = np.asarray(self.h(r, theta, phi), dtype=float)
-        dr = np.asarray(self.h.radial_derivative(r, theta, phi), dtype=float)
+        h, dr = self._radial(r, theta, phi)
         floor = self._floor()
 
         def at(k: int) -> tuple[float, float, float]:
@@ -432,42 +459,58 @@ class RadialStretch(MappingBase):
         return ValidityReport(True, min(worst_radial, worst_tangential))
 
     def inverse(self, x: ArrayLike, *, tol: float = 1e-12) -> np.ndarray:
-        """X with m(X) = x, by a scalar root-find along each ray.
+        """X with m(X) = x, by a safeguarded Newton iteration on every ray.
 
         Direction is preserved, so each point is one scalar problem:
         find s with s + h(s, theta, phi) equal to the physical radius.
-        Where the mapping is valid the root is unique.  `tol` is relative
-        to `rmax`.
+        Where the mapping is valid the residual increases with s and the
+        root is unique.  Each point keeps a bracket, [0, max(rmax, 1.5
+        times its radius)] widened until it holds the root, and takes the
+        Newton step when it stays inside the bracket and the bisection
+        when it does not; a point whose residual is already positive at
+        the centre goes to the centre.  `tol` is relative to `rmax`.
         """
-        from scipy.optimize import brentq
-
         x = np.asarray(x, dtype=float)
         rho, theta, phi, _ = spherical_coordinates(x)
-        top = self.rmax
+        shape = np.shape(rho)
+        rho, theta, phi = (np.ravel(a) for a in np.broadcast_arrays(rho, theta, phi))
+        xtol = tol * self.rmax
 
-        flat = np.broadcast_arrays(rho, theta, phi)
-        out = np.empty(np.shape(rho))
-        it = np.nditer(flat[0], flags=["multi_index"])
-        for _ in it:
-            k = it.multi_index
-            target = float(flat[0][k])
-            th, ph = float(flat[1][k]), float(flat[2][k])
+        def residual(s: np.ndarray, k: np.ndarray) -> np.ndarray:
+            return s + np.asarray(self.h(s, theta[k], phi[k]), dtype=float) - rho[k]
 
-            def residual(s: float, *, th: float = th, ph: float = ph,
-                         target: float = target) -> float:
-                return float(s + self.h(s, th, ph)) - target
-
-            lo, hi = 0.0, max(top, target * 1.5)
-            if residual(lo) > 0.0:
-                out[k] = 0.0
-                continue
-            grow = 0
-            while residual(hi) < 0.0 and grow < 60:
-                hi *= 1.5
-                grow += 1
-            out[k] = brentq(residual, lo, hi, xtol=tol * top)
-
-        return cartesian_points(out, theta, phi)
+        every = np.arange(rho.size)
+        lo, hi = np.zeros(rho.size), np.maximum(self.rmax, 1.5 * rho)
+        live = residual(lo, every) <= 0.0
+        for _ in range(_WIDENINGS):
+            k = every[live]
+            k = k[residual(hi[k], k) < 0.0]
+            if not k.size:
+                break
+            hi[k] *= 1.5
+        s = np.where(live, np.clip(rho, lo, hi), 0.0)
+        for _ in range(_ITERATIONS):
+            k = every[live]
+            if not k.size:
+                break
+            sk = s[k]
+            f = residual(sk, k)
+            df = 1.0 + np.asarray(
+                self.h.radial_derivative(sk, theta[k], phi[k]), dtype=float)
+            lo[k] = np.where(f < 0.0, sk, lo[k])
+            hi[k] = np.where(f < 0.0, hi[k], sk)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                step = sk - f / df
+            inside = (df > 0.0) & (step >= lo[k]) & (step <= hi[k])
+            new = np.where(inside, step, 0.5 * (lo[k] + hi[k]))
+            new = np.where(f == 0.0, sk, new)
+            s[k] = new
+            live[k] = np.abs(new - sk) > xtol
+        if np.any(live):
+            raise RuntimeError(
+                f"the inverse did not converge at {int(live.sum())} points in "
+                f"{_ITERATIONS} iterations")
+        return cartesian_points(*(a.reshape(shape) for a in (s, theta, phi)))
 
     def linearise(self, delta: RadialDisplacement | SphericalFunction, *,
                   X: ArrayLike) -> MappingPerturbation:
@@ -482,7 +525,8 @@ class RadialStretch(MappingBase):
         dF is returned in Cartesian components.
         """
         dh = as_displacement(delta)
-        r, theta, phi, R, h, dr, _, _ = self._parts(X)
+        r, theta, phi, R = spherical_coordinates(X)
+        h, dr = self._radial(r, theta, phi)
         rs = np.maximum(r, self._floor())
 
         d = np.asarray(dh(r, theta, phi), dtype=float)
@@ -496,10 +540,19 @@ class RadialStretch(MappingBase):
         dF[..., 0, 2] = _per_sin(dh, r, theta, phi, dph) / rs
         dF[..., 1, 1] = dstretch
         dF[..., 2, 2] = dstretch
-        dF_cart = np.einsum("...ik,...kl,...jl->...ij", R, dF, R)
+        dF_cart = R @ dF @ np.swapaxes(R, -1, -2)
 
         dJ = ddr * stretch ** 2 + 2.0 * (1.0 + dr) * stretch * dstretch
         return MappingPerturbation(dF_cart, dJ)
+
+    def scaled(self, k: float) -> "RadialStretch | ScaledMapping":
+        """k m(X / k): the stretch of the displacement's own `scaled(k)`,
+        `rmax` multiplied by k, or a `ScaledMapping` of this stretch where
+        the displacement has none."""
+        own = getattr(self.h, "scaled", None)
+        if not callable(own):
+            return ScaledMapping(self, k)
+        return RadialStretch(own(float(k)), rmax=float(k) * self.rmax, name=self.name)
 
     @property
     def is_identity(self) -> bool:
@@ -579,6 +632,11 @@ class ScaledMapping(MappingBase):
             angular_gradient=gradient,
             knots=[x / k for x in getattr(d, "knots", ())])
         return inner(scaled, X=np.asarray(X, dtype=float) / k)
+
+    def scaled(self, k: float) -> Mapping:
+        """The underlying mapping scaled by this factor times k, through
+        `scaled_mapping`."""
+        return scaled_mapping(self.mapping, self.k * float(k))
 
     @property
     def knots(self) -> tuple[float, ...]:

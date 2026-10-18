@@ -39,6 +39,26 @@ def test_radial_grf_normalisation_and_stats():
         g.to_layer(u[0, :3])
 
 
+def test_a_batch_is_successive_draws():
+    """For the sampler and both white noises, a batch of `size` is `size`
+    successive single draws from one generator."""
+    from planetmodel.randomfield import RadialOperatorFamily, SpectralBasis, padded_mesh
+    g = RadialGRF(0.5, 1.0, 1.0, 0.1)
+    fam = RadialOperatorFamily(padded_mesh(0.5, 1.0, pad=0.3, weight="r2", ngll=5,
+                                           drmax=0.1), kappa=0.02, weight="r2")
+    basis = SpectralBasis(fam, 2, nmodes=5)
+    cases = ((lambda rng: g.sample(rng=rng), lambda rng: g.sample(rng=rng, size=3)),
+             (lambda rng: basis.white_noise(rng=rng),
+              lambda rng: basis.white_noise(rng=rng, size=3).T),
+             (lambda rng: fam.white_noise(2, rng=rng),
+              lambda rng: fam.white_noise(2, rng=rng, size=3).T))
+    for single, batch in cases:
+        rng = np.random.default_rng(4)
+        each = np.array([single(rng) for _ in range(3)])
+        assert np.allclose(batch(np.random.default_rng(4)), each, rtol=1e-14,
+                           atol=0.0)
+
+
 def test_the_samplers_are_built_on_their_bases():
     """The samplers hold the bases they are made of, and their covariances
     are what they were before the bases existed: numbers recorded then,

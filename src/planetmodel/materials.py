@@ -73,7 +73,7 @@ __all__ = ["moduli_from_velocities", "velocities_from_moduli",
            "kappa_mu_from_moduli", "voigt_matrix", "ElasticField",
            "is_fluid", "moduli", "elastic_moduli", "kappa_mu", "named",
            "independent_moduli", "LayerLike", "Operand", "MODULI_NAMES",
-           "VELOCITY_NAMES", "SHEAR_NAMES", "ELASTIC_NAMES"]
+           "VELOCITY_SETS", "VELOCITY_NAMES", "SHEAR_NAMES", "ELASTIC_NAMES"]
 
 #: What the functions of a layer accept: a model's `Layer`, or any mapping
 #: of field name to field.
@@ -90,12 +90,15 @@ MODULI_NAMES = {Symmetry.ISOTROPIC: ("kappa", "mu"),
 #: The names whose vanishing makes a layer fluid.
 SHEAR_NAMES = ("vs", "vsv", "vsh", "mu", "L", "N")
 
-#: The five transversely isotropic velocities beside rho.
-_TI_VELOCITIES = ("vpv", "vph", "vsv", "vsh", "eta")
+#: The velocities of each symmetry beside rho, each set complete on its
+#: own: the isotropic two and the transversely isotropic five.  A layer
+#: is described by one set, never by both.
+VELOCITY_SETS = {Symmetry.ISOTROPIC: ("vp", "vs"),
+                 Symmetry.VTI: ("vpv", "vph", "vsv", "vsh", "eta")}
 
 #: The velocity names an elastic description may be given in, beside
-#: rho: the isotropic two and the transversely isotropic five.
-VELOCITY_NAMES = ("vp", "vs") + _TI_VELOCITIES
+#: rho: both sets of `VELOCITY_SETS`.
+VELOCITY_NAMES = VELOCITY_SETS[Symmetry.ISOTROPIC] + VELOCITY_SETS[Symmetry.VTI]
 
 #: Every name that describes the elastic medium beside rho: what
 #: `moduli` reads from, and what an isotropic re-description replaces.
@@ -422,8 +425,9 @@ def independent_moduli(layer: LayerLike) -> tuple[Symmetry, dict[str, Field]]:
         return Symmetry.VTI, five
     if all(n in layer for n in iso):
         return Symmetry.ISOTROPIC, {n: layer[n] for n in iso}
-    if "rho" in layer and all(n in layer for n in _TI_VELOCITIES):
-        v = {n: layer[n] for n in _TI_VELOCITIES}
+    ti = VELOCITY_SETS[Symmetry.VTI]
+    if "rho" in layer and all(n in layer for n in ti):
+        v = {n: layer[n] for n in ti}
         m = moduli_from_velocities(layer["rho"], v["vpv"], v["vsv"], vph=v["vph"],
                                    vsh=v["vsh"], eta=v["eta"])
         return Symmetry.VTI, {k: named(f, k) for k, f in m.items()}
@@ -434,7 +438,7 @@ def independent_moduli(layer: LayerLike) -> tuple[Symmetry, dict[str, Field]]:
                                     "mu": named(mu, "mu")}
     raise KeyError(
         f"{_describe(layer)} holds {list(_held(layer))}; the moduli need "
-        f"{list(vti)}, or {list(iso)}, or rho with {list(_TI_VELOCITIES)}, "
+        f"{list(vti)}, or {list(iso)}, or rho with {list(ti)}, "
         "or rho with vp and vs")
 
 

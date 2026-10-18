@@ -56,8 +56,10 @@ lacks a pole and the attributes `lateral_interpolation` and `between`
 part, a radial mesh whose element edges are the layer boundaries, every
 breakpoint a field declares (`radial_pieces`) and every knot of the
 mapping, with `ngll` one more than the highest declared degree; a field
-that declares no polynomial description subdivides the part's elements
-to the spacing a sample takes from the grid's band.  So a deck model
+that declares no polynomial description subdivides the elements of its
+layer to the spacing a sample takes from the grid's band (every layer,
+for a mapping written as a displacement field), and raises `ngll` to at
+least 5.  So a deck model
 written and read back is the same polynomials, and a band-limited field
 on a grid of its band is held exactly.  `radial=` gives the layout
 instead.  **Every variable states its intended interpolation**: a
@@ -267,7 +269,8 @@ def _part_mesh(model: Model, layers: list[int], grid: AngularGrid,
     """The exact radial layout of a part, by the rule of the module docstring."""
     b = model.skeleton.boundaries
     lo, hi = float(b[layers[0]]), float(b[layers[-1] + 1])
-    edges, degree, exact = [b[layers[0]:layers[-1] + 2]], 1, True
+    edges, degree = [b[layers[0]:layers[-1] + 2]], 1
+    inexact = set(layers) if form == "field" else set()
     for i in layers:
         layer = model.layer(i)
         for name in names:
@@ -275,20 +278,18 @@ def _part_mesh(model: Model, layers: list[int], grid: AngularGrid,
                 continue
             pieces = getattr(layer[name], "radial_pieces", lambda: None)()
             if pieces is None:
-                exact = False
+                inexact.add(i)
                 continue
             edges.append(pieces[0])
             degree = max(degree, pieces[1])
     knots = np.asarray(model.geometry.knots(), dtype=float)
     edges.append(knots[(knots > lo) & (knots < hi)])
-    if form == "field":
-        exact = False
     tol = model.geometry.rtol * model.skeleton.span
     pins = np.unique(np.concatenate(edges))
     pins = pins[np.concatenate([[True], np.diff(pins) > tol])]
     pins[0], pins[-1] = lo, hi
     ngll = degree + 1
-    if not exact:
+    if inexact:
         if grid.lmax is None:
             raise ValueError(
                 "a field or the mapping declares no polynomial description in "
@@ -296,8 +297,15 @@ def _part_mesh(model: Model, layers: list[int], grid: AngularGrid,
                 "the elements by: pass radial=, a RadialMesh over the skeleton")
         ngll = max(ngll, 5)
         drmax = 0.1 * float(b[-1]) / (grid.lmax + 1)
-        cut = Mesh1D(pins, ngll=2, drmax=drmax)
-        pins = np.append(cut.left, cut.right[-1])
+        runs = []
+        for i in layers:
+            inside = pins[(pins > b[i] + tol) & (pins < b[i + 1] - tol)]
+            run = np.concatenate([[b[i]], inside, [b[i + 1]]])
+            if i in inexact:
+                cut = Mesh1D(run, ngll=2, drmax=drmax)
+                run = np.append(cut.left, cut.right[-1])
+            runs.append(run[:-1])
+        pins = np.append(np.concatenate(runs), hi)
     return RadialMesh(model.skeleton, ngll=ngll, edges=pins)
 
 
@@ -396,6 +404,21 @@ def _attributes(name: str, model: Model, character: Character, layers: list[int]
     if lateral:
         out["lateral_interpolation"] = rules[1]
     return out
+
+
+def _mark_radial_layers(attributes: dict[str, Any],
+                        fields: Mapping[int, Field]) -> None:
+    """Name, in the attribute `radial_layers`, the layers on which a
+    lateral variable holds a radial field, its values repeated over the
+    grid; nothing where there is none."""
+    radial = sorted(i for i, f in fields.items() if getattr(f, "is_radial", False))
+    if radial:
+        attributes["radial_layers"] = np.asarray(radial, dtype=np.int32)
+
+
+def _radial_layers(attributes: Mapping[str, Any]) -> set[int]:
+    """The layers a lateral variable names as holding a radial field."""
+    return {int(i) for i in np.atleast_1d(attributes.get("radial_layers", []))}
 
 
 def _put(group: Any, name: str, dims: tuple[str, ...], values: np.ndarray,
@@ -501,6 +524,8 @@ def _write_part(group: Any, model: Model, index: int, layers: list[int],
         dims = ("node",) if radial else ("node", "latitude", "longitude")
         attrs = _attributes(name, model, char, holders, rules, lateral=not radial)
         attrs["coordinates"] = "radius"
+        if not radial:
+            _mark_radial_layers(attrs, fields)
         _put(group, name, dims + axes, values, attrs)
         if poles is not None:
             _put(group, f"{name}_poles", ("node", "pole") + axes, poles,
@@ -579,6 +604,9 @@ def _write_perturbed(group: Any, model: Model, name: str,
         pattrs["units"] = "1"
         pattrs["dimensions"] = np.zeros(len(BASE), dtype=np.int32)
     pattrs["coordinates"] = "radius"
+    if not pert_radial:
+        _mark_radial_layers(pattrs, {i: f.perturbation for i, f in fields.items()
+                                     if getattr(f, "reference", None) is not None})
     dims = ("node",) if pert_radial else ("node", "latitude", "longitude")
     _put(group, f"{name}_perturbation", dims, dp, pattrs)
     if poles is not None:
@@ -685,7 +713,9 @@ def write_model(path: str | os.PathLike[str], model: Model, *, grid: Grids,
             "a mapping that is not a stack of reliefs is held as a displacement "
             "in every part, read by the part's own rule, so parts on different "
             "grids would disagree between their nodes where they meet: give "
-            "every layer one grid")
+            "every layer one grid, or, for a mapping linear in r within each "
+            "layer (a flattening, say), give it as boundary reliefs through "
+            "layer_linear with GriddedFunction reliefs, which any grids take")
     meta = dict(meta or {})
     for key, value in meta.items():
         if isinstance(value, bool) or not isinstance(value, (str, numbers.Real)):
@@ -920,6 +950,14 @@ def _validate_part(g: Any, where: str, layers: np.ndarray, bounds: np.ndarray,
         if "radial_interpolation" in a and var.getncattr(
                 "radial_interpolation") not in RADIAL_METHODS:
             _fail(path, f"{where}/{name} states an unknown radial rule")
+        if "radial_layers" in a:
+            listed = _radial_layers(_attrs(var))
+            held = (set(int(i) for i in np.atleast_1d(var.getncattr("layers")))
+                    if "layers" in a else set(int(i) for i in layers))
+            if not lateral or not listed <= held:
+                _fail(path, f"{where}/{name} names radial_layers "
+                            f"{sorted(listed)}, which must be layers a lateral "
+                            "variable holds")
         if lateral:
             if "lateral_interpolation" not in a or var.getncattr(
                     "lateral_interpolation") not in LATERAL_METHODS:
@@ -1086,6 +1124,8 @@ def _variable_field(data: ModelFile, part: FilePart, layer: int, name: str,
     char = _character(var.attributes) if character is None else character
     rules = _rules(name, var.attributes, interpolation)
     radial = var.values.ndim == 1 + len(stored_shape(char))
+    if not radial and layer in _radial_layers(var.attributes):
+        values, radial = values[:, 0, 0], True      # every column is the same
     if radial:
         nodal = values.reshape((elems.size, mesh.ngll) + values.shape[1:])
         return _radial_field(interval, nodal, mesh, rules[0], char, name)

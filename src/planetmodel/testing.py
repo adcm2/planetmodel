@@ -45,8 +45,10 @@ def check_displacement(h: RadialDisplacement, skeleton: Skeleton, *,
     polar axis; continuity across every declared knot inside the
     skeleton; `radial_derivative`, when present,
     against a central difference away from the knots and free of
-    undeclared kinks; and the shape of `angular_gradient`.  Every
-    tolerance is relative to the skeleton's span or to the value.
+    undeclared kinks; the shape of `angular_gradient`; and, when present,
+    `scaled(k)` against k h(r / k, theta, phi), with its knots and
+    derivatives.  Every tolerance is relative to the skeleton's span or
+    to the value.
     """
     lo, hi = float(skeleton.boundaries[0]), float(skeleton.boundaries[-1])
     span = hi - lo
@@ -113,6 +115,42 @@ def check_displacement(h: RadialDisplacement, skeleton: Skeleton, *,
         assert np.shape(gt) == shape and np.shape(gp) == shape, (
             "angular_gradient components have the wrong shape")
 
+    if callable(getattr(h, "scaled", None)):
+        _check_scaled_displacement(h, r, theta, phi, knots, span=span, scale=scale)
+
+
+def _check_scaled_displacement(h: RadialDisplacement, r: np.ndarray,
+                               theta: np.ndarray, phi: np.ndarray,
+                               knots: tuple[float, ...], *, span: float,
+                               scale: float) -> None:
+    """`h.scaled(k)` is k h(r / k, theta, phi), its knots k times h's and
+    its derivatives h's read at r / k, the angular ones times k; radii
+    are kept clear of the knots, where dh/dr is one-sided."""
+    k = 2.5
+    hk = h.scaled(k)
+    away = np.all([np.abs(r - x) > 1e-3 * span for x in knots], axis=0) \
+        if knots else np.ones(r.shape, dtype=bool)
+    rk = r[away.ravel()].reshape(-1, 1, 1)
+    want = np.asarray(h(rk, theta, phi), dtype=float)
+    got = np.asarray(hk(k * rk, theta, phi), dtype=float)
+    assert np.allclose(got, k * want, rtol=0.0, atol=1e-12 * k * scale), (
+        "scaled(k) is not k h(r / k, theta, phi)")
+    got_knots = sorted(float(x) for x in getattr(hk, "knots", ()))
+    assert np.allclose(got_knots, [k * x for x in knots], rtol=1e-12, atol=0.0), (
+        "scaled(k) does not carry the knots multiplied by k")
+    if hasattr(h, "radial_derivative") and hasattr(hk, "radial_derivative"):
+        want = np.asarray(h.radial_derivative(rk, theta, phi), dtype=float)
+        got = np.asarray(hk.radial_derivative(k * rk, theta, phi), dtype=float)
+        assert _rel(got, want, rtol=1e-9), (
+            "scaled(k).radial_derivative is not dh/dr at r / k")
+    if hasattr(h, "angular_gradient") and hasattr(hk, "angular_gradient"):
+        for got, want in zip(hk.angular_gradient(k * rk, theta, phi),
+                             h.angular_gradient(rk, theta, phi)):
+            want = k * np.asarray(want, dtype=float)
+            assert _rel(np.asarray(got, dtype=float), want, rtol=1e-9,
+                        floor=1e-12 * k * scale), (
+                "scaled(k).angular_gradient is not k times h's at r / k")
+
 
 def check_mapping(m: Mapping, points: ArrayLike, *, rtol: float = 1e-6,
                   step: float | None = None) -> None:
@@ -120,8 +158,9 @@ def check_mapping(m: Mapping, points: ArrayLike, *, rtol: float = 1e-6,
 
     Checks the shapes; `deformation_gradient` against a central
     difference of `m` with `F[i, j] = d m_i / d X_j`; `jacobian` against
-    det F; and, when present, `displacement` against m(X) - X and
-    `inverse` as a round trip.  The difference step is 1e-6 of each
+    det F; and, when present, `displacement` against m(X) - X,
+    `inverse` as a round trip, and `scaled(k)` against k m(X / k) with
+    the same F and J.  The difference step is 1e-6 of each
     point's radius unless `step` gives one step for every point.
     """
     X = np.asarray(points, dtype=float)
@@ -168,6 +207,16 @@ def check_mapping(m: Mapping, points: ArrayLike, *, rtol: float = 1e-6,
         if back is not None:
             assert np.allclose(back, X, atol=1e-6 * scale, rtol=0.0), (
                 "inverse(m(X)) does not return X")
+
+    if callable(getattr(m, "scaled", None)):
+        k = 2.5
+        mk = m.scaled(k)
+        assert np.allclose(np.asarray(mk(k * X), dtype=float), k * x, rtol=0.0,
+                           atol=1e-12 * k * scale), "scaled(k) is not k m(X / k)"
+        assert _rel(np.asarray(mk.deformation_gradient(k * X), dtype=float), F,
+                    rtol=1e-9), "scaled(k) does not keep F"
+        assert np.allclose(np.asarray(mk.jacobian(k * X), dtype=float), J,
+                           rtol=1e-9, atol=1e-9), "scaled(k) does not keep J"
 
 
 def check_geometry(geometry: Geometry) -> None:
@@ -891,7 +940,9 @@ def check_model_file(path: str | os.PathLike[str], model: Model, *,
     Checks the structure (`validate_structure`); the skeleton, the layer
     and interface names and the scales; that every variable is held on
     the layers its `layers` attribute names, NaN elsewhere, by fields of
-    the model of the stated character; that its values at `n` random
+    the model of the stated character; that a lateral variable names in
+    `radial_layers` exactly the layers where the model's field is radial,
+    and reads back radial there; that its values at `n` random
     entries of the file's own nodes are the model's there, the
     reference and the perturbation of a perturbed field apart, and so
     are its polar values; that the geometry group holds the mapping's
@@ -968,6 +1019,17 @@ def check_model_file(path: str | os.PathLike[str], model: Model, *,
                         stored_against(values[idx, it, ip],
                                        back.layer(i)[name].evaluate(r, t, p),
                                        f"part_{k}/{name} read back")
+                    listed = i in {int(j) for j in np.atleast_1d(
+                        var.attributes.get("radial_layers", []))}
+                    radial = bool(getattr(source, "is_radial", False))
+                    assert listed == radial, (
+                        f"part_{k}/{name}: layer {i} is "
+                        f"{'' if listed else 'not '}in radial_layers, but the "
+                        f"model's field there is {'' if radial else 'not '}radial")
+                    assert not listed or getattr(back.layer(i)[name], "is_radial",
+                                                 False), (
+                        f"part_{k}/{name}: layer {i} is in radial_layers but does "
+                        "not read back radial")
                 poles = part.variables.get(f"{name}_poles")
                 if poles is not None:
                     want = source.evaluate(r[:, None], np.array([0.0, np.pi]),

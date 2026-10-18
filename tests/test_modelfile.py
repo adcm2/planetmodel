@@ -161,6 +161,29 @@ def test_a_fully_3d_model_comes_back(tmp_path):
         assert np.allclose(qb(rq, t, p), q(rq, t, p), rtol=0, atol=1e-11)
 
 
+def test_a_field_without_pieces_subdivides_its_own_layer(tmp_path):
+    """The outer layer's density is analytic, so its elements take a
+    sample's spacing, 0.1 / (lmax + 1) of the outer radius; the core keeps
+    one element and comes back exactly."""
+    from planetmodel import RadialField
+    m = LayeredIsotropicElastic([0.0, 0.5, 1.0], rho=[(2.0, -1.0), 1.0],
+                                vp=[1.0, 2.0], vs=[0.0, 1.0])
+    rho = RadialField((0.5, 1.0), lambda r: 1.0 + 0.1 * np.sin(5.0 * r),
+                      character=DENSITY, name="rho")
+    m = m.with_field(1, "rho", rho, replace=True)
+    path = write_model(tmp_path / "m.nc", m, grid=gauss_legendre(8))
+    with netCDF4.Dataset(path) as ds:
+        part = ds["part_0"]
+        layer = np.asarray(part["element_layer"][:])
+        assert int(part.getncattr("ngll")) == 5
+    assert np.bincount(layer).tolist() == [1, int(np.ceil(0.5 / (0.1 / 9)))]
+    back = read_model(path)
+    r = np.linspace(0.01, 0.49, 7)
+    assert np.allclose(back.layer(0)["rho"](r), m.layer(0)["rho"](r), rtol=1e-14)
+    r = np.linspace(0.51, 0.99, 7)
+    assert np.allclose(back.layer(1)["rho"](r), rho(r), rtol=1e-10)
+
+
 def test_a_model_in_three_parts_on_three_grids(prem, tmp_path):
     grids = {i: gauss_legendre(4) for i in range(2)}
     dh = driscoll_healy(5)
@@ -210,10 +233,35 @@ def test_a_model_placed_by_boundary_reliefs_keeps_them_as_a_stack(tmp_path):
     check_geometry(back.geometry)
 
 
+def test_a_converted_model_keeps_its_stack(tmp_path):
+    """Nondimensionalised, PREM placed by gridded reliefs is still written
+    as the stack, on grids that differ between parts, and read back."""
+    m = PREM(ocean=False)
+    g = gauss_legendre(16)
+    rel = [None] * m.skeleton.boundaries.size
+    rel[2] = GriddedFunction.sampled(lambda t, p: 5e3 * np.cos(t) + 0 * p, g)
+    rel[-1] = GriddedFunction.sampled(bump, g)
+    nd = m.stretched(layer_linear(m.skeleton, rel)).nondimensionalised()
+    grids = {i: gauss_legendre(4) if i < 2 else gauss_legendre(8)
+             for i in range(nd.nlayers)}
+    path = write_model(tmp_path / "nd.nc", nd, grid=grids)
+    with netCDF4.Dataset(path) as ds:
+        assert "geometry" in ds.groups
+        assert np.allclose(ds["geometry"]["boundary_radius"][:],
+                           nd.skeleton.boundaries)
+    back = read_model(path)
+    from planetmodel.frames import cartesian_points
+    rng = np.random.default_rng(8)
+    X = cartesian_points(rng.uniform(0.05, 1.0, 100), rng.uniform(0, np.pi, 100),
+                         rng.uniform(0, 2 * np.pi, 100))
+    assert np.allclose(back.geometry.mapping(X), nd.geometry.mapping(X), rtol=0,
+                       atol=1e-14)
+
+
 def test_a_model_placed_by_another_mapping_keeps_its_displacement(tmp_path):
     m = LayeredIsotropicElastic([0.0, 0.5, 1.0], rho=[10.0, 4.0], vp=[9.0, 7.0],
                                 vs=[4.0, 3.0])
-    m = m.stretched(flattening(0.01, rmax=1.0))
+    m = m.stretched(flattening(0.01))
     path = write_model(tmp_path / "field.nc", m, grid=gauss_legendre(8))
     check_model_file(path, m)
     back = read_model(path)
@@ -240,6 +288,41 @@ def test_xarray_opens_the_parts_with_their_coordinates_and_units(prem, tmp_path)
     assert tree.attrs["schema"] == SCHEMA
     one = xr.open_dataset(path, group="part_0")
     assert float(one["latitude"][0]) > float(one["latitude"][-1])   # decreasing
+
+
+def test_a_radial_layer_of_a_lateral_variable_comes_back_radial(prem, tmp_path):
+    """L varies laterally where vsv does, in the lower mantle, so L is a
+    lateral variable; its other layers are named in radial_layers and come
+    back as radial fields, exactly; a perturbation radial in one layer and
+    lateral in another does the same."""
+    from planetmodel import RadialField
+    lower = prem.layer("lower_mantle").interval
+    above = prem.layer("upper_lower_mantle").interval
+    m = perturbed(prem, "vsv", AnalyticField(lower, lambda r, t, p: 0.02 * np.sin(t)
+                                             ** 2 * np.cos(2 * p)), kind="relative")
+    m = perturbed(m, "vsv", RadialField(above, 0.01), kind="relative")
+    path = write_model(tmp_path / "m.nc", m, grid=gauss_legendre(8),
+                       fields=["rho", "vsv", "L"])
+    check_model_file(path, m)
+    i = m.layer("lower_mantle").index
+    j = m.layer("upper_lower_mantle").index
+    with netCDF4.Dataset(path) as ds:
+        part = ds.groups["part_0"]
+        assert part["L"].dimensions[1:3] == ("latitude", "longitude")
+        assert sorted(np.atleast_1d(part["L"].radial_layers)) == [
+            k for k in range(m.nlayers) if k != i]
+        assert np.atleast_1d(part["vsv_perturbation"].radial_layers).tolist() == [j]
+        assert "radial_layers" not in part["rho"].ncattrs()
+    back = read_model(path)
+    for k in (0, 6, j):
+        f = back.layer(k)["L"]
+        assert f.is_radial
+        r = np.linspace(*f.interval, 9)
+        assert np.allclose(f(r), m.layer(k)["L"](r), rtol=1e-12)
+    assert not back.layer(i)["L"].is_radial
+    assert back.layer(j)["vsv"].is_radial and not back.layer(i)["vsv"].is_radial
+    r = np.linspace(*above, 5)
+    assert np.allclose(back.layer(j)["vsv"](r), m.layer(j)["vsv"](r), rtol=1e-12)
 
 
 def test_the_stated_interpolation_can_be_chosen(tmp_path):
@@ -278,6 +361,10 @@ def corrupt(path, edit):
 
 @pytest.mark.parametrize("edit, message", [
     (lambda ds: ds.setncattr("schema", "planetmodel.model/0"), "schema is"),
+    (lambda ds: ds.groups["part_0"].variables["rho"].setncattr(
+        "radial_layers", np.int32([5])), "radial_layers"),
+    (lambda ds: ds.groups["part_0"].variables["vp"].setncattr(
+        "radial_layers", np.int32([0])), "radial_layers"),
     (lambda ds: ds.delncattr("scale_mass"), "scale_mass"),
     (lambda ds: ds.groups["part_0"].variables["rho"].delncattr("radial_interpolation"),
      "lacks the attributes"),
@@ -350,8 +437,8 @@ def test_a_harmonic_rule_is_stated_only_where_the_grid_reproduces_it(tmp_path):
 def test_what_the_file_cannot_hold_faithfully_is_refused(prem, tmp_path):
     two = LayeredIsotropicElastic([0.0, 0.5, 1.0], rho=[10.0, 4.0], vp=[9.0, 7.0],
                                   vs=[4.0, 3.0])
-    flat = two.stretched(flattening(0.01, rmax=1.0))
-    with pytest.raises(ValueError, match="every layer one grid"):
+    flat = two.stretched(flattening(0.01))
+    with pytest.raises(ValueError, match="every layer one grid.*layer_linear"):
         write_model(tmp_path / "f.nc", flat,
                     grid={0: gauss_legendre(12), 1: driscoll_healy(12)})
     def bump(t, p):

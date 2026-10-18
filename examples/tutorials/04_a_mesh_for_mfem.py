@@ -235,7 +235,7 @@ else:
 # that is how a model's fields travel too.
 
 # %%
-oblate = sphere.stretched(flattening(0.05, rmax=1.0))
+oblate = sphere.stretched(flattening(0.05))
 print(oblate)
 print("kinks at:", oblate.knots(), "| validity:", oblate.validity())
 

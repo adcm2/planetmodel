@@ -226,11 +226,13 @@ class SpectralBasis:
 
     def white_noise(self, *, rng: Any = None, size: int | None = None) -> np.ndarray:
         """Coefficients of white noise of the space, independent standard
-        normals of shape (nmodes,) or (nmodes, size).  `rng` is anything
-        `np.random.default_rng` accepts."""
+        normals of shape (nmodes,) or (nmodes, size), column j of a batch
+        being the j-th of `size` successive draws from the generator.
+        `rng` is anything `np.random.default_rng` accepts."""
         rng = np.random.default_rng(rng)
-        shape = self.nmodes if size is None else (self.nmodes, int(size))
-        return rng.standard_normal(shape)
+        if size is None:
+            return rng.standard_normal(self.nmodes)
+        return rng.standard_normal((int(size), self.nmodes)).T
 
     def __repr__(self) -> str:
         r1, r2 = self.restriction.interval

@@ -29,7 +29,11 @@ N, which `moduli` reads before anything else, and the frequency
 recorded as the constant `omega`.  Frequencies are in the model's
 units; the reference frequency of the band is the model's constant
 `omega_ref` where it declares one, else 2 pi rad/s, a period of one
-second, which is PREM's (`reference_omega`).
+second, which is PREM's (`reference_omega`).  `is_frozen(model)` says
+whether a model carries that constant.  The velocities of a frozen
+layer, and kappa and mu where it holds them, stay as the elastic
+description at the reference frequency; the five are what a solver
+reads.
 """
 from __future__ import annotations
 
@@ -48,8 +52,9 @@ if TYPE_CHECKING:
     from .model import Model
 
 __all__ = ["is_viscoelastic", "frozen_moduli", "dispersive_moduli", "frozen",
-           "reference_omega", "RHEOLOGY_NAMES"]
+           "is_frozen", "reference_omega", "RHEOLOGY_NAMES"]
 
+#: The fields a layer's rheology is read from.
 RHEOLOGY_NAMES = ("viscosity", "qmu", "qkappa")
 
 
@@ -145,6 +150,12 @@ def reference_omega(model: Model) -> float:
 _model_reference_omega = reference_omega
 
 
+def is_frozen(model: Model) -> bool:
+    """Whether the model is frozen at a frequency: it carries the constant
+    `omega` that `frozen` records."""
+    return "omega" in model.constants
+
+
 def frozen(model: Model, omega: float, *,
            reference_omega: float | None = None) -> Model:
     """The model frozen at angular frequency `omega`: every viscoelastic
@@ -157,7 +168,7 @@ def frozen(model: Model, omega: float, *,
     omega = float(omega)
     if not omega > 0.0:
         raise ValueError(f"omega must be positive, got {omega:g}")
-    if "omega" in model.constants:
+    if is_frozen(model):
         raise ValueError("the model is already frozen, at omega = "
                          f"{float(model.constant('omega')):g}; freeze the elastic "
                          "model it came from")

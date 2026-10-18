@@ -165,8 +165,81 @@ def test_inverse_and_linearisation():
         Squash(0.9, 0.1).inverse(X)
 
 
+def test_the_inverse_is_the_root_along_each_ray():
+    """Against brentq one point at a time: dh/dr jumps at a knot, h does
+    not change with r above it (a Newton step lands on the root), points
+    lie beyond the body and at the origin, and a batch keeps its shape."""
+    from scipy.optimize import brentq
+
+    def h(r, theta, phi):
+        return 0.03 * np.sin(theta) ** 2 * np.cos(2 * phi) * np.minimum(r, 0.6) / 0.6
+
+    def dr(r, theta, phi):
+        return np.where(r < 0.6, 0.03 * np.sin(theta) ** 2 * np.cos(2 * phi) / 0.6,
+                        0.0)
+
+    m = RadialStretch(CallableDisplacement(h, radial_derivative=dr, knots=[0.6]),
+                      rmax=A)
+    rng = np.random.default_rng(3)
+    r = np.append(rng.uniform(0.0, 1.3, 59), 0.0)
+    t, p = np.arccos(rng.uniform(-1, 1, 60)), rng.uniform(-np.pi, np.pi, 60)
+    Y = m(cartesian_points(r, t, p)).reshape(6, 10, 3)
+    rho, theta, phi, _ = spherical_coordinates(Y)
+    want = np.array([brentq(lambda s, a=a, b=b, c=c: s + h(s, b, c) - a, 0.0, 2.0,
+                            xtol=1e-14) if a > 0 else 0.0
+                     for a, b, c in zip(rho.ravel(), theta.ravel(), phi.ravel())])
+    got = m.inverse(Y)
+    assert got.shape == (6, 10, 3)
+    assert np.allclose(spherical_coordinates(got)[0].ravel(), want, rtol=0, atol=1e-12)
+    assert np.allclose(got.reshape(-1, 3), cartesian_points(r, t, p), rtol=0,
+                       atol=1e-12)
+    # a torn centre: a physical point inside h(0) goes to the origin
+    torn = RadialStretch(CallableDisplacement(lambda r, t, p: 0.01 + 0.0 * r),
+                         rmax=A)
+    back = torn.inverse(cartesian_points(np.array([0.005, 0.5]), 1.0, 2.0))
+    assert np.allclose(np.linalg.norm(back, axis=-1), [0.0, 0.49], rtol=0, atol=1e-12)
+
+
 def test_general_mapping_passes_the_contract():
     testing.check_mapping(Squash(0.9, 0.1), points())
+
+
+def test_scaling_keeps_a_mapping_in_its_own_form():
+    """A stretch of boundary reliefs stays one, gridded reliefs gridded; a
+    stretch of a callable stays a stretch; the identity stays itself; a
+    mapping with no `scaled` is wrapped, and a wrapper scaled again
+    multiplies its factor; each is k m(X / k)."""
+    from planetmodel import GriddedFunction, gauss_legendre, layer_linear
+    from planetmodel.displacement import LayerLinear
+    from planetmodel.mapping import scaled_mapping
+
+    k = 6.371e6
+    X = points()
+    gf = GriddedFunction.sampled(lambda t, p: 0.01 * np.sin(t) ** 2 * np.cos(2 * p),
+                                 gauss_legendre(8))
+    stack = RadialStretch(layer_linear(SK, [None, gf, lambda t, p: 0.02 + 0 * t, gf]),
+                          rmax=A)
+    big = scaled_mapping(stack, k)
+    assert isinstance(big, RadialStretch) and isinstance(big.h, LayerLinear)
+    assert np.allclose(big.h.boundaries, k * SK.boundaries) and big.rmax == k * A
+    assert isinstance(big.h.reliefs[1], GriddedFunction)
+    assert np.allclose(big.h.reliefs[1].values, k * gf.values)
+    assert big.knots == tuple(k * x for x in stack.knots)
+    flat = scaled_mapping(RadialStretch(flattening_h(0.05), rmax=A), k)
+    assert isinstance(flat, RadialStretch) and isinstance(flat.h, CallableDisplacement)
+    for m, mk in ((stack, big), (RadialStretch(flattening_h(0.05), rmax=A), flat)):
+        assert np.allclose(mk(k * X), k * m(X), rtol=1e-13, atol=0.0)
+        assert np.allclose(mk.deformation_gradient(k * X), m.deformation_gradient(X),
+                           rtol=1e-12, atol=1e-14)
+        testing.check_mapping(mk, k * X)
+    assert scaled_mapping(IdentityMapping(), k).is_identity
+    wrapped = scaled_mapping(Squash(0.9, 0.1), 2.0)
+    assert isinstance(wrapped, ScaledMapping) and wrapped.k == 2.0
+    again = wrapped.scaled(3.0)
+    assert isinstance(again, ScaledMapping) and again.k == 6.0
+    assert again.mapping is wrapped.mapping
+    with pytest.raises(ValueError, match="positive"):
+        scaled_mapping(stack, 0.0)
 
 
 def test_scaled_mapping():

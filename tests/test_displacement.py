@@ -110,7 +110,7 @@ def test_broadcasting():
 
 def test_flattening_is_the_degree_two_shape_with_exact_derivatives():
     from planetmodel.displacement import flattening as shipped
-    h = shipped(0.075, rmax=1.0)         # amplitude 2f/3 = 0.05, the helper's
+    h = shipped(0.075)                   # amplitude 2f/3 = 0.05, the helper's
     r, theta, phi = np.linspace(0.1, 1.0, 5), np.linspace(0.1, 3.0, 5), 0.3
     assert np.allclose(h(r, theta, phi), flattening(r, theta, phi))
     assert np.allclose(h.radial_derivative(r, theta, phi), flattening_dr(r, theta, phi))
@@ -123,7 +123,7 @@ def test_flattening_is_the_degree_two_shape_with_exact_derivatives():
 def test_flattening_gives_the_flattening_asked_for():
     from planetmodel.displacement import flattening as shipped
     f = 1.0 / 300.0
-    h = shipped(f, rmax=1.0)
+    h = shipped(f)
     polar, equatorial = 1.0 + h(1.0, 0.0, 0.0), 1.0 + h(1.0, np.pi / 2, 0.0)
     assert np.isclose(polar, 1.0 - 2.0 * f / 3.0)
     assert np.isclose(equatorial, 1.0 + f / 3.0)

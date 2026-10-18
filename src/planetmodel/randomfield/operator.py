@@ -396,14 +396,15 @@ class RadialOperatorFamily:
     def white_noise(self, l: int, *, rng: Any = None,
                     size: int | None = None) -> np.ndarray:
         """White noise of L^2(w dr) on the active dofs: M^-1/2 z with z
-        standard normal, of shape (n,) or (n, size).  Its covariance is
-        M^-1, so <f, white> is N(0, |f|^2) for every nodal f.  `rng` is
-        anything `np.random.default_rng` accepts."""
+        standard normal, of shape (n,) or (n, size), column j of a batch
+        being the j-th of `size` successive draws from the generator.  Its
+        covariance is M^-1, so <f, white> is N(0, |f|^2) for every nodal
+        f.  `rng` is anything `np.random.default_rng` accepts."""
         rng = np.random.default_rng(rng)
         s = 1.0 / np.sqrt(self.mass(l))
         if size is None:
             return s * rng.standard_normal(s.size)
-        return s[:, None] * rng.standard_normal((s.size, int(size)))
+        return s[:, None] * rng.standard_normal((int(size), s.size)).T
 
     def apply_power(self, l: int, s: float, v: ArrayLike) -> np.ndarray:
         """A_l^s v on active-dof values v of shape (n,) or (n, k), through

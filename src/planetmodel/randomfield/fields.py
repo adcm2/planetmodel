@@ -196,12 +196,13 @@ class RadialGRF:
 
     def sample(self, *, rng: Any = None, size: int | None = None) -> np.ndarray:
         """A sample (or `size` of them) at the physical nodes: shape
-        (r.size,) or (size, r.size).  `rng` is anything
+        (r.size,) or (size, r.size), a batch being `size` successive
+        draws from the generator.  `rng` is anything
         `np.random.default_rng` accepts."""
         rng = np.random.default_rng(rng)
         if size is None:
             return self._B @ rng.standard_normal(self.nmodes)
-        return (self._B @ rng.standard_normal((self.nmodes, int(size)))).T
+        return rng.standard_normal((int(size), self.nmodes)) @ self._B.T
 
     def covariance(self) -> np.ndarray:
         """Dense covariance of the nodal values (diagonal sigma^2)."""

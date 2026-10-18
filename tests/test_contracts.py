@@ -56,7 +56,7 @@ def test_catalogue_models_and_their_fields():
 
 def test_shipped_displacements():
     from planetmodel import flattening, layer_linear
-    testing.check_displacement(flattening(0.01, rmax=1.0), SK)
+    testing.check_displacement(flattening(0.01), SK)
     h = layer_linear(SK, [None, lambda t, p: 0.02 * np.sin(t) ** 2 * np.cos(3.0 * p),
                           None, lambda t, p: 0.01 * np.cos(t)])
     testing.check_displacement(h, SK)

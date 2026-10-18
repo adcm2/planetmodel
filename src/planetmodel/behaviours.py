@@ -42,7 +42,7 @@ from .fields import ComposedField, Field
 from .mesh1d.gravity import gravity, gravity_fields, mass
 
 if TYPE_CHECKING:
-    from .model import CoarseningFit, Model
+    from .model import CoarseningFit, Layer, Model
 
 __all__ = ["layer_method", "with_moduli", "with_velocities", "Elastic", "ConstantQ",
            "SelfGravitating", "Viscoelastic", "ELASTIC_FAMILIES", "elastic_family"]
@@ -51,10 +51,11 @@ __all__ = ["layer_method", "with_moduli", "with_velocities", "Elastic", "Constan
 VELOCITY_NAMES = materials.VELOCITY_NAMES
 
 #: The ways a layer describes its elastic medium, each a family of names
-#: that is complete on its own: the velocities beside rho, the isotropic
-#: moduli, the five Love moduli, and the tensor stored under
-#: `elastic_moduli`.
-ELASTIC_FAMILIES = (VELOCITY_NAMES,
+#: that is complete on its own: the isotropic and the transversely
+#: isotropic velocities beside rho, the isotropic moduli, the five Love
+#: moduli, and the tensor stored under `elastic_moduli`.
+ELASTIC_FAMILIES = (materials.VELOCITY_SETS[materials.Symmetry.ISOTROPIC],
+                    materials.VELOCITY_SETS[materials.Symmetry.VTI],
                     materials.MODULI_NAMES[materials.Symmetry.ISOTROPIC],
                     materials.MODULI_NAMES[materials.Symmetry.VTI],
                     ("elastic_moduli",))
@@ -67,6 +68,40 @@ def elastic_family(name: str) -> tuple[str, ...]:
             return family
     raise KeyError(f"{name!r} is not an elastic name; those are "
                    f"{list(materials.ELASTIC_NAMES)}")
+
+
+#: The fields a frozen layer's complex moduli were derived from.
+_FROZEN_FROM = ("rho",) + materials.ELASTIC_NAMES + rheology.RHEOLOGY_NAMES
+
+
+def _refuse_frozen(model: Model, why: str) -> None:
+    """Refuse a change that would leave a frozen model's moduli stale."""
+    if rheology.is_frozen(model):
+        raise ValueError(
+            f"the model is frozen at omega = {float(model.constant('omega')):g} "
+            f"and {why}, so the frozen moduli would go stale; make the change "
+            "on the elastic model and freeze it again")
+
+
+def _refuse_other_symmetry(layer: Layer, name: str) -> None:
+    """Refuse a velocity of one symmetry on a layer holding velocities of
+    the other, naming what the layer holds and the way out."""
+    sets = materials.VELOCITY_SETS
+    own = next((s for s, names in sets.items() if name in names), None)
+    held = [n for s, names in sets.items() if s is not own for n in names
+            if n in layer]
+    if own is None or not held:
+        return
+    if own is materials.Symmetry.ISOTROPIC:
+        remedy = ("replace one of those, or describe the layer by vp and vs "
+                  "with isotropic() first")
+    else:
+        remedy = (f"no one velocity completes {list(sets[own])}; replace one of "
+                  "the Love moduli A, C, F, L, N instead, and the velocities are "
+                  "derived again from the five")
+    where = f"layer {layer.index}" + (f" ({layer.name!r})" if layer.name else "")
+    raise ValueError(f"{where} holds the velocities {held}, so {name!r} would "
+                     f"contradict them; {remedy}")
 
 
 def _description_family(model: Model, group: Sequence[int]) -> tuple[str, ...]:
@@ -164,13 +199,15 @@ class Elastic:
 
     The derived fields are kept in step by `with_field`: replacing an
     elastic field on a layer makes the family it belongs to (rho with
-    the velocities, kappa and mu, or the five) the description, drops
-    the other elastic names from that layer, and completes the
-    description again, so the five follow a new `vs` and the velocities
-    a new `L`; a field added beside the existing ones is attached as it
-    is.  A change that goes through `replaced` directly, as the
-    library's own transformations do, is the caller's to keep
-    consistent.
+    the isotropic or the transversely isotropic velocities, kappa and
+    mu, or the five) the description, drops the other elastic names from
+    that layer, and completes the description again, so the five follow
+    a new `vs` and the velocities a new `L`; a field added beside the
+    existing ones is attached as it is, and a velocity of the other
+    symmetry than the layer's is refused, as is any change to what a
+    frozen model's moduli were derived from.  A change that goes through
+    `replaced` directly, as the library's own transformations do, is the
+    caller's to keep consistent.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -194,9 +231,18 @@ class Elastic:
         replacing rho on a layer holding velocities makes the velocities
         the description, so the moduli follow the new density.  A field
         added beside the existing ones, or a family too incomplete to
-        describe the medium, is attached as it is.
+        describe the medium, is attached as it is.  A velocity of one
+        symmetry on a layer holding velocities of the other is refused,
+        added or replaced: no single velocity completes the other set,
+        and `isotropic()` re-describes a layer by vp and vs.  On a frozen
+        model (`rheology.is_frozen`) rho, the elastic names and the
+        rheology names are refused, the frozen moduli having been derived
+        from them.
         """
         from .model import Model
+        if name in _FROZEN_FROM:
+            _refuse_frozen(self, f"its moduli were derived from {name!r}")
+        _refuse_other_symmetry(self.layer(which), name)
         out = Model.with_field(self, which, name, field, replace=replace)
         i = self.layer(which).index
         if name == "rho" and any(n in out.layer(i) for n in VELOCITY_NAMES):
@@ -227,9 +273,11 @@ class Elastic:
         from the fitted description, so the coarse model satisfies the
         elastic relations exactly.  A group whose layers share no such
         description (one speaking only through `elastic_moduli`, say)
-        is refused.  Layers left whole are untouched.
+        is refused, as is a frozen model.  Layers left whole are
+        untouched.
         """
         from .model import Model
+        _refuse_frozen(self, "coarsening refits the elastic description")
         _, cmap = self._coarsening(keep=keep, drop=drop)
         layers = [dict(layer.fields) for layer in self.layers]
         merged = [group for group in cmap.layers if len(group) > 1]

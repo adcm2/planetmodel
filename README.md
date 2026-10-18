@@ -109,7 +109,7 @@ print(gravity(m, [r_cmb, 6371e3]))                 # gravity at the CMB and surf
 
 # Reshape the model: non-dimensionalise it, flatten it by 1/300, and
 # lay a radial spectral-element mesh over it.
-nd = m.nondimensionalised().stretched(flattening(1 / 300, rmax=1.0))
+nd = m.nondimensionalised().stretched(flattening(1 / 300))
 mesh = RadialMesh(nd, ngll=5, drmax=0.05)
 print(mesh.nodal(nd, "rho").shape)      # density at every mesh node
 ```

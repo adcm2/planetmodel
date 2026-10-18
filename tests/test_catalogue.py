@@ -404,6 +404,37 @@ def test_coarsening_across_the_cmb_is_refused():
         bare.coarsened(drop=[0])
 
 
+def test_a_velocity_of_the_other_symmetry_is_refused():
+    """vp on a transversely isotropic layer and vpv on an isotropic one,
+    added or replaced, would contradict the velocities held; the ways out
+    the refusals name both work."""
+    from planetmodel import constant_field
+
+    m = PREM(ocean=False)
+    iv = m.layer("lid").interval
+    for replace in (False, True):
+        with pytest.raises(ValueError,
+                           match=r"'lid'.*'vp' would contradict.*isotropic"):
+            m.with_field("lid", "vp", constant_field(iv, 8e3, name="vp"),
+                         replace=replace)
+    lid = m.isotropic().with_field("lid", "vp", constant_field(iv, 8e3, name="vp"),
+                                   replace=True).layer("lid")
+    assert not any(n in lid for n in ("vpv", "vph", "vsv", "vsh", "eta"))
+    assert np.isclose(np.sqrt(lid["C"](6300e3) / lid["rho"](6300e3)), 8e3)
+
+    iso = LayeredIsotropicElastic([0.0, 1.0], rho=[1.0], vp=[2.0], vs=[1.0])
+    for replace in (False, True):
+        with pytest.raises(ValueError, match="'vpv' would contradict.*Love moduli"):
+            iso.with_field(0, "vpv", constant_field((0.0, 1.0), 3.0, name="vpv"),
+                           replace=replace)
+    ti = iso.with_field(0, "N", constant_field((0.0, 1.0), 2.0, name="N",
+                                               character=DENSITY), replace=True)
+    lay = ti.layer(0)
+    assert "vp" not in lay and "vs" not in lay
+    assert np.isclose(lay["vsh"](0.5), np.sqrt(2.0))
+    assert np.isclose(lay["vsv"](0.5), 1.0)
+
+
 def test_replacing_rho_makes_the_velocities_the_description():
     """The moduli follow a new density at the velocities held, on a layer
     given velocities and on one given kappa and mu."""

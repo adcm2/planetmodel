@@ -88,7 +88,7 @@ def coarse_prem(grid):
 
 @pytest.fixture(scope="module")
 def stretched(grid):
-    m = three_layers().stretched(flattening(0.01, rmax=A))
+    m = three_layers().stretched(flattening(0.01))
     return m, sample(m, grid, drmax=0.25 * A)
 
 
@@ -416,7 +416,7 @@ def test_a_grid_with_poles_samples_one_vector_at_each(g):
     vector they make, and every scalar, is one value."""
     steady = lambda r, t, p: np.stack(np.broadcast_arrays(
         1.0 + 0.0 * r, 2.0 + 0.0 * t, 3.0 * r / A + 0.0 * p), axis=-1)
-    m = three_layers().stretched(flattening(0.01, rmax=A))
+    m = three_layers().stretched(flattening(0.01))
     for layer in m.layers:
         m = m.with_field(layer.index, "rho3d",
                          AnalyticField(layer.interval, scalar_fn, character=DENSITY))
