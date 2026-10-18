@@ -34,6 +34,17 @@ value as Python's `json` reads it (`true` or `false`; a number written
 to round-trip; a string's UTF-8 bytes in hexadecimal; the length of an
 array or an object).
 
+**Decks** (`deck_*.txt`): the two shipped mineos decks as they are
+(nine and six columns), a GIA deck, and a small custom one with layers
+of two, three, four and six knots; each with `<deck>.expect` beside it,
+one fact per line: `format`, `knots`, `boundaries`, the mineos
+`header` fields (a string in hexadecimal), the `layer_name` and
+`interface_name` of every layer and interface that `mineos_names`
+gives (`-` for none) and the count of what it `ignored`, and for each
+kind the C++ reads, `value <kind> <layer> <column> <r> <value>
+<derivative>` at the layer's ends and between its knots, or `absent
+<layer> <column>`.
+
 **Manifests to refuse** (`manifest_cases/`): a valid manifest, the
 format page's example with a refinement and a model file, as
 `base.json`; variants the reader accepts (`accept_*.json`: the keys
@@ -330,6 +341,82 @@ def manifests(directory: Path) -> list[Path]:
     return written
 
 
+#: The kinds of deck interpolant the C++ reads, of `deck.KINDS`.
+_CPP_KINDS = ("cubic", "natural", "linear")
+
+
+def _expect_deck(path: Path, deck: Any, *, mineos: bool) -> Path:
+    """The expectation file of a deck, by the module docstring."""
+    import warnings
+
+    from planetmodel.deck import deck_layers, mineos_names
+    lines = [f"knots {deck.nknots}",
+             "boundaries " + " ".join(repr(float(b)) for b in deck.boundaries)]
+    if mineos:
+        h = deck.header
+        lines.append(f"header name {h['name'].encode('utf-8').hex()}")
+        lines += [f"header {k} {h[k]!r}" for k in
+                  ("ifanis", "tref", "ifdeck", "nknot", "nic", "noc")]
+        lines.append("extras2 " + " ".join(h["extras"][0]))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            layers, faces = mineos_names(deck)
+        lines += [f"layer_name {i} {n or '-'}" for i, n in enumerate(layers)]
+        lines += [f"interface_name {i} {n or '-'}" for i, n in enumerate(faces)]
+        lines.append(f"ignored {len(caught)}")
+    rng = np.random.default_rng(len(deck.radius))
+    for kind in _CPP_KINDS:
+        _, fields = deck_layers(deck, kind=kind)
+        for i, s in enumerate(deck.layers()):
+            r = deck.radius[s]
+            between = np.sort(rng.uniform(r[0], r[-1], 3))
+            radii = np.concatenate(([r[0]], between, [r[-1]]))
+            for name in deck.names:
+                if name not in fields[i]:
+                    lines.append(f"absent {i} {name}")
+                    continue
+                f, df = fields[i][name], fields[i][name].derivative()
+                for x in radii:
+                    lines.append(f"value {kind} {i} {name} {float(x)!r} "
+                                 f"{float(f(x))!r} {float(df(x))!r}")
+    out = path.with_name(path.name.removesuffix(".txt") + ".expect")
+    out.write_text("\n".join(lines) + "\n")
+    return out
+
+
+def decks(directory: Path) -> list[Path]:
+    """The decks of the module docstring, each with its expectations."""
+    from planetmodel.deck import GIA, MINEOS, Deck, DeckFormat, read_deck, write_deck
+    data = Path(__file__).resolve().parents[2] / "examples" / "data"
+    out = []
+    for label, source in (("prem200", "prem.200"), ("nocrust", "prem.nocrust")):
+        path = directory / f"deck_{label}.txt"
+        shutil.copyfile(data / source, path)
+        out += [path, _expect_deck(path, read_deck(path, MINEOS), mineos=True)]
+    prem = read_deck(data / "prem.200", MINEOS)
+    viscosity = np.full(prem.nknots, np.nan)
+    for i, s in enumerate(prem.layers()):
+        if i >= 2:
+            viscosity[s] = 1e21 * (1.0 + 0.5 * (prem.radius[s] / 6371e3))
+    gia = Deck(prem.radius, {**{n: prem[n] for n in ("rho", "vpv", "vsv", "vph", "vsh",
+                                                      "eta")},
+                             "viscosity": viscosity}, header={"title": "a GIA deck"})
+    path = write_deck(directory / "deck_gia.txt", gia, GIA)
+    out += [path, _expect_deck(path, read_deck(path, GIA), mineos=False)]
+    knots = Deck([0.0, 0.4, 0.4, 0.5, 0.7, 0.7, 0.75, 0.8, 0.9, 0.9, 0.92, 0.94, 0.95,
+                  0.97, 0.98, 1.0],
+                 {"rho": [9.0, 8.5, 6.0, 5.8, 5.5, 4.0, 3.9, 3.8, 3.6, 3.0, 2.95, 2.9,
+                          2.85, 2.8, 2.7, 2.6],
+                  "vp": [10.0, 9.9, 8.0, 8.1, 7.9, 7.0, 7.05, 6.9, 6.8, 6.0, 6.01, 5.99,
+                         5.97, 5.9, 5.8, 5.7]},
+                 header={"lines": ("layers of two, three, four and six knots",)})
+    custom = DeckFormat(("rho", "vp"), header_lines=1)
+    path = write_deck(directory / "deck_knots.txt", knots, custom)
+    out += [path, _expect_deck(path, read_deck(path, ("rho", "vp"), header_lines=1),
+                               mineos=False)]
+    return out
+
+
 #: The valid manifest the refusal cases are made from.
 _BASE_MANIFEST: dict[str, Any] = {
     "mesh": {"file": "earth.mesh", "format": "mfem", "nodes": "reference",
@@ -557,7 +644,7 @@ def write_fixtures(directory: str | Path, *, meshes: bool = True) -> list[Path]:
         validate_structure(path)
     return (models + lateral_cases(directory) + radial_cases(directory)
             + constants(directory) + json_documents(directory)
-            + manifest_cases(directory)
+            + manifest_cases(directory) + decks(directory)
             + (manifests(directory) if meshes else []))
 
 

@@ -84,6 +84,26 @@ def test_interpolants_pass_through_the_knots_and_are_polynomial(deck, kind):
         assert fields["rho"].character == DENSITY and fields["vpv"].character == SCALAR
 
 
+def test_the_cubic_kinds_are_scipys_splines():
+    """`cubic` is not-a-knot, the parabola through three knots; `natural`
+    has no curvature at a layer's ends."""
+    from scipy.interpolate import CubicSpline
+    d = Deck([0.0, 0.3, 0.5, 1.0, 1.0, 1.4, 2.0],
+             {"rho": [5.0, 4.0, 4.5, 3.0, 2.0, 2.5, 1.0]})
+    r = np.linspace(0.0, 1.0, 11)
+    for kind, bc in (("cubic", "not-a-knot"), ("natural", "natural")):
+        _, layers = deck_layers(d, kind=kind)
+        want = CubicSpline([0.0, 0.3, 0.5, 1.0], [5.0, 4.0, 4.5, 3.0], bc_type=bc)
+        assert np.allclose(layers[0]["rho"](r), want(r), rtol=1e-14, atol=0)
+    _, cubic = deck_layers(d, kind="cubic")
+    parabola = np.polyfit([1.0, 1.4, 2.0], [2.0, 2.5, 1.0], 2)
+    s = np.linspace(1.0, 2.0, 7)
+    assert np.allclose(cubic[1]["rho"](s), np.polyval(parabola, s), rtol=1e-13)
+    _, natural = deck_layers(d, kind="natural")
+    assert np.isclose(natural[1]["rho"].derivative(nu=2)(1.0), 0.0, atol=1e-12)
+    assert np.isclose(natural[1]["rho"].derivative(nu=2)(2.0), 0.0, atol=1e-12)
+
+
 def test_two_knots_give_a_line_and_unknown_kinds_are_refused():
     d = Deck([0.0, 1.0, 1.0, 3.0], {"rho": [1.0, 3.0, 5.0, 1.0]})
     for kind in KINDS:

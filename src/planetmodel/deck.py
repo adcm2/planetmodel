@@ -59,10 +59,11 @@ __all__ = ["Deck", "DeckFormat", "MINEOS", "MINEOS_COLUMNS", "MINEOS_ISOTROPIC_C
            "Tabulated", "KINDS"]
 
 #: The interpolants a deck's knots may be joined by, each a piecewise
-#: polynomial: a not-a-knot cubic spline, a shape-preserving cubic
-#: (pchip), Akima's cubic, or straight lines.  Two knots give a line
-#: under every kind.
-KINDS = ("cubic", "pchip", "akima", "linear")
+#: polynomial: a not-a-knot cubic spline, the parabola through three
+#: knots; a natural cubic spline, as the old Fortran codes take; a
+#: shape-preserving cubic (pchip), Akima's cubic, or straight lines.  Two
+#: knots give a line under every kind.
+KINDS = ("cubic", "natural", "pchip", "akima", "linear")
 
 #: The columns of a transversely isotropic mineos deck, after the radius.
 MINEOS_COLUMNS = ("rho", "vpv", "vsv", "qkappa", "qmu", "vph", "vsh", "eta")
@@ -379,6 +380,8 @@ def _interpolant(r: np.ndarray, y: np.ndarray, kind: str) -> PolynomialLayer:
         ppoly = PPoly(np.vstack([slopes, y[:-1]]), r)
     elif kind == "cubic":
         ppoly = CubicSpline(r, y)
+    elif kind == "natural":
+        ppoly = CubicSpline(r, y, bc_type="natural")
     elif kind == "pchip":
         ppoly = PchipInterpolator(r, y)
     else:

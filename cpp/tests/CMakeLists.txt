@@ -14,6 +14,7 @@ set(PLANETMODEL_FIXTURES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/fixtures" CACHE PATH
     "Where make_fixtures.py wrote the fixtures")
 
 add_executable(planetmodel_tests
+  test_deck.cpp
   test_error.cpp
   test_json.cpp
   test_manifest.cpp
