@@ -36,6 +36,12 @@ endif()
 
 project(planetmodel VERSION ${_pm_version_numbers} LANGUAGES CXX)
 
+# The compile commands of planetmodel's own build, for editors (cpp/.clangd
+# looks for them in build/cpp at the repository's root).
+if(PROJECT_IS_TOP_LEVEL)
+  set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+endif()
+
 option(PLANETMODEL_WITH_NETCDF
        "Read and write model files, over netCDF-C (required when on)" ON)
 option(PLANETMODEL_BUILD_TESTS

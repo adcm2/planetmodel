@@ -23,7 +23,6 @@
 /// the source and the path.
 
 #include <charconv>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -61,11 +60,13 @@ class Json {
   [[nodiscard]] bool IsArray() const noexcept { return type_ == Type::Array; }
   [[nodiscard]] bool IsObject() const noexcept { return type_ == Type::Object; }
 
-  /// Whether the value is a number with no fractional part that an `int`
-  /// holds.
+  /// Whether the value is a number written as an integer, with no
+  /// fraction and no exponent (as Python's json reads an `int`), that an
+  /// `int` holds.
   [[nodiscard]] bool IsInteger() const noexcept {
-    return type_ == Type::Number && number_ >= std::numeric_limits<int>::min() &&
-           number_ <= std::numeric_limits<int>::max() && number_ == std::trunc(number_);
+    return type_ == Type::Number && integral_ &&
+           number_ >= std::numeric_limits<int>::min() &&
+           number_ <= std::numeric_limits<int>::max();
   }
 
   [[nodiscard]] bool AsBool() const {
@@ -76,13 +77,19 @@ class Json {
     Expect(Type::Number);
     return number_;
   }
-  /// The number as an `int`, refused where it is not a whole number in
-  /// the range of one.
+  /// The number as an `int`, refused where it was not written as an
+  /// integer or lies beyond the range of one.
   [[nodiscard]] int AsInt() const {
     Expect(Type::Number);
+    if (!integral_) {
+      throw Error(Source(), Path(),
+                  std::format("expected an integer, got {}, written with a fraction "
+                              "or an exponent", number_));
+    }
     if (!IsInteger()) {
       throw Error(Source(), Path(),
-                  std::format("expected an integer, got {}", number_));
+                  std::format("expected an integer in the range of an int, got {}",
+                              number_));
     }
     return static_cast<int>(number_);
   }
@@ -173,6 +180,7 @@ class Json {
   Type type_ = Type::Null;
   bool boolean_ = false;
   double number_ = 0.0;
+  bool integral_ = false;
   std::string string_;
   std::vector<Json> array_;
   Members object_;
@@ -267,7 +275,10 @@ class JsonParser {
         const auto c = Peek();
         if (c == '-' || (c >= '0' && c <= '9')) {
           auto out = Start(Json::Type::Number, std::move(path));
+          const auto begin = pos_;
           out.number_ = Number();
+          out.integral_ = text_.substr(begin, pos_ - begin).find_first_of(".eE") ==
+                          std::string_view::npos;
           return out;
         }
         if (AtEnd()) Fail("the document ends where a value was expected");

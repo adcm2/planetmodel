@@ -1,0 +1,4 @@
+# Editors' language server: the compile commands of a build configured as
+# `cmake -S cpp -B build/cpp` from the repository's root.
+CompileFlags:
+  CompilationDatabase: ../build/cpp

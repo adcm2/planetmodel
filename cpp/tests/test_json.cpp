@@ -233,7 +233,8 @@ TEST(Json, AccessorsNameTheSourceAndThePath) {
   EXPECT_EQ(message([&] { static_cast<void>(layer.At("r_outer").AsNumber()); }),
             "earth.json: layers[0].r_outer: expected a number, got a string");
   EXPECT_EQ(message([&] { static_cast<void>(layer.At("attribute").AsInt()); }),
-            "earth.json: layers[0].attribute: expected an integer, got 1.5");
+            "earth.json: layers[0].attribute: expected an integer, got 1.5, written "
+            "with a fraction or an exponent");
   EXPECT_EQ(message([&] { static_cast<void>(layer.At("fluid")); }),
             "earth.json: layers[0]: has no member \"fluid\"");
   EXPECT_EQ(message([&] { static_cast<void>(doc.At("layers").At(3)); }),
@@ -251,6 +252,10 @@ TEST(Json, KnowsAnIntegerWithoutOverflowing) {
   EXPECT_FALSE(ReadJson("2147483648").IsInteger());
   EXPECT_FALSE(ReadJson("1e300").IsInteger());
   EXPECT_FALSE(ReadJson("2.5").IsInteger());
+  // an integer is written as one, as Python's json reads an int
+  EXPECT_FALSE(ReadJson("2.0").IsInteger());
+  EXPECT_FALSE(ReadJson("1e2").IsInteger());
+  EXPECT_TRUE(ReadJson("-0").IsInteger());
   EXPECT_FALSE(ReadJson("\"7\"").IsInteger());
   EXPECT_EQ(ReadJson("-3").AsInt(), -3);
 }

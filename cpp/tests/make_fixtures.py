@@ -34,6 +34,15 @@ value as Python's `json` reads it (`true` or `false`; a number written
 to round-trip; a string's UTF-8 bytes in hexadecimal; the length of an
 array or an object).
 
+**Manifests to refuse** (`manifest_cases/`): a valid manifest, the
+format page's example with a refinement and a model file, as
+`base.json`; variants the reader accepts (`accept_*.json`: the keys
+added within the schema left out, an unknown key added); and one
+malformed copy per check `validate_structure` makes (`bad_*.json`),
+listed in `bad.txt`, one per line, as the case, a tab, the JSON path
+the fault lies at (empty for the document itself), a tab, and a phrase
+the refusal says.  None needs gmsh.
+
 **The facts the C++ restates** (`constants.txt`), one per line, a key
 and its value separated by spaces: the version, `G_SI`,
 `EARTH_MEAN_DENSITY`, and for each of a few scales, `scales <label>`
@@ -321,6 +330,192 @@ def manifests(directory: Path) -> list[Path]:
     return written
 
 
+#: The valid manifest the refusal cases are made from.
+_BASE_MANIFEST: dict[str, Any] = {
+    "mesh": {"file": "earth.mesh", "format": "mfem", "nodes": "reference",
+             "read_options": {"generate_edges": 1, "refine": 0,
+                              "fix_orientation": False},
+             "displacement": "displacement"},
+    "layers": [
+        {"attribute": 1, "name": "core", "r_inner": 0.0, "r_outer": 0.546,
+         "in_geometry": True, "fluid": True},
+        {"attribute": 2, "name": "mantle", "r_inner": 0.546, "r_outer": 1.0,
+         "in_geometry": True, "fluid": False},
+        {"attribute": 3, "name": "buffer", "r_inner": 1.0, "r_outer": 1.5,
+         "in_geometry": False, "fluid": False}],
+    "interfaces": [
+        {"attribute": 1, "name": "cmb", "radius": 0.546, "between_layers": [0, 1],
+         "kind": "fluid-solid", "values": {"rho": [1.7157, 0.7655]}},
+        {"attribute": 2, "name": "surface", "radius": 1.0, "between_layers": [1, 2],
+         "kind": "free", "values": {"rho": [0.4642, None]}},
+        {"attribute": 3, "name": "interface_3", "radius": 1.5,
+         "between_layers": [2, -1], "kind": "outer", "values": None}],
+    "refinements": [
+        {"name": "NearPoints", "size": 0.05, "far_size": 0.3, "decay_width": 0.2,
+         "points": 12, "digest": "3f2a"}],
+    "fields": [
+        {"name": "displacement", "file": "earth.displacement.gf",
+         "fe_space": "H1_3D_P2", "vdim": 3, "ordering": "byNODES", "rank": 1,
+         "weight": 0, "voigt": False, "unit": "1", "layers": [1, 2, 3],
+         "radial_degree": None},
+        {"name": "rho", "file": "earth.rho.gf", "fe_space": "L2_3D_P2", "vdim": 1,
+         "ordering": "byNODES", "rank": 0, "weight": 1, "voigt": False,
+         "unit": "1", "layers": [1, 2], "radial_degree": 3}],
+    "scales": {"length": 6371000.0, "mass": 1.4262e+24, "time": 1647.5,
+               "temperature": 1.0},
+    "constants": {"G": 1.0},
+    "model": {"file": "earth.model.nc", "schema": "planetmodel.model/1"},
+    "meta": {"kind": "test"},
+    "schema": "planetmodel.mesh.manifest/5",
+}
+
+
+def _edited(edit: Any) -> dict[str, Any]:
+    """A deep copy of the base manifest, changed by `edit(copy)`."""
+    card = json.loads(json.dumps(_BASE_MANIFEST))
+    edit(card)
+    return card
+
+
+def _set(*keys: Any, value: Any) -> Any:
+    """An edit setting the value at a path of keys and indices."""
+    def edit(card: dict[str, Any]) -> None:
+        target = card
+        for key in keys[:-1]:
+            target = target[key]
+        target[keys[-1]] = value
+    return edit
+
+
+def _drop(*keys: Any) -> Any:
+    """An edit removing the key or element at a path."""
+    def edit(card: dict[str, Any]) -> None:
+        target = card
+        for key in keys[:-1]:
+            target = target[key]
+        del target[keys[-1]]
+    return edit
+
+
+def _both(*edits: Any) -> Any:
+    """An edit doing several in turn."""
+    def edit(card: dict[str, Any]) -> None:
+        for e in edits:
+            e(card)
+    return edit
+
+
+#: The variants the reader accepts: the keys added within the schema left
+#: out, and an unknown key added.
+_ACCEPTED_MANIFESTS = {
+    "optional_keys_absent": _both(_drop("refinements"), _drop("model"),
+                                  _drop("scales", "temperature"), _drop("meta"),
+                                  _drop("constants")),
+    "unknown_key": _set("extra", value={"anything": [1, 2]}),
+    "no_model_said": _both(*(_set("layers", i, "fluid", value=None)
+                             for i in range(3)),
+                           *(_set("interfaces", i, "kind", value=None)
+                             for i in range(3)),
+                           *(_set("interfaces", i, "values", value=None)
+                             for i in range(3)),
+                           _set("scales", value=None), _set("constants", value={})),
+}
+
+#: The malformed variants: (edit, where the fault lies, what the refusal says).
+_BAD_MANIFESTS = {
+    "schema_4": (_set("schema", value="planetmodel.mesh.manifest/4"), "schema",
+                 "regenerate the manifest"),
+    "schema_other": (_set("schema", value="something/1"), "schema",
+                     "not a mesh manifest"),
+    "schema_null": (lambda card: card.clear() or card.update({"schema": None}),
+                      "schema", "expected a string"),
+    "format": (_set("mesh", "format", value="vtk"), "mesh.format", "not msh or mfem"),
+    "nodes": (_set("mesh", "nodes", value="moved"), "mesh.nodes",
+              "not reference or physical"),
+    "no_read_options": (_drop("mesh", "read_options"), "mesh",
+                        'no member "read_options"'),
+    "displacement_type": (_set("mesh", "displacement", value=3), "mesh.displacement",
+                          "expected a string"),
+    "no_layers": (_set("layers", value=[]), "layers", "lists no layers"),
+    "layers_not_a_list": (_set("layers", value={}), "layers", "expected an array"),
+    "layer_attribute": (_set("layers", 1, "attribute", value=3),
+                        "layers[1].attribute", "expected 2"),
+    "layer_attribute_float": (_set("layers", 0, "attribute", value=1.0),
+                              "layers[0].attribute", "expected an integer"),
+    "layer_radii": (_set("layers", 0, "r_outer", value=0.0), "layers[0]",
+                    "not 0 <= r_inner < r_outer"),
+    "layer_gap": (_set("layers", 1, "r_inner", value=0.55), "layers[1]",
+                  "the layer below ends at"),
+    "layer_fluid": (_set("layers", 0, "fluid", value="yes"), "layers[0].fluid",
+                    "expected a boolean"),
+    "interface_count": (_drop("interfaces", 2), "interfaces", "a full mesh has one"),
+    "hollow_without_face": (_set("layers", 0, "r_inner", value=0.1), "interfaces",
+                            "a hollow one has a face"),
+    "interface_attribute": (_set("interfaces", 1, "attribute", value=5),
+                            "interfaces[1].attribute", "expected 2"),
+    "between_layers": (_set("interfaces", 0, "between_layers", value=[0, 2]),
+                       "interfaces[0].between_layers", "expected [0, 1]"),
+    "kind": (_set("interfaces", 0, "kind", value="liquid"), "interfaces[0].kind",
+             "not a kind of interface"),
+    "values_pair": (_set("interfaces", 0, "values", "rho", value=[1.0]),
+                    "interfaces[0].values.rho", "not [below, above]"),
+    "values_unknown_field": (_set("interfaces", 0, "values", value={"mu": [1.0, 2.0]}),
+                             "interfaces[0].values", "fields holds no record"),
+    "refinement_size": (_set("refinements", 0, "far_size", value=0.01),
+                        "refinements[0]", "not 0 < size <= far_size"),
+    "refinement_decay": (_set("refinements", 0, "decay_width", value=-1.0),
+                         "refinements[0].decay_width", "not positive"),
+    "refinement_points": (_set("refinements", 0, "points", value=0),
+                          "refinements[0].points", "not a count"),
+    "field_repeated": (_set("fields", 1, "name", value="displacement"),
+                       "fields[0].name", "is repeated"),
+    "field_layers": (_set("fields", 1, "layers", value=[0]), "fields[1].layers",
+                     "not an attribute in 1..3"),
+    "field_degree": (_set("fields", 1, "radial_degree", value=-1),
+                     "fields[1].radial_degree", "not a degree"),
+    "field_weight": (_set("fields", 1, "weight", value=2), "fields[1]",
+                     "has no character"),
+    "field_vdim": (_set("fields", 1, "vdim", value=2), "fields[1].vdim",
+                   "stores 1 components"),
+    "field_missing_key": (_drop("fields", 1, "unit"), "fields[1]",
+                          'no member "unit"'),
+    "displacement_unknown": (_set("mesh", "displacement", value="u"),
+                             "mesh.displacement", "fields holds no record"),
+    "displacement_physical": (_set("mesh", "nodes", value="physical"),
+                              "mesh.displacement", "physical nodes"),
+    "model_record": (_drop("model", "schema"), "model", 'no member "schema"'),
+    "scales_missing": (_drop("scales", "time"), "scales", 'no member "time"'),
+    "scales_temperature": (_set("scales", "temperature", value="K"),
+                           "scales.temperature", "expected a number"),
+    "constants_value": (_set("constants", "G", value="one"), "constants.G",
+                        "expected a number"),
+    "meta_not_an_object": (_set("meta", value=[]), "meta", "expected an object"),
+}
+
+
+def manifest_cases(directory: Path) -> list[Path]:
+    """The cases of the module docstring, under `manifest_cases/`."""
+    root = directory / "manifest_cases"
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True)
+
+    def dump(name: str, card: dict[str, Any]) -> Path:
+        path = root / f"{name}.json"
+        path.write_text(json.dumps(card, indent=2, allow_nan=False) + "\n")
+        return path
+
+    out = [dump("base", _BASE_MANIFEST)]
+    out += [dump(f"accept_{label}", _edited(edit))
+            for label, edit in _ACCEPTED_MANIFESTS.items()]
+    lines = []
+    for label, (edit, where, phrase) in _BAD_MANIFESTS.items():
+        out.append(dump(f"bad_{label}", _edited(edit)))
+        lines.append(f"{label}\t{where}\t{phrase}")
+    index = root / "bad.txt"
+    index.write_text("\n".join(lines) + "\n")
+    return out + [index]
+
+
 #: The dimensions the units fixture covers: every named one, and powers
 #: and products the named ones do not reach.
 _DIMENSIONS = (units.DIMENSIONLESS, units.MASS, units.LENGTH, units.TIME,
@@ -362,6 +557,7 @@ def write_fixtures(directory: str | Path, *, meshes: bool = True) -> list[Path]:
         validate_structure(path)
     return (models + lateral_cases(directory) + radial_cases(directory)
             + constants(directory) + json_documents(directory)
+            + manifest_cases(directory)
             + (manifests(directory) if meshes else []))
 
 

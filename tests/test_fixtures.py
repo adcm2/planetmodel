@@ -47,3 +47,24 @@ def test_the_manifests_are_written_with_their_walks(tmp_path):
     for path in manifests:
         manifest.read(path)          # which validates
         assert path.with_name(path.name + ".walk").stat().st_size > 0
+
+
+@pytest.mark.gmsh
+def test_the_python_refuses_the_manifests_the_cpp_refuses(tmp_path):
+    """Both readers agree on what is malformed: the Python reads the base
+    and the accepted variants and refuses every bad one."""
+    pytest.importorskip("gmsh")
+    from planetmodel.mesh3d import manifest
+    spec = importlib.util.spec_from_file_location("make_fixtures", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.manifest_cases(tmp_path)
+    root = tmp_path / "manifest_cases"
+    for path in [root / "base.json", *sorted(root.glob("accept_*.json"))]:
+        manifest.read(path)
+    bad = [line.split("\t")[0] for line in
+           (root / "bad.txt").read_text().splitlines()]
+    assert len(bad) == len(list(root.glob("bad_*.json"))) > 30
+    for label in bad:
+        with pytest.raises(ValueError):
+            manifest.read(root / f"bad_{label}.json")
