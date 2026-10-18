@@ -44,12 +44,13 @@ from numpy.typing import ArrayLike
 from .character import SCALAR, Character
 from .frames import (SphericalFunction, bond_matrix, rotate_slots,
                      spherical_coordinates, spherical_frame, tensor_to_voigt)
-from .layerfunction import (LayerFunction, LayerFunctionLike, as_layer_function,
-                            as_scalar, as_values, constant_layer, same_interval)
+from .layerfunction import (LayerFunction, LayerFunctionLike, as_interval,
+                            as_layer_function, as_scalar, as_values, constant_layer,
+                            same_interval)
 
 __all__ = ["Field", "FieldBase", "RadialField", "AnalyticField",
            "ComposedField", "constant_field", "FRAMES", "check_frame",
-           "stored_shape", "to_stored"]
+           "stored_shape", "to_stored", "rotate_stored"]
 
 #: The frames a field can present its components in.
 FRAMES = ("spherical", "cartesian")
@@ -83,15 +84,13 @@ class Field(Protocol):
         ...
 
 
-def _interval(interval: tuple[float, float]) -> tuple[float, float]:
-    lo, hi = (float(x) for x in interval)
-    if not hi > lo:
-        raise ValueError(f"an interval must increase, got ({lo:g}, {hi:g})")
-    return lo, hi
-
-
-def _rotate(values: np.ndarray, R: np.ndarray, character: Character) -> np.ndarray:
-    """Components rotated by R: Bond on a Voigt form, a factor per slot else."""
+def rotate_stored(values: np.ndarray, R: np.ndarray, character: Character
+                  ) -> np.ndarray:
+    """Stored components rotated by R, R of shape (..., 3, 3) broadcasting
+    against the points: the Bond matrix on a Voigt form, a factor of R on
+    every slot otherwise, and nothing for rank 0.  With R the spherical
+    frame this takes spherical components to Cartesian ones, and with
+    its transpose back."""
     rank = character.rank
     if rank == 0:
         return values
@@ -188,7 +187,8 @@ class FieldBase:
         r, theta, phi = self._points(r, theta, phi)
         values = as_values(self._values(r, theta, phi))
         if frame == "cartesian" and self._character.rank:
-            values = _rotate(values, spherical_frame(theta, phi), self._character)
+            values = rotate_stored(values, spherical_frame(theta, phi),
+                                   self._character)
         return values
 
     def __call__(self, *coordinates: ArrayLike) -> np.ndarray:
@@ -331,7 +331,7 @@ class RadialField(FieldBase):
                  function: LayerFunctionLike | Sequence | np.ndarray, *,
                  character: Character = SCALAR, name: str | None = None,
                  rtol: float = 1e-9) -> None:
-        self._interval = _interval(interval)
+        self._interval = as_interval(interval)
         self._character = character
         self._name = name
         self._rtol = float(rtol)
@@ -420,7 +420,7 @@ class RadialField(FieldBase):
 
     def on_interval(self, lo: float, hi: float) -> "RadialField":
         """The same layer functions re-stated on [lo, hi], by their own rule."""
-        lo, hi = _interval((lo, hi))
+        lo, hi = as_interval((lo, hi))
         return self._map(lambda f: f.on_interval(lo, hi), interval=(lo, hi),
                          name=self._name)
 
@@ -455,7 +455,7 @@ class AnalyticField(FieldBase):
         if not callable(fn):
             raise TypeError(f"expected a callable, got {type(fn).__name__}")
         check_frame(frame)
-        self._interval = _interval(interval)
+        self._interval = as_interval(interval)
         self._fn = fn
         self._character = character
         self._name = name
@@ -478,7 +478,7 @@ class AnalyticField(FieldBase):
         vals = to_stored(raw, r.shape, self._character, self)
         if self._frame == "cartesian" and self._character.rank:
             R = spherical_frame(theta, phi)
-            vals = _rotate(vals, np.swapaxes(R, -1, -2), self._character)
+            vals = rotate_stored(vals, np.swapaxes(R, -1, -2), self._character)
         return vals
 
     def on_interval(self, lo: float, hi: float) -> "AnalyticField":
@@ -562,7 +562,7 @@ class ComposedField(FieldBase):
                     f"{s.interval}")
         self._fn = fn
         self._sources = sources
-        self._interval = _interval(first.interval)
+        self._interval = as_interval(first.interval)
         self._character = character
         self._name = name
         self._rtol = float(rtol)
@@ -614,7 +614,7 @@ def constant_field(interval: tuple[float, float], value: ArrayLike, *,
                    name: str | None = None) -> RadialField:
     """The constant `value` (a number, or an array of the stored shape) as an
     exact radial field."""
-    lo, hi = _interval(interval)
+    lo, hi = as_interval(interval)
     v = as_values(value)
     shape = stored_shape(character)
     if v.shape != shape:

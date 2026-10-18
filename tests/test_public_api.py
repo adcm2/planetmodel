@@ -163,9 +163,11 @@ def test_every_public_name_has_a_docstring():
 # No top-level name needs an extra (standing rule 10): anything that does
 # is reached through its module.  Read from the source: a function needs
 # an extra when it imports one, when its module imports one at the top,
-# or when it calls by name a function that does, in its own module or
-# through a name imported from another module of the package.  Calls
-# through attributes (`self.f()`, `module.f()`) are not followed.
+# or when it calls by name, outside any branch, a function that does, in
+# its own module or through a name imported from another module of the
+# package.  A call inside an `if`, a conditional expression, a `try` or a
+# `match` is an option the caller may take, not a need.  Calls through
+# attributes (`self.f()`, `module.f()`) are not followed.
 def _module_name(path, root):
     parts = list(path.relative_to(root.parent).with_suffix("").parts)
     if parts[-1] == "__init__":
@@ -180,6 +182,22 @@ def _resolve(mod, is_package, node):
     base = mod.split(".") if is_package else mod.split(".")[:-1]
     base = base[:len(base) - (node.level - 1)]
     return ".".join(base + ([node.module] if node.module else []))
+
+
+_BRANCHES = (ast.If, ast.IfExp, ast.Try, ast.Match)
+
+
+def _unconditional_calls(fn):
+    """The names a function calls outside every branch of its body."""
+    names, stack = set(), list(ast.iter_child_nodes(fn))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, _BRANCHES):
+            continue
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            names.add(node.func.id)
+        stack.extend(ast.iter_child_nodes(node))
+    return names
 
 
 def _needs_extra(extra_modules):
@@ -209,8 +227,7 @@ def _needs_extra(extra_modules):
             key = (mod, name)
             if heavy or any(imports_extra(n) for n in ast.walk(fn)):
                 needs.add(key)
-            called = {c.func.id for c in ast.walk(fn)
-                      if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+            called = _unconditional_calls(fn)
             calls[key] = ({(mod, c) for c in called if c in local}
                           | {names[c] for c in called if c in names})
     grown = True

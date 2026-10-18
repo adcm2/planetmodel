@@ -67,6 +67,7 @@ from .fields import (
 )
 from .frames import from_geographic, geographic
 from .geometry import Geometry, InterfaceInfo, LayerInfo
+from .gridded import GriddedField, GriddedFunction
 from .harmonics import real_harmonics, synthesise
 from .layerfunction import (
     LayerFunction,
@@ -157,6 +158,8 @@ __all__ = [
     "AnalyticField",
     "ComposedField",
     "constant_field",
+    "GriddedField",
+    "GriddedFunction",
     "ElasticField",
     "is_fluid",
     "moduli",

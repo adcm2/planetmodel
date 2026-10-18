@@ -56,9 +56,29 @@ type SphericalSample = tuple[ArrayLike, ArrayLike, ArrayLike]
 #: the origin, where the radial frame is undefined.
 _R_FLOOR_FRACTION = 1e-9
 
-#: sin(theta) is clipped here so the 1/(r sin theta) entry of F stays
-#: finite on the polar axis, where dh/dphi vanishes for any continuous h.
+#: sin(theta) below this is the polar axis, where the 1/(r sin theta)
+#: entry of F is taken as its limit along the meridian.
 _SIN_FLOOR = 1e-12
+
+
+def _per_sin(h: RadialDisplacement, r: np.ndarray, theta: np.ndarray,
+             phi: np.ndarray, dph: ArrayLike) -> np.ndarray:
+    """(1 / sin theta) dh/dphi, the component of h's angular gradient along
+    e_phi.  On the polar axis both factors vanish and the component is its
+    limit along the meridian: dh/dtheta a quarter turn on, at phi + pi / 2,
+    negated at the south pole, where e_phi is minus that meridian's
+    e_theta."""
+    dph = np.asarray(dph, dtype=float)
+    sin_t = np.sin(theta)
+    out = dph / np.maximum(sin_t, _SIN_FLOOR)
+    axis = sin_t < _SIN_FLOOR
+    if np.any(axis):
+        rr, tt, pp = (np.broadcast_to(a, axis.shape)[axis] for a in (r, theta, phi))
+        quarter = np.asarray(h.angular_gradient(rr, tt, pp + 0.5 * np.pi)[0],
+                             dtype=float)
+        out = np.array(np.broadcast_to(out, axis.shape))
+        out[axis] = np.where(np.cos(tt) > 0.0, 1.0, -1.0) * quarter
+    return out
 
 
 @runtime_checkable
@@ -318,12 +338,11 @@ class RadialStretch(MappingBase):
         """F in the local (e_r, e_theta, e_phi) frame, shape (..., 3, 3)."""
         r, theta, phi, R, h, dr, dth, dph = self._parts(X)
         rs = np.maximum(r, self._floor())
-        sin_t = np.maximum(np.sin(theta), _SIN_FLOOR)
         F = np.zeros(np.shape(r) + (3, 3))
         stretch = 1.0 + h / rs
         F[..., 0, 0] = 1.0 + dr
         F[..., 0, 1] = dth / rs
-        F[..., 0, 2] = dph / (rs * sin_t)
+        F[..., 0, 2] = _per_sin(self.h, r, theta, phi, dph) / rs
         F[..., 1, 1] = stretch
         F[..., 2, 2] = stretch
         return F
@@ -454,12 +473,11 @@ class RadialStretch(MappingBase):
         d = np.asarray(dh(r, theta, phi), dtype=float)
         ddr = np.asarray(dh.radial_derivative(r, theta, phi), dtype=float)
         dth, dph = dh.angular_gradient(r, theta, phi)
-        sin_t = np.maximum(np.sin(theta), _SIN_FLOOR)
 
         dF = np.zeros(np.shape(r) + (3, 3))
         dF[..., 0, 0] = ddr
         dF[..., 0, 1] = np.asarray(dth, dtype=float) / rs
-        dF[..., 0, 2] = np.asarray(dph, dtype=float) / (rs * sin_t)
+        dF[..., 0, 2] = _per_sin(dh, r, theta, phi, dph) / rs
         dF[..., 1, 1] = d / rs
         dF[..., 2, 2] = d / rs
         dF_cart = np.einsum("...ik,...kl,...jl->...ij", R, dF, R)

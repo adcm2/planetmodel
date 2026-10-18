@@ -87,8 +87,10 @@ def spherical_coordinates(X: ArrayLike
         raise ValueError(f"expected points of shape (..., 3), got {X.shape}")
     x, y, z = X[..., 0], X[..., 1], X[..., 2]
     r = np.sqrt(x * x + y * y + z * z)
-    safe = np.where(r > 0.0, r, 1.0)
-    theta = np.arccos(np.clip(z / safe, -1.0, 1.0))
+    # atan2 keeps theta accurate near the polar axis, where arccos(z / r)
+    # loses it: a point a distance d from the axis has theta to about
+    # 1e-16 relative, not 1e-16 / theta
+    theta = np.where(r > 0.0, np.arctan2(np.hypot(x, y), z), 0.5 * np.pi)
     phi = np.arctan2(y, x)
     return r, theta, phi, spherical_frame(theta, phi)
 

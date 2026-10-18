@@ -58,3 +58,24 @@ def test_shipped_displacements():
                           None, lambda t, p: 0.01 * np.cos(t)])
     testing.check_displacement(h, SK)
     testing.check_geometry(Geometry(SK, mapping=RadialStretch(h, rmax=1.0)))
+
+
+def test_a_relief_with_a_gradient_at_the_poles_maps_smoothly_on_the_axis():
+    """A tilted boundary has a gradient at each pole; on the polar axis the
+    e_phi entry of F is the limit along the meridian, so the geometry's
+    contract holds on the axis too, with exact gradients and without."""
+    from planetmodel import layer_linear
+
+    def tilt(t, p):
+        return 0.01 * np.sin(t) * np.cos(p - 0.4) + 0.01 * np.cos(t)
+
+    def exact(t, p):
+        return tilt(t, p)
+
+    exact.angular_gradient = lambda t, p: (
+        0.01 * np.cos(t) * np.cos(p - 0.4) - 0.01 * np.sin(t),
+        -0.01 * np.sin(t) * np.sin(p - 0.4))
+    for rel in (tilt, exact):
+        h = layer_linear(SK, [None, rel, None, rel])
+        testing.check_displacement(h, SK)
+        testing.check_geometry(Geometry(SK, mapping=RadialStretch(h, rmax=1.0)))

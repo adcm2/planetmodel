@@ -30,16 +30,23 @@ themselves.  A point is read at its colatitude, which must lie in
 bilinear rule is the tensor-product spline of degree one on the same
 grid, so both local rules interpolate the nodes and the polar values.
 
-**The polar values.**  A grid without a pole among its nodes does not
-hold the field there, and nothing between the nodes can say what it
-is, so the value is given (`poles`, north then south): a model file
-stores it, evaluated exactly by the writer.  Without it, a grid with a
-band takes it from its own expansion, the value a field band-limited
-to the grid has there; any other grid is refused rather than guessed
-at.  A scalar has one value at a pole.  A field with components is
-interpolated component by component in the Cartesian frame, where it
-too is single-valued at a pole; the rotation into that frame belongs to
-the field, not to this module.
+**The polar values** have one source each.  A pole that is a node of
+the grid is its own row, which must hold one value, constant along the
+longitudes to `rtol` of the values' largest: a row that varies there
+describes no field, and making it single-valued is for whoever read
+the data.  A pole the grid lacks takes its value from `poles` (north
+then south), as a model file stores it, evaluated exactly by the
+writer; `poles` always has both entries, the one for a pole that is a
+node either agreeing with its row or NaN, meaning not given.  Without
+`poles`, a grid with a band takes the values from its own expansion,
+those of the field band-limited to the grid, and any other grid
+lacking a pole is refused, so that no polar value is ever guessed.
+`polar_values` is that rule.  A scalar has one value at a pole; a
+field with components is interpolated component by component in the
+Cartesian frame, where it too is single-valued at a pole, and the
+rotation into that frame belongs to the field, not to this module.
+The harmonic rule's expansion defines its own values at the poles, so
+it checks `poles` like any rule but does not use them.
 
 **Accuracy.**  A local rule wants an oversampled grid.  For a field of
 band 16 with coefficients falling as 1/(l + 1), on Gauss-Legendre
@@ -55,7 +62,8 @@ ghost columns, and smoothness through a pole, where the meridian
 splines end and the gradient of the interpolant has a small kink.
 
 `LateralInterpolant` builds a rule once over any array whose two
-trailing axes are a grid's; `interpolate` builds one and evaluates it.
+trailing axes are a grid's, and gives its values and its two angular
+derivatives at any points; `interpolate` builds one and evaluates it.
 Everything is numbers.
 """
 from __future__ import annotations
@@ -67,7 +75,8 @@ from numpy.typing import ArrayLike
 from scipy.interpolate import NdBSpline, make_interp_spline
 
 from .frames import wrapped
-from .harmonics import analyse_grid, real_harmonics, synthesise_points
+from .harmonics import (analyse_grid, real_harmonics, synthesise_gradient,
+                        synthesise_points)
 
 if TYPE_CHECKING:
     from .sampling import AngularGrid
@@ -84,22 +93,103 @@ GHOSTS = 3
 #: The degree of the tensor-product spline of each local rule.
 _DEGREE = {"linear": 1, "cubic": 3}
 
+#: The poles in the order of every (..., 2) array of polar values.
+_POLES = ("north", "south")
 
-def polar_values(values: ArrayLike, grid: AngularGrid) -> np.ndarray:
-    """The values at the north and south poles from the grid's expansion.
 
-    `values` has shape (..., ntheta, nphi); the result has shape
-    (..., 2), north then south: the poles of the field band-limited to
-    the grid's band that agrees with the values at the nodes, exact for
-    a field of that band.  The grid must be of a shipped kind with a
-    band, and the analysis needs the `harmonics` extra.
-    """
-    c = analyse_grid(values, grid)
+def _grid_values(values: ArrayLike, grid: AngularGrid) -> np.ndarray:
+    """Finite real values with the grid's two axes last, or the error."""
+    from .sampling import AngularGrid
+    if not isinstance(grid, AngularGrid):
+        raise TypeError(f"grid must be an AngularGrid, got {type(grid).__name__}")
+    if np.iscomplexobj(values):
+        raise TypeError("the lateral rules take real values")
+    v = np.asarray(values, dtype=float)
+    if v.ndim < 2 or v.shape[-2:] != (grid.ntheta, grid.nphi):
+        raise ValueError(f"values must have trailing shape "
+                         f"{(grid.ntheta, grid.nphi)}, got {v.shape}")
+    if not np.all(np.isfinite(v)):
+        raise ValueError("the lateral rules take finite values")
+    return v
+
+
+def _from_expansion(v: np.ndarray, grid: AngularGrid) -> np.ndarray:
+    """The polar values of the field band-limited to the grid."""
+    c = analyse_grid(v, grid)
     Y = real_harmonics(c.shape[1] - 1, np.array([0.0, np.pi]), np.zeros(2))
     return np.einsum("slm...,slmq->...q", c, Y)
 
 
-def _padded(v: np.ndarray, grid: AngularGrid, poles: np.ndarray | None
+def polar_values(values: ArrayLike, grid: AngularGrid, *,
+                 poles: ArrayLike | None = None, rtol: float = 1e-9) -> np.ndarray:
+    """The values at the north and south poles, by the rule of the module
+    docstring: shape (..., 2) for values of shape (..., ntheta, nphi).
+
+    A pole that is a node gives its row, checked to hold one value to
+    `rtol` of the values' largest.  A pole the grid lacks gives its entry
+    of `poles`, which must be finite; an entry of `poles` for a pole that
+    is a node must agree with its row or be NaN.  With `poles` None, the
+    poles the grid lacks come from its expansion, which needs a grid of
+    a shipped kind with a band and the `harmonics` extra; any other grid
+    lacking a pole is refused.
+    """
+    v = _grid_values(values, grid)
+    lead = v.shape[:-2]
+    scale = float(np.max(np.abs(v))) if v.size else 0.0
+    tol = float(rtol) * scale
+    rows = {0: 0, 1: -1}
+    out = np.empty(lead + (2,))
+    nodes = grid.pole_nodes
+    for k, is_node in enumerate(nodes):
+        if is_node:
+            row = v[..., rows[k], :]
+            spread = float(np.max(np.abs(row - row[..., :1]))) if row.size else 0.0
+            if spread > tol:
+                raise ValueError(
+                    f"the {_POLES[k]} pole is a node of the grid, but its row "
+                    f"varies along the longitudes by {spread:.3g}, more than "
+                    f"rtol = {rtol:g} of the values' largest: a field has one "
+                    "value at a pole (components in the Cartesian frame), and "
+                    "the row must be made single-valued before it is read")
+            out[..., k] = row[..., 0]
+    if all(nodes):
+        given = None if poles is None else np.asarray(poles, dtype=float)
+    elif poles is None:
+        if grid.kind == "custom" or grid.lmax is None:
+            raise ValueError(
+                "the grid lacks a pole among its nodes and has no band to find "
+                "the field there from, so the polar values must be given: pass "
+                f"poles=, the values at the north and south poles, shape {lead + (2,)}")
+        found = _from_expansion(v, grid)
+        for k, is_node in enumerate(nodes):
+            if not is_node:
+                out[..., k] = found[..., k]
+        return out
+    else:
+        given = np.asarray(poles, dtype=float)
+    if given is not None:
+        if given.shape != lead + (2,):
+            raise ValueError(f"poles must have shape {lead + (2,)}, the values' "
+                             f"leading shape and (north, south); got {given.shape}")
+        for k, is_node in enumerate(nodes):
+            entry = given[..., k]
+            if is_node:
+                stated = np.isfinite(entry)
+                if np.any(np.abs(entry[stated] - out[..., k][stated]) > tol):
+                    raise ValueError(
+                        f"the {_POLES[k]} pole is a node of the grid, and the "
+                        f"value given for it in poles disagrees with its row; "
+                        "give the row's value or NaN")
+            else:
+                if not np.all(np.isfinite(entry)):
+                    raise ValueError(
+                        f"the grid lacks the {_POLES[k]} pole, so its entry in "
+                        "poles is the field's value there and must be finite")
+                out[..., k] = entry
+    return out
+
+
+def _padded(v: np.ndarray, grid: AngularGrid, poles: np.ndarray
             ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(colatitudes, longitudes, values) of the padded grid of the module
     docstring, the values of shape (..., rows, columns)."""
@@ -126,37 +216,29 @@ def _padded(v: np.ndarray, grid: AngularGrid, poles: np.ndarray | None
 class LateralInterpolant:
     """One lateral rule, built once over an array of values on a grid.
 
-    `values` has shape (..., ntheta, nphi), the grid's two axes last; the
-    leading shape is `shape`, and calling the interpolant at
-    colatitudes and longitudes that broadcast to a shape P gives an
-    array of shape `shape + P`.  `method` is one of `METHODS`.  `poles`,
-    of shape `shape + (2,)`, holds the values at the north and south
-    poles for a local rule, consulted only for a pole the grid lacks as
-    a node; when it is None a grid with a band takes them from its
-    expansion (`polar_values`, needing the `harmonics` extra), and any
-    other grid lacking a pole is refused.  The harmonic rule needs no
-    polar values, since its expansion holds them, and `poles` is not
-    consulted for it.  Values are real.
+    `values` has shape (..., ntheta, nphi), the grid's two axes last, and
+    must be finite and real; the leading shape is `shape`, and calling
+    the interpolant at colatitudes and longitudes that broadcast to a
+    shape P gives an array of shape `shape + P`.  `method` is one of
+    `METHODS`.  `poles` and `rtol` are those of `polar_values`, whose
+    rule fixes the values at the poles: `poles` has shape `shape + (2,)`,
+    north then south, and the harmonic rule checks it without using it.
     """
 
     def __init__(self, values: ArrayLike, grid: AngularGrid, *, method: str,
-                 poles: ArrayLike | None = None) -> None:
-        from .sampling import AngularGrid
-        if not isinstance(grid, AngularGrid):
-            raise TypeError(f"grid must be an AngularGrid, got {type(grid).__name__}")
+                 poles: ArrayLike | None = None, rtol: float = 1e-9) -> None:
         if method not in METHODS:
             raise ValueError(f"method must be one of {METHODS}, got {method!r}")
-        if np.iscomplexobj(values) or (poles is not None and np.iscomplexobj(poles)):
+        if poles is not None and np.iscomplexobj(poles):
             raise TypeError("the lateral rules take real values")
-        v = np.asarray(values, dtype=float)
-        if v.ndim < 2 or v.shape[-2:] != (grid.ntheta, grid.nphi):
-            raise ValueError(f"values must have trailing shape "
-                             f"{(grid.ntheta, grid.nphi)}, got {v.shape}")
+        v = _grid_values(values, grid)
         self._grid, self._method, self._shape = grid, method, v.shape[:-2]
         if method == "harmonic":
+            if poles is not None:
+                polar_values(v, grid, poles=poles, rtol=rtol)
             self._coeffs = analyse_grid(v, grid)
             return
-        P = None if all(grid.pole_nodes) else self._polar(v, poles)
+        P = polar_values(v, grid, poles=poles, rtol=rtol)
         theta_p, phi_p, V = _padded(v, grid, P)
         k = _DEGREE[method]
         if theta_p.size <= k or phi_p.size <= k:
@@ -169,22 +251,6 @@ class LateralInterpolant:
                                        k=k, axis=0)
         self._spline = NdBSpline((along_theta.t, along_phi.t),
                                  np.swapaxes(along_phi.c, 0, 1), k)
-
-    def _polar(self, v: np.ndarray, poles: ArrayLike | None) -> np.ndarray:
-        """The polar values given, checked, or found from the grid's band."""
-        grid, want = self._grid, self._shape + (2,)
-        if poles is not None:
-            P = np.asarray(poles, dtype=float)
-            if P.shape != want:
-                raise ValueError(f"poles must have shape {want}, the values' "
-                                 f"leading shape and (north, south); got {P.shape}")
-            return P
-        if grid.kind == "custom" or grid.lmax is None:
-            raise ValueError(
-                "the grid lacks a pole among its nodes and has no band to find "
-                "the field there from, so the polar values must be given: pass "
-                f"poles=, the values at the north and south poles, shape {want}")
-        return polar_values(v, grid)
 
     @property
     def grid(self) -> AngularGrid:
@@ -201,36 +267,59 @@ class LateralInterpolant:
         """The leading shape of the values, carried through to every result."""
         return self._shape
 
-    def __call__(self, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
-        """The values at colatitudes `theta` in [0, pi] and longitudes `phi`
-        (any range), broadcast together: shape `shape` followed by theirs."""
+    def _points(self, theta: ArrayLike, phi: ArrayLike
+                ) -> tuple[np.ndarray, np.ndarray, tuple[int, ...]]:
+        """The points flattened and checked, and their broadcast shape."""
         theta, phi = np.broadcast_arrays(np.asarray(theta, dtype=float),
                                          np.asarray(phi, dtype=float))
         if not (np.all(np.isfinite(theta)) and np.all(np.isfinite(phi))):
             raise ValueError("the points must be finite")
         if np.any(theta < 0.0) or np.any(theta > np.pi):
             raise ValueError("colatitudes must lie in [0, pi]")
-        points = theta.shape
-        t, p = theta.ravel(), phi.ravel()
+        return theta.ravel(), phi.ravel(), theta.shape
+
+    def _local(self, t: np.ndarray, p: np.ndarray,
+               nu: tuple[int, int]) -> np.ndarray:
+        """The spline, or one of its derivatives, at flat points: shape
+        `shape + (P,)`."""
+        p = wrapped(p, start=float(self._grid.longitudes[0]))
+        return np.moveaxis(self._spline(np.stack([t, p], axis=-1), nu=nu), 0, -1)
+
+    def __call__(self, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
+        """The values at colatitudes `theta` in [0, pi] and longitudes `phi`
+        (any range), broadcast together: shape `shape` followed by theirs."""
+        t, p, points = self._points(theta, phi)
         if self._method == "harmonic":
             out = synthesise_points(self._coeffs, t, p)
         else:
-            p = wrapped(p, start=float(self._grid.longitudes[0]))
-            out = np.moveaxis(self._spline(np.stack([t, p], axis=-1)), 0, -1)
+            out = self._local(t, p, (0, 0))
         return out.reshape(self._shape + points)
+
+    def gradient(self, theta: ArrayLike, phi: ArrayLike
+                 ) -> tuple[np.ndarray, np.ndarray]:
+        """(d/dtheta, d/dphi) of the interpolant at the points, each of the
+        shape `__call__` gives: the derivatives of the spline, piecewise
+        constant for the bilinear rule, or of the expansion."""
+        t, p, points = self._points(theta, phi)
+        if self._method == "harmonic":
+            dt, dp = synthesise_gradient(self._coeffs, t, p)
+        else:
+            dt, dp = self._local(t, p, (1, 0)), self._local(t, p, (0, 1))
+        return dt.reshape(self._shape + points), dp.reshape(self._shape + points)
 
     def __repr__(self) -> str:
         return f"LateralInterpolant({self._method}, {self._shape} on {self._grid!r})"
 
 
 def interpolate(values: ArrayLike, grid: AngularGrid, theta: ArrayLike,
-                phi: ArrayLike, *, method: str,
-                poles: ArrayLike | None = None) -> np.ndarray:
+                phi: ArrayLike, *, method: str, poles: ArrayLike | None = None,
+                rtol: float = 1e-9) -> np.ndarray:
     """Values on a grid read at points by a lateral rule.
 
-    `LateralInterpolant(values, grid, method=method, poles=poles)`
-    evaluated at (theta, phi): the leading shape of `values` followed by
-    the broadcast shape of the points.  Build the interpolant itself to
-    read the same values more than once.
+    `LateralInterpolant(values, grid, method=method, poles=poles,
+    rtol=rtol)` evaluated at (theta, phi): the leading shape of `values`
+    followed by the broadcast shape of the points.  Build the
+    interpolant itself to read the same values more than once.
     """
-    return LateralInterpolant(values, grid, method=method, poles=poles)(theta, phi)
+    return LateralInterpolant(values, grid, method=method, poles=poles,
+                              rtol=rtol)(theta, phi)

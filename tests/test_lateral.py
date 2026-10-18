@@ -232,3 +232,65 @@ def test_polar_values_come_from_the_expansion():
     assert np.allclose(interpolate(v, g, t, 0.3, method="cubic"),
                        interpolate(v, g, t, 0.3, method="cubic", poles=exact),
                        rtol=0, atol=1e-12)
+
+
+# -- the polar values: one source each -------------------------------------------
+
+def test_a_pole_node_is_its_own_row_and_poles_must_agree_or_be_nan():
+    g = driscoll_healy(4)                 # the north pole a node, the south not
+    v, exact = on(g)
+    assert np.allclose(polar_values(v, g, poles=[np.nan, exact[1]]), exact)
+    assert np.allclose(polar_values(v, g, poles=exact), exact)
+    with pytest.raises(ValueError, match="disagrees with its row"):
+        polar_values(v, g, poles=[exact[0] + 1.0, exact[1]])
+    with pytest.raises(ValueError, match="south pole, so its entry"):
+        polar_values(v, g, poles=[exact[0], np.nan])
+    f = LateralInterpolant(v, g, method="cubic", poles=[np.nan, exact[1]])
+    assert np.allclose(f(0.0, np.linspace(0, 6, 7)), exact[0], rtol=0, atol=1e-12)
+
+
+def test_a_varying_pole_row_is_refused():
+    g = equiangular(7, 12, poles=True)
+    v, _ = on(g)
+    v[-1, 3] += 1e-3
+    with pytest.raises(ValueError, match="south pole is a node"):
+        LateralInterpolant(v, g, method="linear")
+    v[-1, 3] -= 1e-3
+    assert np.allclose(polar_values(v, g), on(g)[1])       # both from the rows
+    with pytest.raises(ValueError, match="rtol"):
+        v[0, 1] *= 1.0 + 1e-6
+        polar_values(v, g)
+    assert polar_values(v, g, rtol=1e-5).shape == (2,)
+
+
+@pytest.mark.harmonics
+def test_the_harmonic_rule_checks_poles_without_using_them():
+    pytest.importorskip("ducc0")
+    g = driscoll_healy(8)
+    v, exact = on(g)
+    with pytest.raises(ValueError, match="disagrees"):
+        LateralInterpolant(v, g, method="harmonic", poles=[exact[0] + 1, exact[1]])
+    a = LateralInterpolant(v, g, method="harmonic", poles=[np.nan, exact[1] + 5.0])
+    b = LateralInterpolant(v, g, method="harmonic")
+    t = np.array([0.0, 1.0, np.pi])
+    assert np.array_equal(a(t, 0.4), b(t, 0.4))
+
+
+@pytest.mark.parametrize("method, tol", [("linear", 0.2), ("cubic", 1.5e-4)])
+def test_the_gradient_of_a_local_rule(method, tol):
+    g = gauss_legendre(40)
+    v, poles = on(g)
+    f = LateralInterpolant(v, g, method=method, poles=poles)
+    rng = np.random.default_rng(6)
+    t, p = rng.uniform(0.1, 3.0, 300), rng.uniform(0, 2 * np.pi, 300)
+    dt, dp = f.gradient(t, p)
+    h = 1e-6
+    st, ct = np.sin(t), np.cos(t)
+    arg = st * np.cos(p) + 0.5 * st * np.sin(p) - 0.3 * ct
+    exact_dt = np.exp(arg) * (ct * np.cos(p) + 0.5 * ct * np.sin(p) + 0.3 * st)
+    exact_dp = np.exp(arg) * (-st * np.sin(p) + 0.5 * st * np.cos(p))
+    assert np.abs(dt - exact_dt).max() < tol and np.abs(dp - exact_dp).max() < tol
+    assert f.gradient(t[0], p[0])[0].shape == ()
+    if method == "cubic":
+        fd = (f(t + h, p) - f(t - h, p)) / (2 * h)
+        assert np.allclose(dt, fd, atol=1e-7)

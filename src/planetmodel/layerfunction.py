@@ -33,14 +33,16 @@ from scipy.interpolate import BSpline, PPoly
 
 __all__ = ["LayerFunction", "LayerFunctionLike", "PolynomialLayer", "NumericLayer",
            "as_layer_function", "polynomial_layer", "constant_layer",
-           "polynomial_fit", "same_interval", "as_values", "as_scalar"]
+           "polynomial_fit", "same_interval", "as_interval", "as_values",
+           "as_scalar"]
 
 #: Two intervals are the same when their ends agree to this fraction of
 #: the wider one's width.
 _INTERVAL_RTOL = 1e-9
 
 
-def _interval(interval: tuple[float, float]) -> tuple[float, float]:
+def as_interval(interval: tuple[float, float]) -> tuple[float, float]:
+    """`interval` as a (lo, hi) pair of floats, refused unless it increases."""
     lo, hi = (float(x) for x in interval)
     if not hi > lo:
         raise ValueError(f"an interval must increase, got ({lo:g}, {hi:g})")
@@ -50,7 +52,7 @@ def _interval(interval: tuple[float, float]) -> tuple[float, float]:
 def same_interval(a: tuple[float, float], b: tuple[float, float], *,
                   rtol: float = _INTERVAL_RTOL) -> bool:
     """Whether two intervals coincide to `rtol` of the wider width."""
-    (a0, a1), (b0, b1) = _interval(a), _interval(b)
+    (a0, a1), (b0, b1) = as_interval(a), as_interval(b)
     tol = rtol * max(a1 - a0, b1 - b0)
     return abs(a0 - b0) <= tol and abs(a1 - b1) <= tol
 
@@ -143,7 +145,7 @@ class PolynomialLayer:
         c = as_values(ppoly.c)
         x = np.asarray(ppoly.x, dtype=float)
         self._p = PPoly(c, x, extrapolate=True)
-        self._interval = _interval(interval)
+        self._interval = as_interval(interval)
 
     @property
     def interval(self) -> tuple[float, float]:
@@ -332,7 +334,7 @@ class NumericLayer:
         if not callable(fn):
             raise TypeError(f"expected a callable, got {type(fn).__name__}")
         self._fn = fn
-        self._interval = _interval(interval)
+        self._interval = as_interval(interval)
         self._d = derivative
         self._dstep = float(dstep)
 
@@ -465,7 +467,7 @@ def as_layer_function(interval: tuple[float, float],
     a `PolynomialLayer`, a number a constant, any other callable a
     `NumericLayer`.  Every constructor here takes the interval first.
     """
-    interval = _interval(interval)
+    interval = as_interval(interval)
     if _is_layer_function(fn):
         return fn if same_interval(fn.interval, interval) else fn.on_interval(*interval)
     if isinstance(fn, (PPoly, BSpline)):
@@ -480,7 +482,7 @@ def as_layer_function(interval: tuple[float, float],
 def polynomial_layer(interval: tuple[float, float], coeffs: ArrayLike, *,
                      scale: float = 1.0) -> PolynomialLayer:
     """sum_k c_k (r / scale)^k on `interval`, as one exact piece in r."""
-    lo, hi = _interval(interval)
+    lo, hi = as_interval(interval)
     c = as_values(np.asarray(coeffs).ravel())
     if c.size == 0:
         raise ValueError("need at least one coefficient")
@@ -509,7 +511,7 @@ def polynomial_fit(interval: tuple[float, float],
     the fit is the way a numeric layer is brought into the exact
     algebra on purpose, and the caller judges its residual.
     """
-    lo, hi = _interval(interval)
+    lo, hi = as_interval(interval)
     if degree < 0:
         raise ValueError("degree must be non-negative")
     n = 2 * degree + 1 if n is None else int(n)
