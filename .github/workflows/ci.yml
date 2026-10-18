@@ -170,10 +170,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install netCDF-C and the compilers
+      # netCDF-C for the model file; gmsh's wheel needs the X and OpenGL
+      # libraries even headless, for the meshes behind the manifests.
+      - name: Install netCDF-C, the compilers and gmsh's system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libnetcdf-dev g++-14 clang-18
+          sudo apt-get install -y libnetcdf-dev g++-14 clang-18 \
+            libglu1-mesa libxrender1 libxcursor1 libxft2 libxinerama1
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -186,7 +189,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "netcdf"
+        run: poetry install --with dev --extras "netcdf meshing mfem"
 
       - name: Write the fixtures
         run: poetry run python cpp/tests/make_fixtures.py

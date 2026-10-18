@@ -636,6 +636,7 @@ def export_mfem(result: MeshResult, path_base: str | Path, *, model: Model,
     path_base = Path(path_base)
     model_path = None
     if grid is not None:
+        path_base.parent.mkdir(parents=True, exist_ok=True)
         model_path = modelfile.write_model(manifest.beside(path_base, ".model.nc"),
                                            model, grid=grid, fields=names)
     export = export_mfem_mesh(result, path_base, delivery=delivery)

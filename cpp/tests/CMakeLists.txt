@@ -15,6 +15,7 @@ set(PLANETMODEL_FIXTURES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/fixtures" CACHE PATH
 
 add_executable(planetmodel_tests
   test_error.cpp
+  test_json.cpp
   test_units.cpp)
 target_link_libraries(planetmodel_tests PRIVATE planetmodel::planetmodel
                       GTest::gtest_main)

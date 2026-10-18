@@ -366,6 +366,10 @@ def test_model_file_true_writes_a_radial_model_and_refuses_one_that_varies(
         for lay in model.geometry.layers])
     export = export_mfem(res, tmp_path / "b", model=radial, model_file=True)
     assert sc.read(export.manifest_path).model["file"] == "b.model.nc"
+    # into a directory that does not exist yet, as the mesh alone may be
+    deeper = export_mfem(res, tmp_path / "new" / "c", model=radial, model_file=True)
+    assert (tmp_path / "new" / "c.model.nc").is_file()
+    assert sc.read(deeper.manifest_path).model["file"] == "c.model.nc"
 
 
 def test_a_re_export_without_a_model_says_nothing_a_model_said(built, tmp_path):

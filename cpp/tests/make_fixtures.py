@@ -24,6 +24,16 @@ Every case covers the poles, the longitude seam and points between
 nodes.  The local rules only: the C++ side does no spherical-harmonic
 work.
 
+**JSON** (`json_*.json`, and `manifests/<case>/*.json`, the manifests
+the mesher and the MFEM exports write on unit geometries, which need
+gmsh and PyMFEM and are left out with a note without them), each with a
+walk beside it (`<file>.walk`): one line per value in document order,
+its path from the root as the C++ reader writes it, a tab, its type
+(`null`, `bool`, `number`, `string`, `array`, `object`), a tab, and its
+value as Python's `json` reads it (`true` or `false`; a number written
+to round-trip; a string's UTF-8 bytes in hexadecimal; the length of an
+array or an object).
+
 **The facts the C++ restates** (`constants.txt`), one per line, a key
 and its value separated by spaces: the version, `G_SI`,
 `EARTH_MEAN_DENSITY`, and for each of a few scales, `scales <label>`
@@ -33,8 +43,13 @@ floats written to round-trip exactly.
 """
 from __future__ import annotations
 
+import json
+import re
+import shutil
 import sys
+import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -177,6 +192,135 @@ def model_files(directory: Path) -> list[Path]:
     ]
 
 
+#: The JSON documents of the walk fixtures, as bytes on disk: the
+#: grammar's corners, and a nesting deep but within the reader's limit.
+_JSON_DOCUMENTS = {
+    "corners": (
+        '{"unicode": "caf\\u00e9 \\ud83d\\ude00", "raw": "caf\u00e9 \U0001f600",\n'
+        ' "escapes": "a\\"b\\\\c\\/d\\b\\f\\n\\r\\t",\n'
+        ' "numbers": [0, -0.0, 1e300, 5e-324, 0.1, 123456789012, -1.5E-3, 1E+2,\n'
+        '             2e-1],\n'
+        ' "empty": {}, "list": [], "nested": [[[{"x": null}]]],\n'
+        ' "keys": {"a b": 1, "x.y": 2, "": 3, "q\\"uote": 4, "9lives": 5, "_ok9": 6},\n'
+        ' "bools": [true, false], "spaced": [ 1 ,\t2\r\n, 3 ]}\n'),
+    "deep": "[" * 200 + "7" + "]" * 200,
+    "scalar": "  -12.5e3  ",
+}
+
+
+def _path(path: str, key: str | int) -> str:
+    """The path of an element or a member, by the C++ reader's rule."""
+    if isinstance(key, int):
+        return f"{path}[{key}]"
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+        return key if not path else f"{path}.{key}"
+    quoted = key.replace("\\", "\\\\").replace('"', '\\"')
+    return f'{path}["{quoted}"]'
+
+
+def _walk(value: Any, path: str = "") -> list[str]:
+    """The walk lines of a parsed JSON value, by the module docstring."""
+    if value is None:
+        lines = [f"{path}\tnull\t"]
+    elif isinstance(value, bool):
+        lines = [f"{path}\tbool\t{'true' if value else 'false'}"]
+    elif isinstance(value, (int, float)):
+        lines = [f"{path}\tnumber\t{float(value)!r}"]
+    elif isinstance(value, str):
+        lines = [f"{path}\tstring\t{value.encode('utf-8').hex()}"]
+    elif isinstance(value, list):
+        lines = [f"{path}\tarray\t{len(value)}"]
+        for i, v in enumerate(value):
+            lines += _walk(v, _path(path, i))
+    else:
+        lines = [f"{path}\tobject\t{len(value)}"]
+        for k, v in value.items():
+            lines += _walk(v, _path(path, k))
+    return lines
+
+
+def _write_walk(path: Path) -> Path:
+    """The walk of the JSON document at `path`, beside it."""
+    walk = path.with_name(path.name + ".walk")
+    walk.write_text("\n".join(_walk(json.loads(path.read_bytes()))) + "\n",
+                    encoding="utf-8")
+    return walk
+
+
+def json_documents(directory: Path) -> list[Path]:
+    """The documents of `_JSON_DOCUMENTS`, each with its walk."""
+    out = []
+    for label, text in _JSON_DOCUMENTS.items():
+        path = directory / f"json_{label}.json"
+        path.write_bytes(text.encode("utf-8"))
+        out += [path, _write_walk(path)]
+    return out
+
+
+def manifests(directory: Path) -> list[Path]:
+    """The manifests the Python writes, each with its walk: the mesher's
+    (3D, and 2D sized towards a point cloud), `export_mfem_mesh`'s with no
+    model (and a hollow 2D mesh with a shell), and `export_mfem`'s of an
+    elastic model with a fluid core in both deliveries, one with a model
+    file beside it and one non-dimensional.  None without gmsh and
+    PyMFEM."""
+    try:
+        import mfem.ser  # noqa: F401
+
+        from planetmodel.mesh3d import (MeshSpec, NearPoints, Shell, UniformInterfaces,
+                                        build_layered_mesh, export_mfem,
+                                        export_mfem_mesh)
+    except ImportError as error:
+        print(f"no manifests without gmsh and PyMFEM: {error}", file=sys.stderr)
+        return []
+    root = directory / "manifests"
+    shutil.rmtree(root, ignore_errors=True)
+    model = pm.LayeredIsotropicElastic([0.0, 0.4, 0.8, 1.0], rho=[12.0, 5.0, 3.0],
+                                       vp=[10.0, 9.0, 6.0], vs=[0.0, 5.0, 3.5])
+    model = model.with_geometry(model.geometry.renamed(
+        layers=["core", "mantle", "crust"], interfaces=["cmb", "moho", "surface"]))
+    flat = model.stretched(pm.flattening(0.02))
+    coarse = UniformInterfaces(0.3, 0.5, 0.5)
+    hollow = pm.Geometry(pm.Skeleton([0.5, 0.8, 1.0]), layer_names=["lower", "upper"],
+                         interface_names=["inner", "mid", "outer"])
+    cloud = NearPoints(np.array([[1.0, 0.0]]), 0.1, 0.5, 0.3)
+    written = []
+    with tempfile.TemporaryDirectory() as scratch:
+        work = Path(scratch)
+
+        def built(label: str, spec: MeshSpec) -> Any:
+            return build_layered_mesh(spec, work / label / label)
+
+        sphere = built("mesher", MeshSpec(model.geometry, coarse, dimension=3))
+        oblate = built("oblate", MeshSpec(flat.geometry, coarse, dimension=3, order=2))
+        shell = built("shell", MeshSpec(hollow, coarse, dimension=2,
+                                        shells=(Shell(ratio=0.3),)))
+        refined = built("mesher_refined", MeshSpec(model.geometry, coarse, dimension=2,
+                                                   refinements=[cloud]))
+        cases = {
+            "mesher": sphere.manifest_path,
+            "mesher_refined": refined.manifest_path,
+            "mesh_only": export_mfem_mesh(sphere, work / "mesh_only" / "mesh_only"
+                                          ).manifest_path,
+            "hollow_shell": export_mfem_mesh(
+                shell, work / "hollow_shell" / "hollow_shell").manifest_path,
+            "referential": export_mfem(oblate, work / "referential" / "referential",
+                                       model=flat, delivery="referential",
+                                       model_file=pm.gauss_legendre(4)).manifest_path,
+            "physical": export_mfem(oblate, work / "physical" / "physical", model=flat,
+                                    delivery="physical").manifest_path,
+            "nondimensional": export_mfem(
+                sphere, work / "nondimensional" / "nondimensional",
+                model=model.nondimensionalised()).manifest_path,
+        }
+        for label, manifest in cases.items():
+            target = root / label
+            shutil.copytree(manifest.parent, target)
+            path = target / manifest.name
+            written += [path, _write_walk(path)]
+    return written
+
+
 #: The dimensions the units fixture covers: every named one, and powers
 #: and products the named ones do not reach.
 _DIMENSIONS = (units.DIMENSIONLESS, units.MASS, units.LENGTH, units.TIME,
@@ -208,15 +352,17 @@ def constants(directory: Path) -> list[Path]:
     return [path]
 
 
-def write_fixtures(directory: str | Path) -> list[Path]:
-    """Every fixture into `directory`, each model file validated."""
+def write_fixtures(directory: str | Path, *, meshes: bool = True) -> list[Path]:
+    """Every fixture into `directory`, each model file validated; the
+    manifests, which build meshes, only where `meshes` is true."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     models = model_files(directory)
     for path in models:
         validate_structure(path)
     return (models + lateral_cases(directory) + radial_cases(directory)
-            + constants(directory))
+            + constants(directory) + json_documents(directory)
+            + (manifests(directory) if meshes else []))
 
 
 if __name__ == "__main__":
