@@ -23,7 +23,10 @@ Modules reached by name, one level down:
   lateral      values between the nodes of an angular grid: the lateral rules
   modelfile    the model file: a model in one netCDF file (netCDF4, optional)
   harmonics    real spherical harmonics; grid transforms via ducc0 (optional)
-  plotting     radial profiles drawn one way, radius upward (matplotlib, optional)
+  slices       a field on a sphere, a section or a profile; spectra and
+               correlations by degree
+  plotting     profiles, sections, maps and spectra drawn (matplotlib and
+               cartopy, optional), and VTK files for ParaView
   mesh1d       radial spectral-element meshes (GLL), nodal values, gravity
   mesh3d       2D and 3D meshes via gmsh, and MFEM export
   randomfield  Matern random fields on balls, annuli and layers
