@@ -32,6 +32,7 @@ meshing = ["gmsh>=4.13"]
 mfem = ["mfem>=4.8"]
 netcdf = ["netCDF4>=1.7"]
 plot = ["matplotlib>=3.11,<4"]
+maps = ["matplotlib>=3.11,<4", "cartopy>=0.24,<1"]
 notebook = ["ipykernel>=6.29"]
 harmonics = ["ducc0 (>=0.41)"]
 
@@ -84,6 +85,7 @@ markers = [
     "mfem: requires PyMFEM (planetmodel[mfem])",
     "harmonics: requires ducc0 (planetmodel[harmonics])",
     "netcdf: requires netCDF4 (planetmodel[netcdf])",
+    "maps: requires cartopy (planetmodel[maps])",
 ]
 
 [tool.ruff]

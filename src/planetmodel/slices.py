@@ -80,7 +80,7 @@ if TYPE_CHECKING:
 __all__ = ["AT", "SIDES", "DEPARTURES", "NO_POWER", "Fields", "RelativeTo", "Shown",
            "SliceLayer", "SphereSlice", "SectionSlice", "ProfileSlice",
            "Spectrum", "Correlation", "sphere", "section", "profile",
-           "mean_profile", "spectrum", "correlation"]
+           "mean_profile", "evaluate", "spectrum", "correlation"]
 
 #: Where a slice's points are: in the reference body, or the physical one.
 AT = ("reference", "physical")
@@ -791,6 +791,26 @@ def mean_profile(model: Model, fields: Fields, *, n: int = 100,
             v = _real(mean.evaluate(r, None, None), mean)
         out.append(SliceLayer(layer, r, v, X, X))
     return ProfileSlice(None, None, tuple(out), shown)
+
+
+def evaluate(model: Model, fields: Fields, layer: int, r: ArrayLike, theta: ArrayLike,
+             phi: ArrayLike, *, component: int | str | None = None,
+             frame: str | None = None, relative_to: RelativeTo = None,
+             departure: str | None = None,
+             mean_grid: AngularGrid | None = None) -> np.ndarray:
+    """What a slice of the same choices shows, at reference points (r,
+    theta, phi) of a layer, broadcast: for a set of points of the caller's
+    own, as the VTK writer's departures are; NaN where the layer lacks the
+    field."""
+    values, _ = _evaluator(model, fields, component=component, frame=frame,
+                           relative_to=relative_to, departure=departure,
+                           mean_grid=mean_grid)
+    if not 0 <= int(layer) < model.nlayers:
+        raise IndexError(f"the model has {model.nlayers} layers, so no layer {layer}")
+    r, theta, phi = np.broadcast_arrays(np.asarray(r, dtype=float),
+                                        np.asarray(theta, dtype=float),
+                                        np.asarray(phi, dtype=float))
+    return values(int(layer), r, theta, phi)
 
 
 # -- spectra ------------------------------------------------------------------------

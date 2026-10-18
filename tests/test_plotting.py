@@ -165,3 +165,55 @@ def test_the_colour_scale_is_the_callers_or_by_what_the_values_are(layered):
                         vmax=9.0) == ("magma", 0.0, 9.0)
     with pytest.raises(ValueError, match="no finite"):
         colour_scale([np.full(3, np.nan)], plain.shown)
+
+
+# -- spectra and correlations drawn --------------------------------------------
+
+def _harmonic_model(layered, coeffs, name):
+    from planetmodel.harmonics import synthesise
+    c = np.asarray(coeffs, dtype=float)
+    return layered.with_field(1, "vs", AnalyticField(
+        (0.5, 1.0), lambda r, t, p: r * synthesise(c, t, p), name="vs"),
+        replace=True).named(name)
+
+
+def test_a_spectrum_is_a_line_of_power_by_degree(layered):
+    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
+    from planetmodel.plotting import spectrum
+    c = np.zeros((2, 4, 4))
+    c[0, 0, 0], c[0, 2, 1], c[1, 3, 3] = 1.0, 0.5, 0.25
+    sp = slices.spectrum(_harmonic_model(layered, c, "h"), "vs", radius=0.8, lmax=5)
+    fig, ax = plt.subplots()
+    line = spectrum(ax, sp, first=1, label="h")
+    x, y = line.get_data()
+    assert list(x) == [1, 2, 3, 4, 5] and np.allclose(y, sp.power[1:])
+    assert ax.get_yscale() == "log" and line.get_label() == "h"
+    assert np.allclose(spectrum(ax, sp, amplitude=True).get_data()[1], sp.amplitude)
+    with pytest.raises(ValueError, match="first"):
+        spectrum(ax, sp, first=9)
+    plt.close(fig)
+
+
+def test_a_correlation_is_an_image_by_degree_and_radius(layered):
+    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
+    from planetmodel.plotting import correlation, correlation_total
+    a, b = np.zeros((2, 4, 4)), np.zeros((2, 4, 4))
+    a[0, 2, 1], a[0, 3, 0], a[0, 1, 1] = 1.0, 0.5, 0.3
+    b[1, 2, 1], b[0, 3, 0], b[0, 1, 1] = 0.7, -2.0, 0.3
+    cr = slices.correlation(_harmonic_model(layered, a, "a"), "vs",
+                            _harmonic_model(layered, b, "b"), lmax=3,
+                            radii=[0.9, 0.6, 0.75])
+    fig, (ax, bx) = plt.subplots(1, 2)
+    mesh = correlation(ax, cr, scale=10.0, colorbar=True)
+    assert mesh.get_clim() == (-1.0, 1.0) and mesh.get_cmap().name == DIVERGING
+    shown = np.ma.asarray(mesh.get_array()).reshape(3, 3)
+    order = np.argsort(cr.radii)
+    assert np.allclose(shown, cr.by_degree[order][:, 1:])
+    xy = mesh.get_coordinates()
+    assert np.allclose(xy[0, :, 0], [0.5, 1.5, 2.5, 3.5])
+    assert np.allclose(np.sort(xy[:, 0, 1])[1:-1], 10.0 * np.array([0.675, 0.825]))
+    line = correlation_total(bx, cr, scale=10.0)
+    assert np.allclose(line.get_data()[0], cr.total[order])
+    assert np.allclose(line.get_data()[1], 10.0 * cr.radii[order])
+    assert fig.axes[-1].get_ylabel() == cr.label
+    plt.close(fig)

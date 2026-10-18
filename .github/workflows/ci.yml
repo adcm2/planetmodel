@@ -79,7 +79,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics netcdf"
+        run: poetry install --with dev --extras "plot harmonics netcdf maps"
 
       - name: Test with pytest
         # The default selection is the fast suite (pyproject's addopts).
