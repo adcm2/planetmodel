@@ -4,7 +4,7 @@ import pytest
 
 from planetmodel import (AngularGrid, driscoll_healy, equiangular, gauss_legendre,
                          real_harmonics, synthesise)
-from planetmodel.harmonics import analyse_grid, synthesise_grid
+from planetmodel.harmonics import analyse_grid, synthesise_grid, synthesise_points
 from planetmodel.randomfield import SphericalGRF
 
 pytestmark = pytest.mark.harmonics
@@ -61,6 +61,21 @@ def test_the_weights_are_ducc0s():
                         ("CC", equiangular(11, 8, poles=True))]:
         want = get_gridweights(rings, grid.ntheta) / (2 * np.pi)
         assert np.allclose(grid.weights, want, rtol=0.0, atol=1e-15), rings
+
+
+def test_synthesis_at_points_agrees_with_the_basis():
+    L = 12
+    rng = np.random.default_rng(4)
+    c = random_coefficients(L, rng, 3)
+    t, p = rng.uniform(0, np.pi, (5, 7)), rng.uniform(-9, 9, (5, 7))
+    got = synthesise_points(c, t, p)
+    assert got.shape == (3, 5, 7)
+    want = np.einsum("slmk,slm...->k...", c, real_harmonics(L, t, p))
+    assert np.allclose(got, want, rtol=0, atol=1e-12)
+    assert synthesise_points(c[..., 0], np.array([0.0, np.pi]), 0.0).shape == (2,)
+    assert synthesise_points(c, np.zeros(0), np.zeros(0)).shape == (3, 0)
+    with pytest.raises(ValueError, match=r"\[0, pi\]"):
+        synthesise_points(c, 3.5, 0.0)
 
 
 def test_extra_axes_and_a_wider_grid():

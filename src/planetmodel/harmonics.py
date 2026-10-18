@@ -30,7 +30,10 @@ without the poles, from `planetmodel.sampling` -- through ducc0's
 transforms: fast, exact for a field band-limited to the grid's band,
 and needing the `harmonics` extra.  The longitudes may start anywhere
 and number anything from 2 lmax + 1 up, provided they are equally
-spaced.  ducc0 holds complex coefficients a_lm for m >= 0 in healpy's
+spaced.  `synthesise_points` is the fast counterpart of `synthesise` at
+arbitrary points, through ducc0's non-uniform synthesis, accurate to
+about `POINT_EPSILON` of the field's largest value rather than to
+rounding.  ducc0 holds complex coefficients a_lm for m >= 0 in healpy's
 order, with the Condon-Shortley phase; the real ones here are
 
     a_l0 = c[0, l, 0],    a_lm = (-1)^m (c[0, l, m] - i c[1, l, m]) / sqrt 2,
@@ -46,11 +49,16 @@ import numpy as np
 from numpy.typing import ArrayLike
 from scipy.special import sph_harm_y
 
+from .frames import wrapped
+
 if TYPE_CHECKING:
     from .sampling import AngularGrid
 
 __all__ = ["real_harmonics", "synthesise", "synthesise_grid", "analyse_grid",
-           "packing"]
+           "synthesise_points", "packing", "POINT_EPSILON"]
+
+#: The relative accuracy asked of ducc0's synthesis at arbitrary points.
+POINT_EPSILON = 1e-13
 
 
 def real_harmonics(lmax: int, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
@@ -252,3 +260,35 @@ def analyse_grid(values: ArrayLike, grid: AngularGrid, *,
                                lmax=lmax, geometry=rings,
                                phi0=float(grid.longitudes[0]))[0]
     return _to_real(a, lmax).reshape((2, lmax + 1, lmax + 1) + extra)
+
+
+def synthesise_points(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike
+                      ) -> np.ndarray:
+    """sum_lm c_lm Y_lm at arbitrary points, fast, through ducc0.
+
+    `coeffs` has shape (2, l + 1, l + 1) or that followed by any extra
+    axes; `theta` in [0, pi] and `phi`, in any range, broadcast
+    together.  The result has the extra axes first and then the points'
+    shape.  It agrees with
+    `synthesise` to about `POINT_EPSILON` of the field's largest value,
+    the accuracy asked of ducc0's non-uniform synthesis, at a cost
+    nearly independent of the number of points.
+    """
+    sht = _sht()
+    c = np.asarray(coeffs, dtype=float)
+    if c.ndim < 3 or c.shape[0] != 2 or c.shape[1] != c.shape[2]:
+        raise ValueError("coefficients must have shape (2, l + 1, l + 1, ...)")
+    theta, phi = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                     np.asarray(phi, dtype=float))
+    L, extra, points = c.shape[1] - 1, c.shape[3:], theta.shape
+    if np.any(theta < 0.0) or np.any(theta > np.pi):
+        raise ValueError("colatitudes must lie in [0, pi]")
+    loc = np.ascontiguousarray(np.stack([theta.ravel(), wrapped(phi.ravel())],
+                                        axis=-1))
+    alm = _to_complex(c.reshape(c.shape[:3] + (-1,)))
+    out = np.empty((alm.shape[0], loc.shape[0]))
+    if loc.shape[0]:
+        for k in range(alm.shape[0]):
+            out[k] = sht.synthesis_general(alm=alm[k], spin=0, lmax=L, loc=loc,
+                                           epsilon=POINT_EPSILON)[0]
+    return out.reshape(extra + points)

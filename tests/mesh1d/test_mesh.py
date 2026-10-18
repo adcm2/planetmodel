@@ -65,6 +65,52 @@ def test_to_ppoly_with_a_trailing_shape_is_the_scalar_view_by_component():
         m.to_ppoly(np.zeros((m.nspec, 2, m.ngll)))
 
 
+def test_the_linear_rule_is_straight_lines_between_nodes():
+    m = Mesh1D([0.0, 1.0, 2.5], ngll=4, drmax=0.6)
+    v = np.random.default_rng(1).standard_normal((m.nspec, m.ngll, 2))
+    P = m.to_ppoly(v, method="linear")
+    assert P.c.shape == (2, m.nspec * (m.ngll - 1), 2)
+    for e in range(m.nspec):
+        x = np.linspace(m.left[e], m.right[e], 13)[:-1]
+        assert np.allclose(P(x)[:, 1], np.interp(x, m.r[e], v[e, :, 1]), atol=1e-14)
+    jump = np.where(m.left[:, None] >= 1.0, 1.0, 0.0) + 0.0 * m.r
+    Q = m.to_ppoly(jump, method="linear")
+    assert Q(0.5) == 0.0 and Q(1.0) == 1.0          # the upper element at a boundary
+    part = m.to_ppoly(v, elements=(1, 3), method="linear")
+    assert part.x[0] == m.left[1] and part.x[-1] == m.right[2]
+    with pytest.raises(ValueError, match="method"):
+        m.to_ppoly(v, method="cubic")
+
+
+@pytest.mark.parametrize("method", ["polynomial", "linear"])
+def test_interpolation_weights_give_the_exact_view(method):
+    m = Mesh1D([0.0, 1.0, 2.5], ngll=5, drmax=0.4)
+    rng = np.random.default_rng(2)
+    u = rng.standard_normal(m.r.shape)
+    x = np.concatenate([rng.uniform(-0.3, 2.8, (40,)), m.r.ravel(), m.left])
+    e, W = m.interpolation_weights(x, method=method)
+    assert e.shape == x.shape and W.shape == x.shape + (m.ngll,)
+    assert np.allclose(np.einsum("pi,pi->p", W, u[e]), m.to_ppoly(u, method=method)(x),
+                       atol=1e-12)
+    assert np.allclose(W.sum(axis=-1), 1.0)
+    assert np.array_equal(e[-m.nspec:], np.arange(m.nspec))   # boundaries resolve up
+    assert e[x < 0.0].max(initial=0) == 0 and e[x > 2.5].min(initial=m.nspec - 1) == \
+        m.nspec - 1
+    e2, W2 = m.interpolation_weights(np.full((3, 2), 0.7), method=method)
+    assert e2.shape == (3, 2) and W2.shape == (3, 2, m.ngll)
+    with pytest.raises(ValueError, match="method"):
+        m.interpolation_weights(x, method="spline")
+
+
+def test_the_rules_agree_with_two_nodes_an_element():
+    m = Mesh1D([0.0, 1.0, 2.5], ngll=2, drmax=0.3)
+    u = np.random.default_rng(3).standard_normal(m.r.shape)
+    x = np.linspace(-0.2, 2.7, 101)
+    assert np.allclose(m.to_ppoly(u)(x), m.to_ppoly(u, method="linear")(x), atol=1e-13)
+    assert np.allclose(m.interpolation_weights(x)[1],
+                       m.interpolation_weights(x, method="linear")[1], atol=1e-14)
+
+
 def test_radial_mesh_honours_the_skeleton():
     m = RadialMesh(SK, drmax=0.25)
     for b in SK.boundaries:

@@ -20,6 +20,7 @@ Modules reached by name, one level down:
   catalogue    PREM, LayeredIsotropicElastic and MineosModel, model types
   deck         tabulated models: decks, their formats, fields by interpolation
   sampling     a model on a radial mesh times an angular grid
+  lateral      values between the nodes of an angular grid: the lateral rules
   harmonics    real spherical harmonics; grid transforms via ducc0 (optional)
   plotting     radial profiles drawn one way, radius upward (matplotlib, optional)
   mesh1d       radial spectral-element meshes (GLL), nodal values, gravity

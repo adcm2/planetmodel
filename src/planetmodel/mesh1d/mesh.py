@@ -3,10 +3,15 @@
 Mesh1D is pure geometry on an interval: pinned breakpoints, each span
 between them cut uniformly into elements no wider than `drmax`, `ngll`
 Gauss-Lobatto-Legendre nodes per element, a global node numbering, the
-reference-element data a weak form assembles with, and an exact
-piecewise-polynomial view of nodal values.  Nodal arrays are stored per
-element, shape (nspec, ngll), so a shared node carries one value from
-each side.
+reference-element data a weak form assembles with, and the radial rules
+between nodes: `polynomial`, the Lagrange polynomial through each
+element's GLL nodes, and `linear`, straight lines between consecutive
+nodes, which agree when an element has two nodes.  Each rule is offered
+two ways that agree, as an exact piecewise-polynomial view of nodal
+values (`to_ppoly`) and as the weights of an element's nodes at any
+point (`interpolation_weights`).  Nodal arrays are stored per element,
+shape (nspec, ngll), so a shared node carries one value from each side,
+and at a shared boundary both views take the element above.
 
 RadialMesh lays such a mesh over a Skeleton so that every skeleton
 boundary is an element boundary, and records the layer each element
@@ -24,13 +29,25 @@ from numpy.typing import ArrayLike
 from scipy.interpolate import PPoly
 
 from ..skeleton import Skeleton
-from .gll import gll_points_weights, lagrange_derivative_matrix
+from .gll import gll_points_weights, lagrange_basis, lagrange_derivative_matrix
 
 if TYPE_CHECKING:
     from ..geometry import Geometry
     from ..model import Model
 
-__all__ = ["Mesh1D", "RadialMesh"]
+__all__ = ["Mesh1D", "RadialMesh", "RADIAL_METHODS"]
+
+#: The radial rules between the nodes of an element: the Lagrange
+#: polynomial through its GLL nodes, or straight lines between
+#: consecutive nodes.
+RADIAL_METHODS = ("polynomial", "linear")
+
+
+def _check_method(method: str) -> str:
+    """The radial rule named, or a ValueError listing the rules."""
+    if method not in RADIAL_METHODS:
+        raise ValueError(f"method must be one of {RADIAL_METHODS}, got {method!r}")
+    return method
 
 
 class Mesh1D:
@@ -98,18 +115,23 @@ class Mesh1D:
         return min(max(i, 0), self.nspec - 1)
 
     def to_ppoly(self, nodal: ArrayLike, *,
-                 elements: tuple[int, int] | None = None) -> PPoly:
+                 elements: tuple[int, int] | None = None,
+                 method: str = "polynomial") -> PPoly:
         """The exact piecewise-polynomial (scipy PPoly) view of nodal values.
 
         `nodal` has shape (nspec, ngll), or that followed by any trailing
         shape, in which case the values of the result have the trailing
         shape; `elements`, when given, is a half-open (start, stop)
-        element range restricting the view.  Within each element the
-        result is the interpolating polynomial through the GLL nodes, so
-        its derivative and integral are those of the spectral-element
-        function.  Discontinuous data is representable; at a shared
-        breakpoint the upper element's polynomial is evaluated.
+        element range restricting the view.  Under `method="polynomial"`
+        the result within each element is the interpolating polynomial
+        through the GLL nodes, so its derivative and integral are those
+        of the spectral-element function; under `"linear"` it is the
+        straight line between each pair of consecutive nodes.
+        Discontinuous data is representable; at a shared breakpoint the
+        upper element's piece is evaluated, and beyond the ends the end
+        pieces continue.
         """
+        _check_method(method)
         nodal = np.asarray(nodal, dtype=float)
         if nodal.shape[:2] != (self.nspec, self.ngll):
             raise ValueError(f"nodal values must have shape "
@@ -119,6 +141,13 @@ class Mesh1D:
         if not 0 <= e0 < e1 <= self.nspec:
             raise ValueError("elements must be a non-empty in-range interval")
         n, ne, extra = self.ngll, e1 - e0, nodal.shape[2:]
+        if method == "linear":
+            r = self.r[e0:e1]
+            y = nodal[e0:e1].reshape(ne, n, -1)
+            y0, y1 = y[:, :-1].reshape(-1, y.shape[2]), y[:, 1:].reshape(-1, y.shape[2])
+            dx = np.diff(r, axis=1).ravel()[:, None]
+            C = np.stack([(y1 - y0) / dx, y0]).reshape((2, dx.size) + extra)
+            return PPoly(C, np.append(r[:, :-1].ravel(), r[-1, -1]))
         V = np.vander(self.xi, n, increasing=True)
         rhs = nodal[e0:e1].reshape(ne, n, -1).transpose(1, 0, 2)
         cxi = np.linalg.solve(V, rhs.reshape(n, -1)).reshape(n, ne, -1)
@@ -135,6 +164,39 @@ class Mesh1D:
         C = c[::-1].reshape((n, ne) + extra)          # PPoly: degree-descending
         x = np.concatenate((self.left[e0:e1], self.right[e1 - 1:e1]))
         return PPoly(C, x)
+
+    def interpolation_weights(self, x: ArrayLike, *, method: str = "polynomial"
+                              ) -> tuple[np.ndarray, np.ndarray]:
+        """The element of each point, and the weights of that element's nodes.
+
+        Returns `(element, weights)`, `element` of the shape of `x` and
+        `weights` of that shape followed by (ngll,), so that nodal values
+        u of shape (nspec, ngll) take the value
+        `sum_i weights[..., i] * u[element, i]` at x, the value
+        `to_ppoly(u, method=method)` gives.  The element is
+        `element_of`'s, the upper one at a shared boundary and the end
+        one beyond the mesh, whose piece continues there.  Under
+        `"polynomial"` the weights are the Lagrange basis of the
+        element's GLL nodes; under `"linear"` the two hat functions of
+        the nodes bracketing x, zero elsewhere.
+        """
+        _check_method(method)
+        x = np.asarray(x, dtype=float)
+        flat = x.ravel()
+        e = np.clip(np.searchsorted(self.left, flat, side="right") - 1, 0,
+                    self.nspec - 1)
+        xi = (flat - self.left[e]) / self.jac[e] - 1.0
+        if method == "polynomial":
+            W = lagrange_basis(self.xi, xi)
+        else:
+            k = np.clip(np.searchsorted(self.xi, xi, side="right") - 1, 0,
+                        self.ngll - 2)
+            t = (xi - self.xi[k]) / (self.xi[k + 1] - self.xi[k])
+            W = np.zeros((flat.size, self.ngll))
+            rows = np.arange(flat.size)
+            W[rows, k] = 1.0 - t
+            W[rows, k + 1] = t
+        return e.reshape(x.shape), W.reshape(x.shape + (self.ngll,))
 
     def __repr__(self) -> str:
         return (f"Mesh1D({self.nspec} elements x {self.ngll} GLL, "
