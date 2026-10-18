@@ -18,6 +18,7 @@ add_executable(planetmodel_tests
   test_error.cpp
   test_json.cpp
   test_manifest.cpp
+  $<$<BOOL:${PLANETMODEL_WITH_NETCDF}>:test_modelfile.cpp>
   $<$<BOOL:${PLANETMODEL_WITH_NETCDF}>:test_rules.cpp>
   test_units.cpp)
 target_link_libraries(planetmodel_tests PRIVATE planetmodel::planetmodel

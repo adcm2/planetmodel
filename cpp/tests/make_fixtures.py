@@ -12,6 +12,24 @@ density and a vector field; PREM in three parts on three kinds of grid;
 a model placed by boundary reliefs (the `geometry` group); and one
 placed by a flattening (the `displacement` field).
 
+Beside them, `model_kinds.nc` (an absolute perturbation of `rho` and a
+log one of `viscosity`), `model_tensors.nc` (a rank-2 `stress`, radial
+on one layer and gridded on the other, and a rank-4 `elastic`) and
+`model_harmonic.nc` (a copy of the lateral one stating the harmonic
+rule, which the C++ refuses); and for every model file but that one
+`<model>.expect`, from the Python's own reading of the file, one fact
+per line: `scales`, `rtol`, `name` and the `layer_name` and
+`interface_name`s (UTF-8 in hexadecimal, `-` for none), each `constant`
+with its dimensions, `value <layer> <name> <s|c> r theta phi` and the
+stored components in the spherical or Cartesian frame, `gradient
+<layer> <name> r theta phi` and the derivatives in r, theta and phi of
+a scalar, `absent <layer> <name>` for a variable a layer lacks, and
+`displacement x y z` and u(X) for a mapping.  **Model files to refuse**
+(`model_cases/bad_*.nc`): malformed copies, listed in `bad.txt` as the
+case, a tab, the place the fault lies, a tab, and a phrase the refusal
+says.  **GLL points** (`gll.txt`): `gll <ngll>` and the points on [-1,
+1].
+
 **Interpolation cases** (`case_lateral_*.nc`, `case_radial_*.nc`), one
 netCDF file each: for a lateral case the grid (`colatitude`,
 `longitude`, radians), its `kind`, the `values` at its nodes and the
@@ -203,8 +221,41 @@ def model_files(directory: Path) -> list[Path]:
     relief = pm.GriddedFunction.sampled(bump, pm.gauss_legendre(16))
     stacked = two.stretched(pm.layer_linear(two.skeleton, [None, relief, relief]))
     flattened = two.stretched(pm.flattening(0.01))
+    kinds = two.with_field(1, "viscosity", pm.constant_field((0.5, 1.0), 1e21,
+                                                             name="viscosity"))
+    kinds = pm.perturbed(kinds, "viscosity", pm.AnalyticField(
+        (0.5, 1.0), lambda r, t, p: 0.3 * np.sin(t) ** 2 * np.cos(p) * r), kind="log")
+    kinds = pm.perturbed(kinds, "rho", pm.AnalyticField(
+        (0.5, 1.0), lambda r, t, p: 0.1 * r * smooth(t, p), character=pm.DENSITY),
+        kind="absolute")
+
+    def stress(r: np.ndarray, t: np.ndarray, p: np.ndarray) -> np.ndarray:
+        r, t, p = np.broadcast_arrays(r, t, p)
+        x, y, z = r * np.sin(t) * np.cos(p), r * np.sin(t) * np.sin(p), r * np.cos(t)
+        return np.stack([1 + x * y, 2 + z, 3 - x, 0.5 * y * z, 0.2 * x, 0.1 + y], -1)
+
+    def elastic(r: np.ndarray, t: np.ndarray, p: np.ndarray) -> np.ndarray:
+        r, t, p = np.broadcast_arrays(r, t, p)
+        base = np.eye(6) * 3.0 + 0.5
+        bump = (0.1 * r * smooth(t, p))[..., None, None]
+        return base + bump * np.add.outer(np.arange(6), np.arange(6)) / 10.0
+
+    radial_stress = pm.RadialField((0.0, 0.5), [
+        lambda r: 1.0 + r, lambda r: 2.0 - r, lambda r: 3.0 + r ** 2,
+        lambda r: 0.1 * r, lambda r: 0.2 * r, lambda r: 0.3 * r], character=pm.STRESS,
+        name="stress")
+    tensors = two.with_field(0, "stress", radial_stress)
+    tensors = tensors.with_field(1, "stress", pm.GriddedField.sampled(
+        pm.AnalyticField((0.5, 1.0), stress, character=pm.STRESS, frame="cartesian"),
+        pm.gauss_legendre(4), ngll=3, lateral="cubic"))
+    tensors = tensors.with_field(1, "elastic", pm.GriddedField.sampled(
+        pm.AnalyticField((0.5, 1.0), elastic, character=pm.ELASTIC, frame="cartesian"),
+        pm.gauss_legendre(4), ngll=3, lateral="linear"))
     return [
         write_model(directory / "model_prem.nc", prem, grid=pm.gauss_legendre(2)),
+        write_model(directory / "model_kinds.nc", kinds, grid=pm.gauss_legendre(6)),
+        write_model(directory / "model_tensors.nc", tensors, grid=pm.gauss_legendre(4),
+                    fields=["rho", "stress", "elastic"]),
         write_model(directory / "model_prem_perturbed.nc", perturbed,
                     grid=pm.gauss_legendre(8), fields=base,
                     interpolation={"vsv": ("polynomial", "cubic")}),
@@ -659,6 +710,227 @@ def constants(directory: Path) -> list[Path]:
     return [path]
 
 
+def _scalar_gradient(f: Any, r: float, t: float, p: float) -> np.ndarray:
+    """(d/dr, d/dtheta, d/dphi) of a scalar field the reader builds, from
+    the exact derivatives of its parts."""
+    from planetmodel.gridded import GriddedField
+    if getattr(f, "reference", None) is not None:
+        ref, dp = f.reference, f.perturbation
+        v0, g0 = float(ref.evaluate(r, t, p)), _scalar_gradient(ref, r, t, p)
+        v1, g1 = float(dp.evaluate(r, t, p)), _scalar_gradient(dp, r, t, p)
+        if f.kind == "absolute":
+            return g0 + g1
+        if f.kind == "relative":
+            return g0 * (1.0 + v1) + v0 * g1
+        return np.exp(v1) * (g0 + v0 * g1)
+    if isinstance(f, GriddedField):
+        _, dr, dt, dph = f.cartesian_derivatives(r, t, p)
+        return np.array([dr.item(), dt.item(), dph.item()])
+    return np.array([float(f.derivative().evaluate(r, t, p)), 0.0, 0.0])
+
+
+def _expect_model(path: Path) -> Path:
+    """The expectations of a model file, by the module docstring."""
+    from planetmodel.modelfile import read_model, read_model_file
+    data, model = read_model_file(path), read_model(path)
+    hexed = (lambda x: "-" if not x else x.encode("utf-8").hex())
+    s = data.scales
+    lines = [f"scales {s.length!r} {s.mass!r} {s.time!r} {s.temperature!r}",
+             f"rtol {data.rtol!r}", f"name {hexed(data.name)}"]
+    lines += [f"layer_name {i} {hexed(n)}" for i, n in enumerate(data.layer_names)]
+    lines += [f"interface_name {i} {hexed(n)}"
+              for i, n in enumerate(data.interface_names)]
+    for cname, value in data.constants.items():
+        c = data.declared.get(cname)
+        dims = "" if c is None else " " + " ".join(
+            str(getattr(c.dimensions, b))
+            for b in ("mass", "length", "time", "temperature"))
+        lines.append(f"constant {cname} {value!r}{dims}")
+    names = sorted({n for part in data.parts for n in part.variables
+                    if not n.endswith(("_poles", "_perturbation"))
+                    and n != "displacement"})
+    for i, layer in enumerate(model.layers):
+        lo, hi = layer.interval
+        rs = (lo, lo + 0.3 * (hi - lo), lo + 0.77 * (hi - lo), hi)
+        ts = (0.0, 0.7, np.pi, 2.2)
+        ps = (-1.0, 0.3, 4.0, 9.5)
+        for name in names:
+            if name not in layer:
+                lines.append(f"absent {i} {name}")
+                continue
+            f = layer[name]
+            for r, t, p in zip(rs, ts, ps):
+                for frame, tag in (("spherical", "s"), ("cartesian", "c")):
+                    v = np.asarray(f.evaluate(r, t, p, frame=frame),
+                                   dtype=float).ravel()
+                    lines.append(f"value {i} {name} {tag} {r!r} {t!r} {p!r} "
+                                 + " ".join(repr(float(x)) for x in v))
+                if f.character.rank == 0:
+                    g = _scalar_gradient(f, r, t, p)
+                    lines.append(f"gradient {i} {name} {r!r} {t!r} {p!r} "
+                                 + " ".join(repr(float(x)) for x in g))
+    mapping = model.geometry.mapping
+    if not model.geometry.is_identity:
+        rng = np.random.default_rng(11)
+        top = float(model.skeleton.boundaries[-1])
+        radii = np.concatenate((rng.uniform(0.0, top, 6), model.skeleton.boundaries))
+        t = np.arccos(rng.uniform(-1, 1, radii.size))
+        ph = rng.uniform(-np.pi, np.pi, radii.size)
+        X = np.stack([radii * np.sin(t) * np.cos(ph), radii * np.sin(t) * np.sin(ph),
+                      radii * np.cos(t)], -1)
+        U = mapping.displacement(X)
+        for x, u in zip(X, U):
+            lines.append("displacement " + " ".join(repr(float(a)) for a in (*x, *u)))
+    out = path.with_name(path.name.removesuffix(".nc") + ".expect")
+    out.write_text("\n".join(lines) + "\n")
+    return out
+
+
+def _setting(key: str, value: Any, *, group: str | None = None,
+             variable: str | None = None) -> Any:
+    """An edit setting one attribute: of the root, a group, or a variable."""
+    def edit(ds: Any) -> None:
+        g = ds if group is None else ds.groups[group]
+        (g if variable is None else g.variables[variable]).setncattr(key, value)
+    return edit
+
+
+def _deleting(key: str, *, group: str | None = None,
+              variable: str | None = None) -> Any:
+    """An edit deleting one attribute: of the root, a group, or a variable."""
+    def edit(ds: Any) -> None:
+        g = ds if group is None else ds.groups[group]
+        (g if variable is None else g.variables[variable]).delncattr(key)
+    return edit
+
+
+def _storing(index: tuple[int, ...], value: float, *, variable: str,
+             group: str | None = None, relative: bool = False) -> Any:
+    """An edit storing one value of a variable, or scaling it."""
+    def edit(ds: Any) -> None:
+        var = (ds if group is None else ds.groups[group]).variables[variable]
+        var[index] = value * float(var[index]) if relative else value
+    return edit
+
+
+def _renaming(old: str, new: str, *, group: str) -> Any:
+    """An edit renaming a variable of a group."""
+    return lambda ds: ds.groups[group].renameVariable(old, new)
+
+
+_P = {"group": "part_0"}
+_RHO = {"group": "part_0", "variable": "rho"}
+_BETWEEN = {"group": "geometry", "variable": "boundary_displacement"}
+
+#: The malformed model files: (the file copied, an edit by netCDF4, where
+#: the fault lies, what the refusal says).
+_BAD_MODELS: dict[str, tuple[str, Any, str, str]] = {
+    "schema": ("model_lateral.nc", _setting("schema", "planetmodel.model/0"),
+               "schema", "this reader reads"),
+    "no_schema": ("model_lateral.nc", _deleting("schema"), "schema",
+                  "not a planetmodel model file"),
+    "rtol_negative": ("model_lateral.nc", _setting("rtol", -1.0), "rtol",
+                      "not a tolerance"),
+    "rtol_text": ("model_lateral.nc", _setting("rtol", "loose"), "rtol",
+                  "not a tolerance"),
+    "no_scale_mass": ("model_lateral.nc", _deleting("scale_mass"), "scale_mass",
+                      "missing or not positive"),
+    "layer_bounds": ("model_lateral.nc",
+                     _storing((1, 0), 0.55, variable="layer_bounds"),
+                     "layer_bounds", "contiguous"),
+    "layer_part": ("model_lateral.nc", _storing((0,), 3, variable="layer_part"),
+                   "layer_part", "part_3"),
+    "grid_kind": ("model_lateral.nc", _setting("grid_kind", "healpix", **_P),
+                  "part_0.grid_kind", "not a kind of grid"),
+    "ngll": ("model_lateral.nc", _setting("ngll", np.int32(7), **_P), "part_0",
+             "elements of ngll"),
+    "element_bounds": ("model_lateral.nc",
+                       _storing((0, 1), 0.3, variable="element_bounds", **_P),
+                       "part_0", "do not tile"),
+    "radius": ("model_lateral.nc",
+               _storing((1,), 1.001, variable="radius", relative=True, **_P),
+               "part_0/radius", "Gauss-Lobatto-Legendre"),
+    "element_bounds_end": ("model_lateral.nc",
+                           _storing((-1, 1), 1.0 + 1e-7, variable="element_bounds",
+                                    relative=True, **_P),
+                           "part_0", "do not tile"),
+    "grid_kind_number": ("model_lateral.nc", _setting("grid_kind", np.int32(3), **_P),
+                         "part_0.grid_kind", "not a kind of grid"),
+    "radial_rule": ("model_lateral.nc", _deleting("radial_interpolation", **_RHO),
+                    "part_0/rho", "lacks the attribute"),
+    "radial_rule_number": ("model_lateral.nc",
+                           _setting("radial_interpolation", np.int32(1), **_RHO),
+                           "part_0/rho", "unknown radial rule"),
+    "rank_text": ("model_lateral.nc", _setting("rank", "two", **_RHO), "part_0/rho",
+                  "states no character"),
+    "displacement_rule": ("model_flattened.nc",
+                          _deleting("radial_interpolation", group="part_0",
+                                    variable="displacement"),
+                          "part_0/displacement", "lacks the attribute"),
+    "perturbation_number": ("model_kinds.nc",
+                            _setting("perturbation", np.int32(1), **_RHO),
+                            "part_0/rho", "which the part lacks"),
+    "lateral_rule": ("model_lateral.nc",
+                     _setting("lateral_interpolation", "quintic", **_RHO),
+                     "part_0/rho", "no known lateral rule"),
+    "rank": ("model_lateral.nc", _setting("rank", np.int32(1), **_RHO), "part_0/rho",
+             "trailing axes"),
+    "radial_layers_unheld": ("model_lateral.nc",
+                             _setting("radial_layers", np.int32([5]), **_RHO),
+                             "part_0/rho", "radial_layers"),
+    "radial_layers_radial": ("model_lateral.nc",
+                             _setting("radial_layers", np.int32([0]), group="part_0",
+                                      variable="vp"),
+                             "part_0/vp", "radial_layers"),
+    "poles_missing": ("model_lateral.nc", _renaming("rho_poles", "rho_p", **_P),
+                      "part_0/rho", "rho_poles is missing"),
+    "perturbation_kind": ("model_kinds.nc",
+                          _setting("perturbation_kind", "squared", **_RHO),
+                          "part_0/rho", "perturbation_kind"),
+    "between": ("model_stacked.nc", _setting("between", "cubic", **_BETWEEN),
+                "geometry/boundary_displacement", "between surfaces"),
+}
+
+
+def model_cases(directory: Path) -> list[Path]:
+    """The harmonic copy, the expectations, and the malformed copies, of
+    the model files already in `directory`."""
+    import netCDF4
+    out = []
+    harmonic = directory / "model_harmonic.nc"
+    shutil.copyfile(directory / "model_lateral.nc", harmonic)
+    with netCDF4.Dataset(harmonic, "a") as ds:
+        _setting("lateral_interpolation", "harmonic", **_RHO)(ds)
+    out.append(harmonic)
+    for path in sorted(directory.glob("model_*.nc")):
+        if path != harmonic:
+            out.append(_expect_model(path))
+    root = directory / "model_cases"
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir()
+    lines = []
+    for label, (base, edit, where, phrase) in _BAD_MODELS.items():
+        path = root / f"bad_{label}.nc"
+        shutil.copyfile(directory / base, path)
+        with netCDF4.Dataset(path, "a") as ds:
+            edit(ds)
+        out.append(path)
+        lines.append(f"{label}\t{where}\t{phrase}")
+    index = root / "bad.txt"
+    index.write_text("\n".join(lines) + "\n")
+    return out + [index]
+
+
+def gll(directory: Path) -> list[Path]:
+    """The Gauss-Lobatto-Legendre points of the module docstring."""
+    from planetmodel.mesh1d.gll import gll_points_weights
+    lines = [f"gll {n} " + " ".join(repr(float(x)) for x in gll_points_weights(n)[0])
+             for n in range(2, 14)]
+    path = directory / "gll.txt"
+    path.write_text("\n".join(lines) + "\n")
+    return [path]
+
+
 def write_fixtures(directory: str | Path, *, meshes: bool = True) -> list[Path]:
     """Every fixture into `directory`, each model file validated; the
     manifests, which build meshes, only where `meshes` is true."""
@@ -667,7 +939,8 @@ def write_fixtures(directory: str | Path, *, meshes: bool = True) -> list[Path]:
     models = model_files(directory)
     for path in models:
         validate_structure(path)
-    return (models + lateral_cases(directory) + radial_cases(directory)
+    return (models + model_cases(directory) + gll(directory)
+            + lateral_cases(directory) + radial_cases(directory)
             + constants(directory) + frames(directory) + json_documents(directory)
             + manifest_cases(directory) + decks(directory)
             + (manifests(directory) if meshes else []))

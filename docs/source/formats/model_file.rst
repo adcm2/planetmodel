@@ -47,6 +47,10 @@ Global attributes
      - the model's name, where it has one
    * - ``scale_length``, ``scale_mass``, ``scale_time``, ``scale_temperature``
      - what one stored unit is in SI
+   * - ``rtol``
+     - the geometry's tolerance, relative to the skeleton's span: radii
+       closer than it are one radius, a point within it of a layer lies on
+       the layer; ``1e-9`` where a file states none
    * - ``constant_<name>``
      - each constant of the model in its units (``constant_G``)
    * - ``constant_<name>_dimensions``

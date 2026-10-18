@@ -359,8 +359,17 @@ def corrupt(path, edit):
         edit(ds)
 
 
+def nudge_the_top(ds):
+    """The last element's top moved by 1e-7 of itself, beyond the tiling's
+    tolerance."""
+    eb = ds.groups["part_0"].variables["element_bounds"]
+    eb[-1, 1] = float(eb[-1, 1]) * (1.0 + 1e-7)
+
+
 @pytest.mark.parametrize("edit, message", [
     (lambda ds: ds.setncattr("schema", "planetmodel.model/0"), "schema is"),
+    (lambda ds: ds.setncattr("rtol", -1.0), "rtol is"),
+    (lambda ds: ds.setncattr("rtol", "loose"), "rtol is"),
     (lambda ds: ds.groups["part_0"].variables["rho"].setncattr(
         "radial_layers", np.int32([5])), "radial_layers"),
     (lambda ds: ds.groups["part_0"].variables["vp"].setncattr(
@@ -375,6 +384,7 @@ def corrupt(path, edit):
     (lambda ds: ds.groups["part_0"].variables["rho"].setncattr("rank", np.int32(1)),
      "trailing axes"),
     (lambda ds: ds.groups["part_0"].setncattr("grid_kind", "healpix"), "grid_kind"),
+    (nudge_the_top, "do not tile"),
 ])
 def test_a_malformed_file_is_refused_by_name(tmp_path, edit, message):
     path = write_model(tmp_path / "m.nc", three_d_model(), grid=gauss_legendre(6))
@@ -434,6 +444,17 @@ def test_a_harmonic_rule_is_stated_only_where_the_grid_reproduces_it(tmp_path):
         check_model_file(path, two)
 
 
+def test_a_displacement_states_its_radial_rule(tmp_path):
+    two = LayeredIsotropicElastic([0.0, 0.5, 1.0], rho=[10.0, 4.0], vp=[9.0, 7.0],
+                                  vs=[4.0, 3.0])
+    path = write_model(tmp_path / "f.nc", two.stretched(flattening(0.01)),
+                       grid=gauss_legendre(6))
+    corrupt(path, lambda ds: ds.groups["part_0"].variables["displacement"].delncattr(
+        "radial_interpolation"))
+    with pytest.raises(ValueError, match="displacement lacks the attributes"):
+        read_model_file(path)
+
+
 def test_what_the_file_cannot_hold_faithfully_is_refused(prem, tmp_path):
     two = LayeredIsotropicElastic([0.0, 0.5, 1.0], rho=[10.0, 4.0], vp=[9.0, 7.0],
                                   vs=[4.0, 3.0])
@@ -457,6 +478,23 @@ def test_what_the_file_cannot_hold_faithfully_is_refused(prem, tmp_path):
         write_model(good, two, grid=gauss_legendre(2), meta={"flag": True})
     assert good.read_bytes() == before                  # the good file survives
     assert sorted(p.name for p in tmp_path.iterdir()) == ["good.nc"]
+
+
+def test_the_geometry_s_tolerance_comes_back(tmp_path):
+    """A geometry of its own rtol is read back with it; a file that states
+    none, as one written before it was recorded, gives the default."""
+    from planetmodel import Geometry, Skeleton
+    from planetmodel.skeleton import DEFAULT_RTOL
+    m = LayeredIsotropicElastic([0.0, 0.5, 1.0], rho=[10.0, 4.0], vp=[9.0, 7.0],
+                                vs=[4.0, 3.0])
+    loose = m.with_geometry(Geometry(Skeleton([0.0, 0.5, 1.0]), rtol=1e-6))
+    path = write_model(tmp_path / "loose.nc", loose, grid=gauss_legendre(2))
+    check_model_file(path, loose)
+    assert read_model_file(path).rtol == 1e-6
+    assert read_model(path).geometry.rtol == 1e-6
+    with netCDF4.Dataset(path, "a") as ds:
+        ds.delncattr("rtol")
+    assert read_model(path).geometry.rtol == DEFAULT_RTOL
 
 
 def test_constants_come_back_with_their_dimensions(tmp_path):

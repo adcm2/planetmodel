@@ -48,7 +48,7 @@ option(PLANETMODEL_BUILD_TESTS
        "Build planetmodel's own tests" ${PROJECT_IS_TOP_LEVEL})
 option(PLANETMODEL_WARNINGS_AS_ERRORS
        "Treat warnings in planetmodel's own tests as errors" OFF)
-set(PLANETMODEL_INTERPOLATION_TAG v1.1.1 CACHE STRING
+set(PLANETMODEL_INTERPOLATION_TAG v1.1.2 CACHE STRING
     "The tag of da380/Interpolation to fetch")
 
 include(FetchContent)

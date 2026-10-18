@@ -10,6 +10,7 @@ definition of the format and the reference the C++ readers are held to;
 **Global attributes**: `schema` (`SCHEMA`, checked by every reader),
 `Conventions`, the model's `name`, `scale_length`, `scale_mass`,
 `scale_time` and `scale_temperature` (what one stored unit is in SI),
+`rtol` (the geometry's tolerance, the default where a file has none),
 `constant_<name>` for every constant in the model's units, and
 `meta_<key>` for the writer's `meta`.  **The skeleton**, at the root:
 dimensions `layer`, `interface` and `bound` (two), `layer_bounds(layer,
@@ -98,7 +99,7 @@ from .lateral import check_rule
 from .mesh1d.mesh import RADIAL_METHODS, Mesh1D, RadialMesh
 from .perturbation import KINDS as PERTURBATION_KINDS
 from .sampling import KINDS as GRID_KINDS
-from .skeleton import Skeleton
+from .skeleton import DEFAULT_RTOL, Skeleton
 from .units import BASE, Dimensions, Scales, scaled_unit
 from .vocabulary import VOCABULARY, Constant, FieldSpec
 
@@ -212,6 +213,9 @@ class ModelFile:
     _: KW_ONLY
     #: The constants whose dimensions the file states, as a model holds them.
     declared: Mapping[str, Constant] = MappingProxyType({})
+    #: The tolerance of the geometry the file was written from, relative
+    #: to the skeleton's span; the default where the file states none.
+    rtol: float = DEFAULT_RTOL
 
     def part_of(self, layer: int) -> FilePart:
         """The part holding `layer`."""
@@ -747,6 +751,7 @@ def _write_file(nc: ModuleType, path: Path, model: Model,
             root.setncattr("name", model.name)
         for base in ("length", "mass", "time", "temperature"):
             root.setncattr(f"scale_{base}", float(getattr(model.scales, base)))
+        root.setncattr("rtol", float(model.geometry.rtol))
         for cname, c in model.constants.items():
             root.setncattr(f"constant_{cname}", float(model.constant(cname)))
             root.setncattr(f"constant_{cname}_dimensions",
@@ -854,6 +859,11 @@ def _validate(ds: Any, path: object) -> None:
         key = f"scale_{base}"
         if key not in attrs or not float(ds.getncattr(key)) > 0.0:
             _fail(path, f"{key} is missing or not positive")
+    if "rtol" in attrs:
+        rtol = ds.getncattr("rtol")
+        if (isinstance(rtol, str) or np.size(rtol) != 1
+                or not 0.0 < float(rtol) < 1.0):
+            _fail(path, f"rtol is {rtol!r}, not a tolerance in (0, 1)")
     for name, dims in (("layer_bounds", ("layer", "bound")),
                        ("layer_name", ("layer",)),
                        ("interface_radius", ("interface",)),
@@ -918,8 +928,9 @@ def _validate_part(g: Any, where: str, layers: np.ndarray, bounds: np.ndarray,
     eb = np.asarray(g.variables["element_bounds"][:], dtype=float)
     span = bounds[layers[-1], 1] - bounds[layers[0], 0]
     if not np.allclose(eb[1:, 0], eb[:-1, 1], rtol=0, atol=1e-12 * span) or not (
-            np.isclose(eb[0, 0], bounds[layers[0], 0], atol=1e-12 * span)
-            and np.isclose(eb[-1, 1], bounds[layers[-1], 1], atol=1e-12 * span)):
+            np.isclose(eb[0, 0], bounds[layers[0], 0], rtol=0, atol=1e-12 * span)
+            and np.isclose(eb[-1, 1], bounds[layers[-1], 1], rtol=0,
+                           atol=1e-12 * span)):
         _fail(path, f"{where}: element_bounds do not tile its layers")
     lacks_pole = "pole" in g.dimensions
     own = {"radius", "element_layer", "element_bounds", "latitude", "longitude",
@@ -932,8 +943,9 @@ def _validate_part(g: Any, where: str, layers: np.ndarray, bounds: np.ndarray,
         if dims[:1] != ("node",):
             _fail(path, f"{where}/{name} does not run over the nodes")
         lateral = dims[1:3] == ("latitude", "longitude")
-        need = {"radial_interpolation", "rank", "weight", "voigt"}
-        if name != "displacement" and not need <= a:
+        need = ({"radial_interpolation"} if name == "displacement"
+                else {"radial_interpolation", "rank", "weight", "voigt"})
+        if not need <= a:
             _fail(path, f"{where}/{name} lacks the attributes "
                         f"{sorted(need - a)}")
         if name == "displacement":
@@ -1058,7 +1070,8 @@ def read_model_file(path: str | os.PathLike[str]) -> ModelFile:
                      meta=MappingProxyType(meta), skeleton=skeleton,
                      layer_names=layer_names, interface_names=interface_names,
                      parts=tuple(parts), geometry=geometry,
-                     declared=MappingProxyType(declared))
+                     declared=MappingProxyType(declared),
+                     rtol=float(attrs.get("rtol", DEFAULT_RTOL)))
 
 
 def _character(attrs: Mapping[str, Any]) -> Character:
@@ -1202,7 +1215,7 @@ def file_geometry(data: ModelFile, *, interpolation: Interpolation | None = None
                                           interpolation, character=VECTOR))
         mapping = GriddedDisplacement(sk, fields)
     return Geometry(sk, mapping=mapping, layer_names=list(data.layer_names),
-                    interface_names=list(data.interface_names))
+                    interface_names=list(data.interface_names), rtol=data.rtol)
 
 
 def _specs(data: ModelFile) -> dict[str, FieldSpec]:

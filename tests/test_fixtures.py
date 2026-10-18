@@ -68,3 +68,25 @@ def test_the_python_refuses_the_manifests_the_cpp_refuses(tmp_path):
     for label in bad:
         with pytest.raises(ValueError):
             manifest.read(root / f"bad_{label}.json")
+
+
+def test_the_python_refuses_the_model_files_the_cpp_refuses(tmp_path):
+    """Both readers agree on what is malformed: every bad copy is refused
+    by the Python's read_model_file, which validates the structure and
+    checks the nodes, and every expectation file is written."""
+    from planetmodel.modelfile import read_model_file, validate_structure
+    spec = importlib.util.spec_from_file_location("make_fixtures", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.write_fixtures(tmp_path, meshes=False)
+    bad = [line.split("\t")[0] for line in
+           (tmp_path / "model_cases" / "bad.txt").read_text().splitlines()]
+    assert len(bad) > 15
+    for label in bad:
+        with pytest.raises(ValueError):
+            read_model_file(tmp_path / "model_cases" / f"bad_{label}.nc")
+    validate_structure(tmp_path / "model_harmonic.nc")
+    expected = {p.stem for p in tmp_path.glob("model_*.expect")}
+    assert {"model_kinds", "model_tensors", "model_stacked",
+            "model_flattened"} <= expected
+    assert "model_harmonic" not in expected

@@ -39,6 +39,7 @@
 #include <format>
 #include <memory>
 #include <numbers>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -49,6 +50,7 @@
 #include <Interpolation/BicubicSpline.hpp>
 #include <Interpolation/Bilinear.hpp>
 #include <Interpolation/CubicSpline.hpp>
+#include <Interpolation/Lagrange.hpp>
 
 #include "planetmodel/error.hpp"
 #include "planetmodel/frames.hpp"
@@ -67,6 +69,16 @@ enum class LateralRule {
   Linear, /**< The bilinear interpolant of the padded grid. */
   Cubic   /**< The bicubic spline, clamped at the poles, periodic in longitude. */
 };
+
+/** @brief The radial rules a model file may state. */
+inline constexpr auto RADIAL_RULES = std::array<std::string_view, 2>{"polynomial", "linear"};
+
+/**
+ * @brief The lateral rules a model file may state; `harmonic` is the
+ * Python's alone, and `LateralRuleNamed` refuses it.
+ */
+inline constexpr auto LATERAL_RULES =
+    std::array<std::string_view, 3>{"linear", "cubic", "harmonic"};
 
 /**
  * @brief The radial rule a file names.
@@ -213,14 +225,14 @@ class RadialLayout {
         throw Error("RadialLayout", std::format("element {}", e),
                     "does not start where the element below ends");
       }
-      for (auto k = std::size_t{0}; k < ngll_; ++k) {
-        auto d = 1.0;
-        for (auto m = std::size_t{0}; m < ngll_; ++m) {
-          if (m != k) d *= nodes[k] - nodes[m];
-        }
-        denominators_.push_back(d);
-      }
     }
+    auto bases = std::vector<Basis>{};
+    bases.reserve(NElements());
+    for (auto e = std::size_t{0}; e < NElements(); ++e) {
+      const auto nodes = Nodes(e);
+      bases.emplace_back(std::ranges::owning_view(std::vector<double>(nodes.begin(), nodes.end())));
+    }
+    bases_ = std::make_shared<const std::vector<Basis>>(std::move(bases));
   }
 
   /** @brief The number of elements. */
@@ -277,54 +289,46 @@ class RadialLayout {
    * @param r The radius, taken as the nearer end of the element where
    *        outside it.
    * @param rule The radial rule.
-   * @param w The weights, `Ngll()` of them.
-   * @param dw Their derivatives in r, `Ngll()` of them.
+   * @param w The weights, `Ngll()` of them, or none where they are not
+   *        wanted.
+   * @param dw Their derivatives in r, `Ngll()` of them, or none where they
+   *        are not wanted.
    */
   void Weights(std::size_t e, double r, RadialRule rule, std::span<double> w,
                std::span<double> dw) const {
     const auto nodes = Nodes(e);
     r = std::clamp(r, nodes.front(), nodes.back());
-    std::ranges::fill(w, 0.0);
-    std::ranges::fill(dw, 0.0);
     if (rule == RadialRule::Polynomial) {
-      // The products of (r - r_m) over the nodes below and above each k,
-      // with their derivatives, so that no difference r - r_m divides: the
-      // weights stay accurate however near r lies to a node.
-      const auto n = ngll_;
-      auto below = std::vector<double>(n + 1, 1.0);
-      auto below_d = std::vector<double>(n + 1, 0.0);
-      auto above = std::vector<double>(n + 1, 1.0);
-      auto above_d = std::vector<double>(n + 1, 0.0);
-      for (auto m = std::size_t{0}; m < n; ++m) {
-        below[m + 1] = below[m] * (r - nodes[m]);
-        below_d[m + 1] = below_d[m] * (r - nodes[m]) + below[m];
-      }
-      for (auto m = n; m-- > 0;) {
-        above[m] = above[m + 1] * (r - nodes[m]);
-        above_d[m] = above_d[m + 1] * (r - nodes[m]) + above[m + 1];
-      }
-      for (auto k = std::size_t{0}; k < n; ++k) {
-        const auto d = denominators_[e * n + k];
-        w[k] = below[k] * above[k + 1] / d;
-        dw[k] = (below_d[k] * above[k + 1] + below[k] * above_d[k + 1]) / d;
-      }
+      // the element's cardinal polynomials and their slopes
+      const auto& basis = (*bases_)[e];
+      for (auto k = std::size_t{0}; k < w.size(); ++k) w[k] = basis.Evaluate<0>(k, r);
+      for (auto k = std::size_t{0}; k < dw.size(); ++k) dw[k] = basis.Evaluate<1>(k, r);
       return;
     }
+    std::ranges::fill(w, 0.0);
+    std::ranges::fill(dw, 0.0);
     auto k = std::size_t{0};
     while (k + 2 < ngll_ && nodes[k + 1] <= r) ++k;
     const auto h = nodes[k + 1] - nodes[k];
-    w[k] = (nodes[k + 1] - r) / h;
-    w[k + 1] = (r - nodes[k]) / h;
-    dw[k] = -1.0 / h;
-    dw[k + 1] = 1.0 / h;
+    if (!w.empty()) {
+      w[k] = (nodes[k + 1] - r) / h;
+      w[k + 1] = (r - nodes[k]) / h;
+    }
+    if (!dw.empty()) {
+      dw[k] = -1.0 / h;
+      dw[k + 1] = 1.0 / h;
+    }
   }
 
  private:
+  /// The cardinal basis on one element's nodes, which it owns.
+  using Basis = Interpolation::LagrangeBasis<std::ranges::owning_view<std::vector<double>>>;
+
   std::vector<double> radii_;
   std::size_t ngll_;
   double tolerance_;
-  /// Each node's product of (r_k - r_m) over the element's other nodes.
-  std::vector<double> denominators_;
+  /// Each element's basis, shared by the copies of the layout.
+  std::shared_ptr<const std::vector<Basis>> bases_;
 };
 
 /**
@@ -354,29 +358,29 @@ class RadialInterpolant {
    * @param r The radius.
    * @throws planetmodel::Error if `r` lies outside the layout.
    */
-  [[nodiscard]] double Value(double r) const { return Read(r).first; }
+  [[nodiscard]] double Value(double r) const { return Read(r, 0); }
 
   /**
    * @brief The radial derivative at a radius.
    * @param r The radius.
    * @throws planetmodel::Error if `r` lies outside the layout.
    */
-  [[nodiscard]] double Derivative(double r) const { return Read(r).second; }
+  [[nodiscard]] double Derivative(double r) const { return Read(r, 1); }
 
  private:
-  std::pair<double, double> Read(double r) const {
+  /// The value (`derivative` 0) or the radial derivative (1) at `r`.
+  double Read(double r, int derivative) const {
     const auto e = layout_.ElementOf(r);
     const auto n = layout_.Ngll();
     auto w = std::vector<double>(n);
-    auto dw = std::vector<double>(n);
-    layout_.Weights(e, r, rule_, w, dw);
-    auto value = 0.0;
-    auto derivative = 0.0;
-    for (auto k = std::size_t{0}; k < n; ++k) {
-      value += w[k] * values_[e * n + k];
-      derivative += dw[k] * values_[e * n + k];
+    if (derivative == 0) {
+      layout_.Weights(e, r, rule_, w, {});
+    } else {
+      layout_.Weights(e, r, rule_, {}, w);
     }
-    return {value, derivative};
+    auto out = 0.0;
+    for (auto k = std::size_t{0}; k < n; ++k) out += w[k] * values_[e * n + k];
+    return out;
   }
 
   RadialLayout layout_;

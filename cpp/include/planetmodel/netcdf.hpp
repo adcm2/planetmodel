@@ -22,10 +22,12 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "planetmodel/error.hpp"
@@ -220,6 +222,149 @@ inline constexpr auto GLOBAL = NC_GLOBAL;
   }
   auto out = std::vector<double>(length);
   Check(nc_get_att_double(group, var, key.c_str(), out.data()), source, name);
+  return out;
+}
+
+/** @brief An attribute's value: text, or numbers. */
+using Attribute = std::variant<std::string, std::vector<double>>;
+
+/** @brief Attributes by name. */
+using Attributes = std::map<std::string, Attribute>;
+
+/**
+ * @brief Every attribute of a variable, or of a group with `GLOBAL`.
+ * @param group The group, or the file's id.
+ * @param var The variable's id, or `GLOBAL`.
+ * @param source The file, as an error names it.
+ * @throws planetmodel::Error if netCDF-C cannot read one.
+ */
+[[nodiscard]] inline Attributes ReadAttributes(int group, int var, const std::string& source) {
+  auto count = 0;
+  Check(var == GLOBAL ? nc_inq_natts(group, &count) : nc_inq_varnatts(group, var, &count),
+        source, "");
+  auto out = Attributes{};
+  for (auto i = 0; i < count; ++i) {
+    auto name = std::string(NC_MAX_NAME + 1, '\0');
+    Check(nc_inq_attname(group, var, i, name.data()), source, "");
+    name.resize(std::char_traits<char>::length(name.c_str()));
+    auto type = nc_type{};
+    auto length = std::size_t{0};
+    Check(nc_inq_att(group, var, name.c_str(), &type, &length), source, name);
+    if (type == NC_CHAR || type == NC_STRING) {
+      out.emplace(name, *TextAttribute(group, var, name, source));
+    } else {
+      out.emplace(name, *NumberAttribute(group, var, name, source));
+    }
+  }
+  return out;
+}
+
+/**
+ * @brief The names of a group's variables, in the file's order.
+ * @param group The group, or the file's id.
+ * @param source The file, as an error names it.
+ */
+[[nodiscard]] inline std::vector<std::string> VariableNames(int group, const std::string& source) {
+  auto count = 0;
+  Check(nc_inq_nvars(group, &count), source, "");
+  auto ids = std::vector<int>(static_cast<std::size_t>(count));
+  Check(nc_inq_varids(group, &count, ids.data()), source, "");
+  auto out = std::vector<std::string>{};
+  for (const auto id : ids) {
+    auto name = std::string(NC_MAX_NAME + 1, '\0');
+    Check(nc_inq_varname(group, id, name.data()), source, "");
+    name.resize(std::char_traits<char>::length(name.c_str()));
+    out.push_back(std::move(name));
+  }
+  return out;
+}
+
+/**
+ * @brief The names of a variable's dimensions, in order.
+ * @param group The group, or the file's id.
+ * @param name The variable.
+ * @param source The file, as an error names it.
+ * @throws planetmodel::Error if there is no such variable.
+ */
+[[nodiscard]] inline std::vector<std::string> DimensionNames(int group, std::string_view name,
+                                                            const std::string& source) {
+  const auto var = Variable(group, name, source);
+  auto ndims = 0;
+  Check(nc_inq_varndims(group, var, &ndims), source, name);
+  auto dims = std::vector<int>(static_cast<std::size_t>(ndims));
+  Check(nc_inq_vardimid(group, var, dims.data()), source, name);
+  auto out = std::vector<std::string>{};
+  for (const auto dim : dims) {
+    auto text = std::string(NC_MAX_NAME + 1, '\0');
+    Check(nc_inq_dimname(group, dim, text.data()), source, name);
+    text.resize(std::char_traits<char>::length(text.c_str()));
+    out.push_back(std::move(text));
+  }
+  return out;
+}
+
+/**
+ * @brief The length of a group's dimension, or empty where it has none.
+ * @param group The group, or the file's id.
+ * @param name The dimension.
+ * @param source The file, as an error names it.
+ */
+[[nodiscard]] inline std::optional<std::size_t> DimensionLength(int group, std::string_view name,
+                                                               const std::string& source) {
+  auto id = 0;
+  if (nc_inq_dimid(group, std::string{name}.c_str(), &id) != NC_NOERR) return std::nullopt;
+  auto length = std::size_t{0};
+  Check(nc_inq_dimlen(group, id, &length), source, name);
+  return length;
+}
+
+/**
+ * @brief The names of a group's subgroups.
+ * @param group The group, or the file's id.
+ * @param source The file, as an error names it.
+ */
+[[nodiscard]] inline std::vector<std::string> GroupNames(int group, const std::string& source) {
+  auto count = 0;
+  Check(nc_inq_grps(group, &count, nullptr), source, "");
+  auto ids = std::vector<int>(static_cast<std::size_t>(count));
+  if (count > 0) Check(nc_inq_grps(group, &count, ids.data()), source, "");
+  auto out = std::vector<std::string>{};
+  for (const auto id : ids) {
+    auto name = std::string(NC_MAX_NAME + 1, '\0');
+    Check(nc_inq_grpname(id, name.data()), source, "");
+    name.resize(std::char_traits<char>::length(name.c_str()));
+    out.push_back(std::move(name));
+  }
+  return out;
+}
+
+/**
+ * @brief A string variable's values, of one dimension.
+ * @param group The group, or the file's id.
+ * @param name The variable.
+ * @param source The file, as an error names it.
+ * @throws planetmodel::Error if there is no such variable or it is not a
+ *         string variable of one dimension.
+ */
+[[nodiscard]] inline std::vector<std::string> ReadStrings(int group, std::string_view name,
+                                                         const std::string& source) {
+  const auto var = Variable(group, name, source);
+  auto type = nc_type{};
+  auto ndims = 0;
+  Check(nc_inq_vartype(group, var, &type), source, name);
+  Check(nc_inq_varndims(group, var, &ndims), source, name);
+  if (type != NC_STRING || ndims != 1) {
+    throw Error(source, name, "is not a string variable of one dimension");
+  }
+  auto dim = 0;
+  Check(nc_inq_vardimid(group, var, &dim), source, name);
+  auto length = std::size_t{0};
+  Check(nc_inq_dimlen(group, dim, &length), source, name);
+  auto raw = std::vector<char*>(length, nullptr);
+  if (length > 0) Check(nc_get_var_string(group, var, raw.data()), source, name);
+  auto out = std::vector<std::string>{};
+  for (auto* text : raw) out.emplace_back(text ? text : "");
+  if (length > 0) nc_free_string(length, raw.data());
   return out;
 }
 

@@ -966,6 +966,9 @@ def check_model_file(path: str | os.PathLike[str], model: Model, *,
         "the file's interface names are not the model's")
     assert data.scales == model.scales, (
         f"the file is in {data.scales!r}, the model in {model.scales!r}")
+    assert data.rtol == model.geometry.rtol, (
+        f"the file states rtol {data.rtol!r}, the model's geometry has "
+        f"{model.geometry.rtol!r}")
     back = read_model(path)
 
     def stored_against(values: np.ndarray, want: np.ndarray, what: str) -> None:
