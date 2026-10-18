@@ -147,8 +147,9 @@ def write_vtk(path: str | os.PathLike[str], model: Model, *,
     """Write a model as VTK files for ParaView, by the rules of the module
     docstring, and return the multiblock file's path.
 
-    `path` names the `.vtm` (the suffix added where it lacks it), the
-    layers' `.vts` files going into a directory of its stem beside it;
+    `path` names the `.vtm` (the suffix added where it lacks it, its
+    directory made where it is missing), the layers' `.vts` files going
+    into a directory of its stem beside it;
     `grid` the angular grid, equiangular at three degrees by default;
     `fields` the names to write, every name a layer holds by default; `n`
     the points per layer; `physical` the points' positions; `departures`
@@ -174,6 +175,7 @@ def write_vtk(path: str | os.PathLike[str], model: Model, *,
     if path.suffix != ".vtm":
         path = path.with_name(path.name + ".vtm")
     stem, parent = path.stem, path.parent
+    parent.mkdir(parents=True, exist_ok=True)
     partial = Path(tempfile.mkdtemp(prefix=f".{stem}.", dir=parent))
     try:
         (partial / stem).mkdir()

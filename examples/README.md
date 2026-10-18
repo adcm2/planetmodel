@@ -19,7 +19,8 @@ tutorial keeps go under `figures/`, which is gitignored.
 | `09_fields_for_mfem.py` | a model's fields exported beside its mesh and read back by MFEM (needs the `meshing` and `mfem` extras) |
 | `10_random_fields.py` | Matern random fields of radius, on the layers of PREM as a density perturbation, and on a shell as a field with a map and a slice, a figure |
 | `11_models_from_decks.py` | PREM's mineos deck as a model against the polynomial PREM, the shipped GIA deck format and a model type for it with a viscosity column, a figure |
-| `12_a_laterally_varying_model.py` | PREM with a harmonic perturbation of the shear velocity and a log perturbation of a viscosity, written to a model file, read back and compared, and drawn as a map at one depth (needs the `netcdf` extra), a figure |
+| `12_a_laterally_varying_model.py` | PREM with a harmonic perturbation of the shear velocity and a log perturbation of a viscosity, written to a model file, read back and compared, and drawn as maps at one depth (needs the `netcdf` and `maps` extras), a figure |
+| `13_pictures.py` | pictures of a perturbed PREM: slices and maps at one depth, a side taken at an interface, cross-sections as wedges and a disc, the body drawn flattened, profiles, spectra, a comparison of two models by degree and depth, and files for ParaView with first steps in it (needs the `maps` and `harmonics` extras), figures |
 
 ```
 poetry run python examples/tutorials/01_skeleton_and_geometry.py

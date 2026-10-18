@@ -359,7 +359,7 @@ def test_a_field_correlates_to_one_with_itself_and_to_zero_with_an_orthogonal_on
     pa, pb = cr.first[0].power, cr.second[0].power
     want = (0.6 ** 2 * 0.5 * -2.0) / np.sqrt(pa[1:].sum() * pb[1:].sum()) / (4 * np.pi)
     assert np.isclose(cr.total[0], want)
-    assert cr.label == "correlation of vs [m s-1] with vs [m s-1]"
+    assert cr.label == "correlation of vs"
     # two fields of one model
     both = slices.correlation(ma, "vs", ma, other_fields="vs", lmax=3, radii=[0.8])
     assert np.allclose(both.by_degree[0, 2:], 1.0)

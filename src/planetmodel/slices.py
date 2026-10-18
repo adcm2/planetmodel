@@ -308,8 +308,11 @@ class Correlation:
 
     @property
     def label(self) -> str:
-        """What is correlated with what."""
-        return f"correlation of {self.first[0].label} with {self.second[0].label}"
+        """What is correlated with what, by name: "correlation of vs", or
+        "correlation of vs with rho"."""
+        a = self.first[0].shown.name or "field"
+        b = self.second[0].shown.name or "field"
+        return f"correlation of {a}" if a == b else f"correlation of {a} with {b}"
 
 
 # -- what is evaluated --------------------------------------------------------------

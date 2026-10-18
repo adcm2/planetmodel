@@ -12,16 +12,16 @@
 # adjustment, as the logarithm of its ratio to a radial profile.
 #
 # This tutorial builds such a model from PREM, writes it to a *model
-# file*, reads it back, compares the two, and draws a map of the model
+# file*, reads it back, compares the two, and draws maps of the model
 # at one depth. A model file is one netCDF file holding a model's
 # skeleton, its fields at the nodes of a radial layout and an angular
 # grid, and its mapping. Python users read it with the library, and the
 # C++ codes that solve on a model read the same file. Its format is
 # described on the "model file" page of the documentation.
 #
-# The tutorial needs the `netcdf` extra (netCDF4) for the file and the
-# `plot` extra (matplotlib) for the figure, which is written to
-# `examples/figures/`.
+# The tutorial needs the `netcdf` extra (netCDF4) for the file, and the
+# `plot` and `maps` extras (matplotlib and cartopy) for the figure, which
+# is written to `examples/figures/`.
 
 # %%
 import tempfile
@@ -191,36 +191,29 @@ assert isinstance(f, PerturbedField)
 # ## A map at one depth
 #
 # The map shows the model read back from the file, 2000 km below the
-# surface, on a grid of latitudes and longitudes in degrees: the shear
-# velocity as a percentage departure from the reference, and the
-# viscosity on a logarithmic scale. The map is drawn with matplotlib
-# alone, latitude against longitude, with no projection or coastlines.
+# surface: the shear velocity as a percentage departure from its
+# reference, and the viscosity as the logarithm, base 10, of its ratio
+# to its reference. `slices.sphere` evaluates each on a sphere at that
+# depth, on a grid of one degree, and `plotting.sphere_map` draws the
+# result on a cartopy map; tutorial 13 shows these and the other
+# pictures the library draws.
 
 # %%
+import cartopy.crs as ccrs  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 
-depth = 2000e3
-radius = 6371e3 - depth
-lat = np.linspace(-89.5, 89.5, 180)
-lon = np.linspace(0.5, 359.5, 360)
-theta = np.deg2rad(90.0 - lat)[:, None]
-phi = np.deg2rad(lon)[None, :]
-layer = back.layer("lower_mantle")
-dvs = 100.0 * (layer["vsv"](radius, theta, phi) / layer["vsv"].reference(radius) - 1.0)
-log_eta = np.log10(layer["viscosity"](radius, theta, phi))
+from planetmodel import slices  # noqa: E402
+from planetmodel.plotting import sphere_map  # noqa: E402
 
-fig, axes = plt.subplots(2, 1, figsize=(8, 7.5))
-for ax, values, label, cmap in ((axes[0], dvs, "vsv departure [%]", "RdBu"),
-                                (axes[1], log_eta, "log10 viscosity [Pa s]",
-                                 "viridis")):
-    vmax = np.abs(values).max() if cmap == "RdBu" else None
-    im = ax.pcolormesh(lon, lat, values, shading="auto", cmap=cmap,
-                       vmin=-vmax if vmax else None, vmax=vmax)
-    ax.set_xlabel("longitude [degrees]")
-    ax.set_ylabel("latitude [degrees]")
-    ax.set_aspect("equal")
-    fig.colorbar(im, ax=ax, label=label, shrink=0.8)
-axes[0].set_title(f"the model read back, {depth / 1e3:.0f} km deep")
+depth = 2000e3
+dvs = slices.sphere(back, "vsv", depth=depth, relative_to="reference")
+deta = slices.sphere(back, "viscosity", depth=depth, relative_to="reference",
+                     departure="log10")
+fig = plt.figure(figsize=(8, 8))
+for k, mapped in enumerate((dvs, deta)):
+    ax = fig.add_subplot(2, 1, k + 1, projection=ccrs.Robinson())
+    sphere_map(ax, mapped, colorbar=True)
+fig.axes[0].set_title(f"the model read back, {depth / 1e3:.0f} km deep")
 fig.tight_layout()
 out = FIGURES / "tutorial_12_a_laterally_varying_model.png"
 fig.savefig(out, dpi=100)
