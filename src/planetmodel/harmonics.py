@@ -24,13 +24,18 @@ out as a vector: by degree, then the cosine harmonics of orders
 Two routes.  `real_harmonics` and `synthesise` evaluate the basis at
 arbitrary points through scipy, vectorised over the points: the
 definition, and the oracle everything else is held to.  `synthesise_grid`
-and `analyse_grid` go between coefficients and values on a
-Gauss-Legendre `AngularGrid` through pyshtools, with the ducc0 backend
-selected where it is installed: fast transforms, exact for a field
-band-limited to the grid's degree, needing the `harmonics` extra.  The
-grid is `gauss_legendre(lmax)` of `planetmodel.sampling`, whose nodes
-are pyshtools' GLQ nodes and whose 2 lmax + 1 longitudes are the count
-pyshtools takes.
+and `analyse_grid` go between coefficients and values on a grid of a
+shipped kind -- Gauss-Legendre, Driscoll-Healy, or equiangular with or
+without the poles, from `planetmodel.sampling` -- through ducc0's
+transforms: fast, exact for a field band-limited to the grid's band,
+and needing the `harmonics` extra.  The longitudes may start anywhere
+and number anything from 2 lmax + 1 up, provided they are equally
+spaced.  ducc0 holds complex coefficients a_lm for m >= 0 in healpy's
+order, with the Condon-Shortley phase; the real ones here are
+
+    a_l0 = c[0, l, 0],    a_lm = (-1)^m (c[0, l, m] - i c[1, l, m]) / sqrt 2,
+
+and that is the whole of the conversion.
 """
 from __future__ import annotations
 
@@ -105,79 +110,122 @@ def packing(lmax: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return np.array(s), np.array(l), np.array(m)
 
 
-# -- grids, through pyshtools ---------------------------------------------------
+# -- grids, through ducc0 ------------------------------------------------------
 
-def _pyshtools() -> ModuleType:
-    """pyshtools with the ducc0 backend selected where present; imported
-    here and nowhere else in planetmodel."""
+def _sht() -> ModuleType:
+    """ducc0's spherical-harmonic transforms; ducc0 is imported here and
+    nowhere else in planetmodel."""
     try:
-        import pyshtools
+        import ducc0
     except ImportError as exc:  # pragma: no cover - exercised by the extra
         raise ImportError(
             "the grid synthesis and analysis of planetmodel.harmonics need "
-            "pyshtools.  Install it with:\n"
+            "ducc0.  Install it with:\n"
             "    pip install 'planetmodel[harmonics]'      "
             "(or: poetry install --extras harmonics)"
         ) from exc
-    if pyshtools.backends.preferred_backend() != "ducc":
-        try:
-            import ducc0  # noqa: F401
-            pyshtools.backends.select_preferred_backend("ducc")
-        except ImportError:  # pragma: no cover - the shtools backend serves
-            pass
-    return pyshtools
+    return ducc0.sht
 
 
-def _glq(grid: AngularGrid) -> int:
-    """The band of a Gauss-Legendre grid pyshtools can transform on, or a
-    ValueError naming what is wrong."""
-    if grid.kind != "gauss_legendre" or grid.lmax is None:
+def _rings(grid: AngularGrid) -> str:
+    """ducc0's name for the grid's ring layout, once its colatitudes are
+    checked against its kind's own, or a ValueError naming what is wrong.
+    An equiangular grid is Clenshaw-Curtis with its poles and Fejer's
+    first rule without."""
+    from .sampling import driscoll_healy, equiangular, gauss_legendre
+
+    kinds = ("gauss_legendre", "driscoll_healy", "equiangular")
+    if grid.kind not in kinds or grid.lmax is None:
         raise ValueError(
-            f"grid synthesis and analysis take a Gauss-Legendre grid with a "
-            f"band, gauss_legendre(lmax); got a {grid.kind!r} grid")
-    lmax = int(grid.lmax)
-    if grid.nphi != 2 * lmax + 1:
+            f"grid synthesis and analysis take a grid of a shipped kind with a "
+            f"band, one of {kinds}; got a {grid.kind!r} grid")
+    nt = grid.ntheta
+    if grid.kind == "gauss_legendre":
+        name, own = "GL", gauss_legendre(nt - 1)
+    elif grid.kind == "driscoll_healy":
+        name, own = "DH", driscoll_healy(max(nt // 2 - 1, 0))
+    elif grid.pole_nodes[0] and nt >= 2:
+        name, own = "CC", equiangular(nt, grid.nphi, poles=True)
+    else:
+        name, own = "F1", equiangular(nt, grid.nphi)
+    if own.ntheta != nt or not np.allclose(grid.colatitudes, own.colatitudes,
+                                           rtol=0.0, atol=1e-12):
         raise ValueError(
-            f"a Gauss-Legendre grid of band {lmax} is transformed with "
-            f"2 lmax + 1 = {2 * lmax + 1} longitudes; this grid has {grid.nphi}: "
-            f"build it as gauss_legendre({lmax})")
-    x = np.polynomial.legendre.leggauss(lmax + 1)[0]
-    if not np.allclose(np.cos(grid.colatitudes), np.sort(x)[::-1], atol=1e-12):
+            f"the {nt} colatitudes are not those of a {grid.kind!r} grid "
+            f"({name} rings in ducc0's terms)")
+    if grid.lmax > own.lmax:
         raise ValueError(
-            f"the colatitudes are not the {lmax + 1} Gauss-Legendre nodes of "
-            f"band {lmax}, north to south")
-    return lmax
+            f"a {grid.kind!r} grid of {nt} colatitudes resolves degrees up to "
+            f"{own.lmax}, not the {grid.lmax} it claims")
+    if grid.nphi < 2 * grid.lmax + 1:
+        raise ValueError(
+            f"a grid of band {grid.lmax} needs at least 2 lmax + 1 = "
+            f"{2 * grid.lmax + 1} longitudes to resolve its orders; this grid "
+            f"has {grid.nphi}")
+    if not np.allclose(np.diff(grid.longitudes), 2.0 * np.pi / grid.nphi,
+                       rtol=0.0, atol=1e-12):
+        raise ValueError("the longitudes are not equally spaced around the circle")
+    return name
+
+
+def _healpy(lmax: int) -> tuple[np.ndarray, np.ndarray]:
+    """(l, m) of each complex coefficient in healpy's order: m outermost,
+    then l = m ... lmax."""
+    m = np.concatenate([np.full(lmax + 1 - k, k) for k in range(lmax + 1)])
+    l = np.concatenate([np.arange(k, lmax + 1) for k in range(lmax + 1)])
+    return l, m
+
+
+def _to_complex(c: np.ndarray) -> np.ndarray:
+    """ducc0's coefficients of real ones of shape (2, L + 1, L + 1, K):
+    shape (K, 1, nalm), one row per trailing index."""
+    l, m = _healpy(c.shape[1] - 1)
+    scale = np.where(m == 0, 1.0, (-1.0) ** m / np.sqrt(2.0))[:, None]
+    a = scale * (c[0, l, m] - 1j * np.where(m == 0, 0.0, 1.0)[:, None] * c[1, l, m])
+    return np.ascontiguousarray(a.T[:, None, :])
+
+
+def _to_real(a: np.ndarray, lmax: int) -> np.ndarray:
+    """Real coefficients (2, lmax + 1, lmax + 1, K) of ducc0's (K, nalm)."""
+    l, m = _healpy(lmax)
+    scale = np.where(m == 0, 1.0, (-1.0) ** m * np.sqrt(2.0))[:, None]
+    c = np.zeros((2, lmax + 1, lmax + 1, a.shape[0]))
+    c[0, l, m] = scale * a.T.real
+    c[1, l, m] = np.where(m == 0, 0.0, -1.0)[:, None] * scale * a.T.imag
+    return c
 
 
 def synthesise_grid(coeffs: ArrayLike, grid: AngularGrid) -> np.ndarray:
-    """Values on a Gauss-Legendre grid from coefficients, through pyshtools.
+    """Values on a grid of a shipped kind from coefficients, through ducc0.
 
     `coeffs` has shape (2, l + 1, l + 1) or that followed by any extra
     axes, a radial axis say, with l at most the grid's band; the result
     has the extra axes first and then (ntheta, nphi), the layout of a
     sample.  Exact for a field band-limited to the grid's degree.
     """
-    sh = _pyshtools()
-    lmax = _glq(grid)
+    sht = _sht()
+    rings = _rings(grid)
     c = np.asarray(coeffs, dtype=float)
     if c.ndim < 3 or c.shape[0] != 2 or c.shape[1] != c.shape[2]:
         raise ValueError("coefficients must have shape (2, l + 1, l + 1, ...)")
-    if c.shape[1] - 1 > lmax:
+    L = c.shape[1] - 1
+    if L > grid.lmax:
         raise ValueError(
-            f"coefficients to degree {c.shape[1] - 1} on a grid of band {lmax}: "
-            "the grid cannot hold them; use gauss_legendre(l) with l at least "
-            f"{c.shape[1] - 1}")
+            f"coefficients to degree {L} on a grid of band {grid.lmax}: the grid "
+            f"cannot hold them; use a grid of band at least {L}")
     extra = c.shape[3:]
-    flat = c.reshape(c.shape[:3] + (-1,))
-    out = np.empty((flat.shape[3], grid.ntheta, grid.nphi))
-    for k in range(flat.shape[3]):
-        out[k] = sh.expand.MakeGridGLQ(flat[..., k], lmax=lmax, norm=4, csphase=1)
+    alm = _to_complex(c.reshape(c.shape[:3] + (-1,)))
+    out = np.empty((alm.shape[0], grid.ntheta, grid.nphi))
+    for k in range(alm.shape[0]):
+        out[k] = sht.synthesis_2d(alm=alm[k], spin=0, lmax=L, geometry=rings,
+                                  ntheta=grid.ntheta, nphi=grid.nphi,
+                                  phi0=float(grid.longitudes[0]))[0]
     return out.reshape(extra + (grid.ntheta, grid.nphi))
 
 
 def analyse_grid(values: ArrayLike, grid: AngularGrid, *,
                  lmax: int | None = None) -> np.ndarray:
-    """Coefficients from values on a Gauss-Legendre grid, through pyshtools.
+    """Coefficients from values on a grid of a shipped kind, through ducc0.
 
     `values` has shape (..., ntheta, nphi), any extra axes first; the
     result is (2, lmax + 1, lmax + 1) followed by the extra axes, with
@@ -185,8 +233,9 @@ def analyse_grid(values: ArrayLike, grid: AngularGrid, *,
     The inverse of `synthesise_grid` for a field band-limited to the
     grid; a projection otherwise.
     """
-    sh = _pyshtools()
-    band = _glq(grid)
+    sht = _sht()
+    rings = _rings(grid)
+    band = grid.lmax
     lmax = band if lmax is None else int(lmax)
     if not 0 <= lmax <= band:
         raise ValueError(f"lmax must lie in 0..{band}, got {lmax}")
@@ -196,10 +245,10 @@ def analyse_grid(values: ArrayLike, grid: AngularGrid, *,
             f"values must have trailing shape {(grid.ntheta, grid.nphi)}, "
             f"got {v.shape}")
     extra = v.shape[:-2]
-    flat = v.reshape((-1,) + v.shape[-2:])
-    zero, w = sh.expand.SHGLQ(band)
-    out = np.empty((flat.shape[0], 2, lmax + 1, lmax + 1))
+    flat = v.reshape((-1, 1) + v.shape[-2:])
+    a = np.empty((flat.shape[0], (lmax + 1) * (lmax + 2) // 2), dtype=complex)
     for k in range(flat.shape[0]):
-        out[k] = sh.expand.SHExpandGLQ(flat[k], w, zero, norm=4, csphase=1,
-                                       lmax_calc=lmax)
-    return np.moveaxis(out, 0, -1).reshape((2, lmax + 1, lmax + 1) + extra)
+        a[k] = sht.analysis_2d(map=np.ascontiguousarray(flat[k]), spin=0,
+                               lmax=lmax, geometry=rings,
+                               phi0=float(grid.longitudes[0]))[0]
+    return _to_real(a, lmax).reshape((2, lmax + 1, lmax + 1) + extra)

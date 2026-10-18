@@ -2,12 +2,13 @@
 import numpy as np
 import pytest
 
-from planetmodel import (analyse_grid, equiangular, gauss_legendre, real_harmonics,
-                         synthesise, synthesise_grid)
+from planetmodel import (AngularGrid, driscoll_healy, equiangular, gauss_legendre,
+                         real_harmonics, synthesise)
+from planetmodel.harmonics import analyse_grid, synthesise_grid
 from planetmodel.randomfield import SphericalGRF
 
 pytestmark = pytest.mark.harmonics
-pytest.importorskip("pyshtools", reason="needs the planetmodel[harmonics] extra")
+pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
 
 
 def random_coefficients(L, rng, *extra):
@@ -19,21 +20,47 @@ def random_coefficients(L, rng, *extra):
     return c
 
 
-def test_backend_is_ducc_when_installed():
-    pytest.importorskip("ducc0")
-    from planetmodel.harmonics import _pyshtools
-    assert _pyshtools().backends.preferred_backend() == "ducc"
+def shifted(g, phi0):
+    """The grid g with its longitudes starting at phi0 instead of zero."""
+    return AngularGrid(g.colatitudes, g.longitudes + phi0, kind=g.kind, lmax=g.lmax,
+                       weights=g.weights)
 
 
-def test_synthesis_on_the_grid_matches_the_basis():
-    L = 7
+EVERY_KIND = [gauss_legendre(7), gauss_legendre(6, nphi=18),
+              shifted(gauss_legendre(5), 0.4), driscoll_healy(6),
+              driscoll_healy(5, sampling=2), equiangular(9, 20),
+              equiangular(9, 20, poles=True), shifted(equiangular(12, 24), 0.1),
+              equiangular(30, 13)]
+
+
+@pytest.mark.parametrize("grid", EVERY_KIND, ids=repr)
+def test_synthesis_on_every_kind_matches_the_basis(grid):
     rng = np.random.default_rng(0)
-    c = random_coefficients(L, rng)
-    grid = gauss_legendre(L)
+    c = random_coefficients(grid.lmax, rng)
     got = synthesise_grid(c, grid)
     assert got.shape == (grid.ntheta, grid.nphi)
     want = synthesise(c, grid.colatitudes[:, None], grid.longitudes[None, :])
     assert np.allclose(got, want, atol=1e-12)
+
+
+@pytest.mark.parametrize("grid", EVERY_KIND, ids=repr)
+def test_analysis_on_every_kind_inverts_synthesis_at_its_band(grid):
+    rng = np.random.default_rng(1)
+    c = random_coefficients(grid.lmax, rng, 3)
+    values = synthesise_grid(c, grid)
+    assert values.shape == (3, grid.ntheta, grid.nphi)     # the radial axis first
+    back = analyse_grid(values, grid)
+    assert back.shape == c.shape                           # ... and last
+    assert np.allclose(back, c, atol=1e-11)
+
+
+def test_the_weights_are_ducc0s():
+    from ducc0.sht import get_gridweights
+    for rings, grid in [("GL", gauss_legendre(9)), ("DH", driscoll_healy(6)),
+                        ("F1", equiangular(11, 8)),
+                        ("CC", equiangular(11, 8, poles=True))]:
+        want = get_gridweights(rings, grid.ntheta) / (2 * np.pi)
+        assert np.allclose(grid.weights, want, rtol=0.0, atol=1e-15), rings
 
 
 def test_extra_axes_and_a_wider_grid():
@@ -48,26 +75,32 @@ def test_extra_axes_and_a_wider_grid():
     assert np.allclose(got, want, atol=1e-12)
 
 
-def test_analysis_inverts_synthesis():
+def test_analysis_stops_at_a_lower_degree():
     L = 8
     rng = np.random.default_rng(2)
     c = random_coefficients(L, rng, 4)
-    grid = gauss_legendre(L)
-    values = synthesise_grid(c, grid)
-    assert values.shape == (4, grid.ntheta, grid.nphi)     # the radial axis first
-    back = analyse_grid(values, grid)
-    assert back.shape == c.shape                           # ... and last
-    assert np.allclose(back, c, atol=1e-11)
+    grid = driscoll_healy(L)
     low = analyse_grid(synthesise_grid(c, grid), grid, lmax=3)
     assert low.shape == (2, 4, 4, 4) and np.allclose(low, c[:, :4, :4], atol=1e-11)
 
 
 def test_refusals_name_the_grid():
     c = random_coefficients(4, np.random.default_rng(0))
-    with pytest.raises(ValueError, match="Gauss-Legendre"):
-        synthesise_grid(c, equiangular(8, 16))
-    with pytest.raises(ValueError, match="longitudes"):
-        synthesise_grid(c, gauss_legendre(4, nphi=16))
+    g = gauss_legendre(4)
+    with pytest.raises(ValueError, match="shipped kind"):
+        synthesise_grid(c, AngularGrid(g.colatitudes, g.longitudes, lmax=4))
+    with pytest.raises(ValueError, match="colatitudes are not those"):
+        synthesise_grid(c, AngularGrid(np.linspace(0.3, 2.8, 5), g.longitudes,
+                                       kind="gauss_legendre", lmax=4))
+    with pytest.raises(ValueError, match="resolves degrees up to 4"):
+        synthesise_grid(c, AngularGrid(g.colatitudes, 2 * np.pi * np.arange(13) / 13,
+                                       kind="gauss_legendre", lmax=6))
+    with pytest.raises(ValueError, match="2 lmax \\+ 1"):
+        synthesise_grid(c, AngularGrid(g.colatitudes, g.longitudes[:8],
+                                       kind="gauss_legendre", lmax=4))
+    with pytest.raises(ValueError, match="equally spaced"):
+        synthesise_grid(c, AngularGrid(g.colatitudes, g.longitudes ** 1.01,
+                                       kind="gauss_legendre", lmax=4))
     with pytest.raises(ValueError, match="cannot hold"):
         synthesise_grid(c, gauss_legendre(3))
     with pytest.raises(ValueError, match="shape"):

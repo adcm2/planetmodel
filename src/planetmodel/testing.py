@@ -536,11 +536,12 @@ def check_sample(sample: Sample, model: Model, *,
     """Hold a Sample to its layout and to the model it was taken from.
 
     Layout: the radial mesh lies over the model's skeleton and the nodes
-    are its per-element GLL nodes flattened; the angular nodes increase
-    inside their open ranges; every field is float64 and read-only,
-    shaped `(nnode,) + c` exactly when every layer holding it declares
-    itself radial and `(nnode, ntheta, nphi) + c` otherwise, with `c`
-    the stored shape of its character.  Metadata: the characters and
+    are its per-element GLL nodes flattened; the angular nodes increase,
+    colatitudes in [0, pi] and longitudes in [0, 2 pi); every field is
+    float64 and read-only, shaped `(nnode,) + c` exactly when every
+    layer holding it declares itself radial and `(nnode, ntheta, nphi)
+    + c` otherwise, with `c` the stored shape of its character.
+    Metadata: the characters and
     dimensions are those of the model's fields and specs, the scales
     and layer names the model's.  Values: NaN on every node of a layer
     lacking the field and finite everywhere else; `n` random (node,
@@ -576,8 +577,8 @@ def check_sample(sample: Sample, model: Model, *,
     assert np.array_equal(sample.node_layer, node_layer), (
         "node_layer is not element_layer repeated over the nodes")
     theta, phi = grid.colatitudes, grid.longitudes
-    assert np.all(np.diff(theta) > 0) and 0 < theta[0] and theta[-1] < np.pi, (
-        "colatitudes are not increasing inside (0, pi)")
+    assert np.all(np.diff(theta) > 0) and 0 <= theta[0] and theta[-1] <= np.pi, (
+        "colatitudes are not increasing in [0, pi]")
     assert np.all(np.diff(phi) > 0) and 0 <= phi[0] and phi[-1] < 2 * np.pi, (
         "longitudes are not increasing inside [0, 2 pi)")
     ntheta, nphi = theta.size, phi.size

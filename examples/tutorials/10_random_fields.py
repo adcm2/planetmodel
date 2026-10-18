@@ -160,8 +160,8 @@ print("map std at r = 0.9:", surface_map.std().round(3), "(sigma = 1)")
 # %% [markdown]
 # `sample_grid` draws a sample directly on a Gauss-Legendre grid, as an
 # array of mesh nodes by grid points, using the fast spherical-harmonic
-# transform of pyshtools (the `harmonics` extra, with ducc0 as its
-# backend where that is installed). `analyse_grid` is the inverse
+# transforms of ducc0 (the `harmonics` extra). The transforms themselves
+# are reached through `planetmodel.harmonics`. `analyse_grid` is the inverse
 # transform for a field band-limited at the grid's degree, and the two
 # round-trip to rounding error. The average of the square of one sample
 # over the sphere is an estimate of `sigma^2` from a single draw, and
@@ -169,7 +169,8 @@ print("map std at r = 0.9:", surface_map.std().round(3), "(sigma = 1)")
 
 # %%
 try:
-    from planetmodel import analyse_grid, gauss_legendre, synthesise_grid
+    from planetmodel import gauss_legendre
+    from planetmodel.harmonics import analyse_grid, synthesise_grid
     grid = gauss_legendre(shell.lmax)
     on_grid = shell.sample_grid(grid, rng=rng)
     back = analyse_grid(on_grid, grid)

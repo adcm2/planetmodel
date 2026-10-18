@@ -43,7 +43,7 @@ napoleon_use_ivar = True
 # The optional extras are not installed where the docs are built; their
 # importers (gmsh at the top of planetmodel.mesh3d, the rest inside the
 # functions that need them) document against these stand-ins.
-autodoc_mock_imports = ["gmsh", "mfem", "pyshtools", "ducc0", "matplotlib"]
+autodoc_mock_imports = ["gmsh", "mfem", "ducc0", "matplotlib"]
 
 
 # -- Options for HTML output -------------------------------------------------

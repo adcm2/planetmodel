@@ -2,9 +2,9 @@
 import numpy as np
 import pytest
 
-from planetmodel.frames import (MAX_RANK, cartesian_points, rotate_slots,
-                                rotation_subscripts, spherical_coordinates,
-                                spherical_frame)
+from planetmodel.frames import (MAX_RANK, cartesian_points, from_geographic,
+                                geographic, rotate_slots, rotation_subscripts,
+                                spherical_coordinates, spherical_frame)
 
 
 def test_frame_is_orthonormal_and_right_handed():
@@ -57,3 +57,30 @@ def test_rotation_subscripts():
     assert rotation_subscripts(2) == "...iA,...jB,...AB->...ij"
     with pytest.raises(ValueError, match="rank"):
         rotation_subscripts(MAX_RANK + 1)
+
+
+def test_geographic_round_trip():
+    rng = np.random.default_rng(4)
+    theta = rng.uniform(0.0, np.pi, 50)
+    phi = rng.uniform(0.0, 2 * np.pi, 50)
+    lat, lon = geographic(theta, phi)
+    assert np.allclose(lat, 90.0 - np.rad2deg(theta))
+    assert np.all((0.0 <= lon) & (lon < 360.0))
+    t, p = from_geographic(lat, lon)
+    assert np.allclose(t, theta, rtol=0, atol=1e-14)
+    assert np.allclose(p, phi, rtol=0, atol=1e-14)
+
+
+def test_geographic_poles_and_seam_are_exact():
+    theta, phi = from_geographic([90.0, -90.0, 0.0, 0.0, 0.0],
+                                 [10.0, 10.0, -180.0, 360.0, -1e-30])
+    assert theta[0] == 0.0 and theta[1] == np.pi
+    assert np.allclose(phi[2], np.pi)
+    assert phi[3] == 0.0 and phi[4] == 0.0                 # never 2 pi itself
+    lat, lon = geographic(np.pi, -np.pi / 2)
+    assert lat == -90.0 and np.isclose(lon, 270.0)
+    assert lat.shape == () and lon.shape == ()
+    with pytest.raises(ValueError, match="latitudes"):
+        from_geographic(90.5, 0.0)
+    with pytest.raises(ValueError, match="colatitudes"):
+        geographic(-0.1, 0.0)

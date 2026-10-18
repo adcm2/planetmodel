@@ -8,7 +8,7 @@ build:
     post_create_environment:
       - pip install poetry
     # The base install plus the docs group: numpy, scipy, sphinx and the
-    # theme.  The optional extras (gmsh, PyMFEM, pyshtools, matplotlib)
+    # theme.  The optional extras (gmsh, PyMFEM, ducc0, matplotlib)
     # are mocked by docs/source/conf.py, not installed.
     post_install:
       - VIRTUAL_ENV=$READTHEDOCS_VIRTUALENV_PATH poetry install --with docs

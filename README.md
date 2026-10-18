@@ -84,7 +84,7 @@ held to the same call.
 pip install planetmodel                     # numpy and scipy only
 pip install 'planetmodel[meshing]'          # 2D and 3D meshes via gmsh
 pip install 'planetmodel[mfem]'             # export to MFEM (PyMFEM)
-pip install 'planetmodel[harmonics]'        # grid transforms via pyshtools and ducc0
+pip install 'planetmodel[harmonics]'        # spherical-harmonic grid transforms via ducc0
 pip install 'planetmodel[plot]'             # matplotlib, for the figures
 pip install 'planetmodel[notebook]'         # ipykernel, to run tutorials cell by cell
 ```

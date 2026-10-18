@@ -20,7 +20,7 @@ Modules reached by name, one level down:
   catalogue    PREM, LayeredIsotropicElastic and MineosModel, model types
   deck         tabulated models: decks, their formats, fields by interpolation
   sampling     a model on a radial mesh times an angular grid
-  harmonics    real spherical harmonics; grid transforms via pyshtools (optional)
+  harmonics    real spherical harmonics; grid transforms via ducc0 (optional)
   plotting     radial profiles drawn one way, radius upward (matplotlib, optional)
   mesh1d       radial spectral-element meshes (GLL), nodal values, gravity
   mesh3d       2D and 3D meshes via gmsh, and MFEM export
@@ -64,8 +64,9 @@ from .fields import (
     RadialField,
     constant_field,
 )
+from .frames import from_geographic, geographic
 from .geometry import Geometry, InterfaceInfo, LayerInfo
-from .harmonics import analyse_grid, real_harmonics, synthesise, synthesise_grid
+from .harmonics import real_harmonics, synthesise
 from .layerfunction import (
     LayerFunction,
     NumericLayer,
@@ -98,7 +99,14 @@ from .rheology import (
     is_viscoelastic,
     reference_omega,
 )
-from .sampling import AngularGrid, Sample, equiangular, gauss_legendre, sample
+from .sampling import (
+    AngularGrid,
+    Sample,
+    driscoll_healy,
+    equiangular,
+    gauss_legendre,
+    sample,
+)
 from .skeleton import CoarseningMap, Location, Skeleton
 from .units import EARTH_MEAN_DENSITY, G_SI, Dimensions, Scales
 from .vocabulary import CONSTANTS, VOCABULARY, Constant, FieldSpec
@@ -195,11 +203,12 @@ __all__ = [
     "Sample",
     "sample",
     "gauss_legendre",
+    "driscoll_healy",
     "equiangular",
+    "geographic",
+    "from_geographic",
     "real_harmonics",
     "synthesise",
-    "synthesise_grid",
-    "analyse_grid",
     "gravity",
     "mass",
     "gravity_fields",

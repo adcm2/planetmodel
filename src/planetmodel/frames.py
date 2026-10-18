@@ -20,6 +20,11 @@ engineering-strain factors; `bond_matrix` is the (6, 6) matrix that
 moves such components between frames, `voigt_to_tensor` and
 `tensor_to_voigt` go between the two forms.
 
+Geographic coordinates are degrees: latitude 90 - theta, north positive,
+and longitude phi east in [0, 360).  `geographic` and `from_geographic`
+are the one definition of the conversion, the poles landing exactly on
+theta = 0 and pi and any longitude range reduced to one turn.
+
 Nothing here depends on the rest of the package.
 """
 from __future__ import annotations
@@ -30,9 +35,9 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 __all__ = ["spherical_frame", "spherical_coordinates", "cartesian_points",
-           "rotate_slots", "rotation_subscripts", "MAX_RANK",
-           "VOIGT_PAIRS", "bond_matrix", "voigt_to_tensor", "tensor_to_voigt",
-           "SphericalFunction"]
+           "geographic", "from_geographic", "rotate_slots", "rotation_subscripts",
+           "MAX_RANK", "VOIGT_PAIRS", "bond_matrix", "voigt_to_tensor",
+           "tensor_to_voigt", "SphericalFunction"]
 
 #: A function of (r, theta, phi), given broadcast float arrays and returning
 #: something array-like at each point: a displacement, a formula, a relief's
@@ -96,6 +101,44 @@ def cartesian_points(r: ArrayLike, theta: ArrayLike, phi: ArrayLike) -> np.ndarr
     st, ct = np.sin(theta), np.cos(theta)
     return np.stack([r * st * np.cos(phi), r * st * np.sin(phi), r * ct],
                     axis=-1)
+
+
+def _turn(x: np.ndarray, period: float) -> np.ndarray:
+    """x reduced into [0, period), where np.mod alone can round a small
+    negative number up to the period itself."""
+    x = np.mod(x, period)
+    return np.asarray(np.where(x >= period, x - period, x))
+
+
+def geographic(theta: ArrayLike, phi: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
+    """(theta, phi) in radians -> (latitude, longitude) in degrees.
+
+    Latitude is 90 - theta in degrees, north positive; longitude is phi
+    in degrees east, reduced into [0, 360).  theta must lie in [0, pi].
+    With `from_geographic` this is the one definition of the conversion.
+    """
+    theta, phi = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                     np.asarray(phi, dtype=float))
+    if np.any(theta < 0.0) or np.any(theta > np.pi):
+        raise ValueError("colatitudes must lie in [0, pi]")
+    return np.asarray(90.0 - np.rad2deg(theta)), _turn(np.rad2deg(phi), 360.0)
+
+
+def from_geographic(latitude: ArrayLike, longitude: ArrayLike
+                    ) -> tuple[np.ndarray, np.ndarray]:
+    """(latitude, longitude) in degrees -> (theta, phi) in radians.
+
+    theta = 90 - latitude in radians, the poles at exactly 0 and pi;
+    phi is the longitude east in radians, from any range (-180 to 180,
+    0 to 360, or beyond) reduced into [0, 2 pi).  Latitude must lie in
+    [-90, 90].
+    """
+    latitude, longitude = np.broadcast_arrays(np.asarray(latitude, dtype=float),
+                                              np.asarray(longitude, dtype=float))
+    if np.any(np.abs(latitude) > 90.0):
+        raise ValueError("latitudes must lie in [-90, 90]")
+    theta = np.asarray(np.clip(np.deg2rad(90.0 - latitude), 0.0, np.pi))
+    return theta, _turn(np.deg2rad(longitude), 2.0 * np.pi)
 
 
 def rotation_subscripts(rank: int) -> str:
