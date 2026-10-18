@@ -253,6 +253,8 @@ jobs:
           PLANETMODEL_DOCS_OUTPUT: ${{ github.workspace }}/build/docs
           PLANETMODEL_VERSION: ci
         run: |
+          # Doxygen makes the last directory of its output, not the ones above
+          mkdir -p "$PLANETMODEL_DOCS_OUTPUT"
           set +e
           doxygen docs/Doxyfile 2> doxygen.log
           status=$?
