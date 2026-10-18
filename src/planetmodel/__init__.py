@@ -94,6 +94,7 @@ from .materials import ElasticField, elastic_moduli, is_fluid, kappa_mu, moduli
 from .mesh1d import RadialMesh
 from .mesh1d.gravity import gravity, gravity_fields, mass
 from .model import CoarseningFit, Layer, Model
+from .perturbation import PerturbedField, perturbed, unperturbed
 from .pushforward import PulledBackField, PushedForwardField, pull_back, push_forward
 from .rheology import (
     dispersive_moduli,
@@ -163,6 +164,9 @@ __all__ = [
     "GriddedFunction",
     "HarmonicField",
     "HarmonicFunction",
+    "PerturbedField",
+    "perturbed",
+    "unperturbed",
     "ElasticField",
     "is_fluid",
     "moduli",
