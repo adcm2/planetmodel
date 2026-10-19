@@ -16,7 +16,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 if TYPE_CHECKING:
-    from .datasets import Dataset, Strata, Surface
+    from .datasets import Dataset, RegionalGrid, Strata, Surface
     from .displacement import RadialDisplacement
     from .fields import Field
     from .geometry import Geometry
@@ -33,7 +33,7 @@ __all__ = ["check_displacement", "check_mapping", "check_geometry",
            "check_layer_function", "check_field", "check_model",
            "check_refinement", "check_sample", "check_spectral_basis",
            "check_spherical_basis", "check_model_file", "check_dataset",
-           "check_surface", "check_strata"]
+           "check_surface", "check_strata", "check_regional"]
 
 
 def _rel(a: ArrayLike, b: ArrayLike, *, rtol: float, floor: float = 1.0) -> bool:
@@ -1133,8 +1133,8 @@ def check_dataset(dataset: Dataset, *,
     file and member in the sources' order, each a file, a plain source's
     with the entry's sha256, and that the reader reads them, with
     `options`, into an object that holds to its own protocol: a `Model`
-    to `check_model`, a `RegionalGrid` to values of the right shape at its
-    own corners and NaN outside its box, a `Surface` to `check_surface`,
+    to `check_model`, a `RegionalGrid` to `check_regional`, a `Surface`
+    to `check_surface`,
     `Strata` to `check_strata`.
     Nothing here touches the network.
     """
@@ -1177,16 +1177,7 @@ def check_dataset(dataset: Dataset, *,
     if isinstance(product, Strata):
         check_strata(product)
     if isinstance(product, RegionalGrid):
-        (r0, r1), (t0, t1), (p0, p1) = product.extent
-        r = np.array([r0, 0.5 * (r0 + r1), r1])[:, None]
-        for name in product.names:
-            corners = product(name, r, np.array([t0, t1]), np.array([p0, p1]))
-            assert corners.shape == (3, 2), (
-                f"{dataset.name}: {name} gives the wrong shape at its corners")
-            if p1 - p0 < np.pi:
-                away = product(name, 0.5 * (r0 + r1), 0.5 * (t0 + t1),
-                               0.5 * (p0 + p1) + np.pi)
-                assert np.isnan(away), f"{dataset.name}: {name} reads outside its box"
+        check_regional(product)
 
 
 def check_surface(surface: Surface, *, rng: np.random.Generator | None = None,
@@ -1282,3 +1273,43 @@ def check_strata(strata: Strata, *, rng: np.random.Generator | None = None,
     for name, fn in strata.below.items():
         assert np.all(np.isfinite(np.asarray(fn(theta, phi), dtype=float))), (
             f"{strata!r}: the {name} beneath is not finite")
+
+
+def check_regional(regional: RegionalGrid, *, rng: np.random.Generator | None = None,
+                   n: int = 400) -> None:
+    """Hold a `datasets.RegionalGrid` to its protocol: at `n` random points
+    and the centre of its box, its values of the points' shape and NaN
+    outside its region; its edge distance zero outside, positive inside;
+    its own coordinates of the box's centre inside its box; and a value
+    at that centre, half way down its radii, for some name."""
+    from .datasets import RegionalGrid
+
+    assert isinstance(regional, RegionalGrid)
+    rng = np.random.default_rng(0) if rng is None else rng
+    (r0, r1), (a0, a1), (b0, b1) = regional.extent
+    assert r0 < r1 and a0 < a1 and b0 < b1, f"{regional!r}: an empty box"
+    a, b = 0.5 * (a0 + a1), 0.5 * (b0 + b1)
+    if regional.projection is None:
+        centre = (np.array([a]), np.array([b]))
+    else:
+        centre = regional.projection.to_angles(np.array([b]), np.array([a]))
+    back = regional.coordinates(*centre)
+    assert np.allclose([back[0][0], back[1][0]], [a, b], rtol=1e-9,
+                       atol=1e-9 * max(abs(a1 - a0), abs(b1 - b0))), (
+        f"{regional!r}: its coordinates of its box's centre are not the centre")
+    theta = np.concatenate([np.arccos(rng.uniform(-1.0, 1.0, n)), centre[0]])
+    phi = np.concatenate([rng.uniform(0.0, 2.0 * np.pi, n), centre[1]])
+    inside = regional.contains(theta, phi)
+    d = regional.edge_distance(theta, phi)
+    assert d.shape == theta.shape and np.all(d[~inside] == 0.0), (
+        f"{regional!r}: an edge distance outside its region")
+    assert np.all(d[inside] >= 0.0), f"{regional!r}: a negative edge distance"
+    r = 0.5 * (r0 + r1)
+    held = False
+    for name in regional.names:
+        v = regional(name, r, theta, phi)
+        assert v.shape == theta.shape, f"{regional!r}: {name} of the wrong shape"
+        assert np.all(np.isnan(v[~inside])), (
+            f"{regional!r}: {name} has values outside its region")
+        held = held or bool(np.isfinite(v[-1]))
+    assert held, f"{regional!r}: nothing at its centre half way down"

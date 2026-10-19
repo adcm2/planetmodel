@@ -406,23 +406,11 @@ def filtered(field: Field, *, lmax: int, lmin: int = 0, roll_off: int | None = N
 
 def _edge_weight(regional: RegionalGrid, theta: np.ndarray, phi: np.ndarray,
                  width: float) -> np.ndarray:
-    """The raised cosine of the great-circle distance inside the box's edge
-    over `width`, zero outside; an edge at a pole, or longitudes round the
-    whole circle, is no edge."""
-    (_, _), (t0, t1), (p0, p1) = regional.extent
-    t, p = regional.coordinates(theta, phi)
-    inside = regional.contains(theta, phi)
-    d = np.full(t.shape, np.inf)
-    if t0 > 1e-12:
-        d = np.minimum(d, t - t0)
-    if t1 < np.pi - 1e-12:
-        d = np.minimum(d, t1 - t)
-    if p1 - p0 < 2.0 * np.pi * (1.0 - 1e-6):
-        s = np.sin(t)
-        d = np.minimum(d, np.arcsin(np.clip(s * np.abs(np.sin(p - p0)), 0.0, 1.0)))
-        d = np.minimum(d, np.arcsin(np.clip(s * np.abs(np.sin(p1 - p)), 0.0, 1.0)))
-    w = raised_cosine(d / width) if width > 0.0 else np.ones_like(t)
-    return np.where(inside, w, 0.0)
+    """The raised cosine of the angle inside the region's edge
+    (`RegionalGrid.edge_distance`) over `width`, zero outside."""
+    d = regional.edge_distance(theta, phi)
+    w = raised_cosine(d / width) if width > 0.0 else np.ones_like(d)
+    return np.where(regional.contains(theta, phi), w, 0.0)
 
 
 def merged(model: Model, regional: RegionalGrid, *, name: str, width: float,

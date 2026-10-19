@@ -26,7 +26,9 @@ radial splines (`read_sph`, `sph_field`, `SphReader`); radial references
 published as decks (STW105, ak135-F, iasp91, the Moon's models) read
 through `planetmodel.deck` by `DeckReader`; netCDF grids of latitude and
 longitude, EMC's among them, normalised by `read_grid` into a model of a
-global grid (`grid_model`, `GridReader`) or a `RegionalGrid`.  A
+global grid (`grid_model`, `GridReader`) or a `RegionalGrid`, which also
+holds a grid on a polar stereographic plane (`ProjectedData`,
+`PolarStereographic`).  A
 surface (a planet's shape, its topography, the radius of an interface
 within it, an ice sheet's thickness) is a `Surface`, a function of the
 angles with what it measures and from what datum, read from a table of
@@ -53,9 +55,10 @@ sub-package is reached by module, off the top-level surface.
 from .building import PAIRS, transplanted
 from .decks import DeckReader, Names
 from .entries import REGISTRY, DatasetLike, as_dataset, cite, describe
-from .grids import (EARTH_RADIUS, SAME_RTOL, VERTICAL_RTOL, GridData, GridReader,
-                    RegionalGrid, Variables, grid_model, read_grid, read_table,
-                    ring_poles)
+from .grids import (EARTH_RADIUS, SAME_RTOL, VERTICAL_RTOL, GridData, Gridded,
+                    GridReader, ProjectedData, RegionalGrid, Variables, grid_model,
+                    read_grid, read_table, ring_poles)
+from .projections import ELLIPSOIDS, PolarStereographic
 from .fetch import (CACHE_VARIABLE, OFFLINE_VARIABLE, TIMEOUT, cache_directory, fetch,
                     load, sha256_of)
 from .models import (REFERENCES, Segments, over_reference, reference_field,
@@ -85,4 +88,5 @@ __all__ = ["Source", "Dataset", "Reader", "DatasetLike", "REGISTRY", "ARCHIVES",
            "MEASURES", "Datum", "Surface", "CoefficientReader", "GridSurfaceReader",
            "read_table", "ring_poles", "CRUST1_STRATA", "LITHO1_STRATA",
            "LITHO1_PROPERTIES", "Property", "Stratum", "Strata", "read_crust1",
-           "litho1_strata", "Crust1Reader", "Litho1Reader", "TableStrataReader"]
+           "litho1_strata", "Crust1Reader", "Litho1Reader", "TableStrataReader",
+           "ProjectedData", "Gridded", "PolarStereographic", "ELLIPSOIDS"]

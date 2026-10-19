@@ -11,7 +11,8 @@
 #
 # This tutorial goes through those steps with real models: the
 # shear-velocity model S40RTS, the model S362ANI+M given as velocities on
-# a grid, a regional model of the North Atlantic, and a model of the Moon.
+# a grid, a regional model of the North Atlantic, one of Antarctica given
+# on a polar map, and a model of the Moon.
 # It needs the network the first time it runs (the files are a few
 # megabytes, and are kept in a cache afterwards), the `netcdf` extra
 # (netCDF4) for the gridded models, and the `maps` extra (cartopy) for the
@@ -226,6 +227,53 @@ for k, (model, title) in enumerate(((on_prem, "S40RTS on PREM"),
     ax.set_title(f"{title}: vsv 150 km deep")
 fig.tight_layout()
 out = FIGURES / "tutorial_14_merged.png"
+fig.savefig(out, dpi=100)
+print("figure written to", out)
+
+# %% [markdown]
+# ## A regional model on a polar map
+#
+# Models of the polar regions are often published on a flat map of the
+# pole, a *polar stereographic projection*, rather than in latitude and
+# longitude. ANT-20 (Lloyd and others, 2020), a shear-velocity model of
+# Antarctica and the surrounding oceans, is given on the standard one for
+# Antarctica, EPSG:3031: distances in kilometres from the South Pole, x
+# toward 90 degrees east and y toward the Greenwich meridian. `load` reads
+# it as a regional grid that knows its projection, and `merged` blends it
+# into a global model as it did the North Atlantic, measuring the band at
+# its edge from where the model's values stop.
+#
+# At 100 km depth, East Antarctica, an old and cold continent, is fast,
+# and West Antarctica, younger and warmer, is slow: in ANT-20 about 5
+# percent faster and 2 percent slower than PREM. S40RTS shows the same
+# pattern more smoothly. Had the projection's axes been read the wrong
+# way round, the slow region would lie beneath East Antarctica, or out in
+# the ocean, and the two maps would disagree.
+
+# %%
+antarctica = datasets.load("ANT-20")
+print("ANT-20 on", antarctica.projection)
+polar = on_prem
+for name in ("vsv", "vsh"):
+    polar = datasets.merged(polar, antarctica, name=name, source_name="vs",
+                            width=np.radians(5.0), grid=equiangular(90, 180),
+                            radial_width=(50e3, 0.0))
+
+fig = plt.figure(figsize=(12, 5.5))
+view = ccrs.SouthPolarStereo()
+for k, (model, title) in enumerate(((on_prem, "S40RTS on PREM"),
+                                    (polar, "with ANT-20 merged"))):
+    ax = fig.add_subplot(1, 2, k + 1, projection=view)
+    at = slices.sphere(model, "vsv", depth=100e3, relative_to="mean")
+    sphere_map(ax, at, colorbar=True, coastlines=True, vmin=-6.0, vmax=6.0)
+    ax.set_extent([-180.0, 180.0, -90.0, -55.0], ccrs.PlateCarree())
+    for label, (lon, lat) in (("West\nAntarctica", (-120.0, -79.0)),
+                              ("East\nAntarctica", (75.0, -78.0))):
+        ax.text(lon, lat, label, transform=ccrs.PlateCarree(), ha="center",
+                va="center", fontsize=9)
+    ax.set_title(f"{title}: vsv 100 km deep")
+fig.tight_layout()
+out = FIGURES / "tutorial_14_antarctica.png"
 fig.savefig(out, dpi=100)
 print("figure written to", out)
 

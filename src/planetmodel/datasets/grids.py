@@ -6,9 +6,9 @@ vertical axis, in conventions that vary from file to file.  `read_grid`
 reads one into a `GridData` in the library's form:
 
 - the axes are found by their coordinate variables' names (latitude,
-  lat; longitude, lon; depth; radius; elevation, height), or failing
-  those by `standard_name`, units and `positive`, in any order of
-  dimensions; a projected grid of x and y is refused here;
+  lat; longitude, lon; x and y; depth; radius; elevation, height), or
+  failing those by `standard_name`, units and `positive`, in any order
+  of dimensions;
 - a vertical axis of depth (positive down), radius or elevation becomes
   radius in metres on the source's surface radius (its global
   `radius_in_meters`, else `surface=`, the Earth's 6371 km by default),
@@ -43,6 +43,13 @@ reads one into a `GridData` in the library's form:
 node a row in any order (LithoRef18's), into the same form: the rows
 must be every node of a product of latitudes and longitudes, each once,
 and the coordinates then follow the rules above.
+
+A grid on a projected plane, x and y (a polar stereographic grid of the
+Antarctic, EPSG:3031), is read as `ProjectedData`: its northing and
+easting in metres, increasing (their unit a length, km or m), its values
+on (radius, y, x), and the projection, `projection=` where the entry
+gives it and else the file's `proj4text`
+(`projections.PolarStereographic`); it is always regional.
 
 A grid whose longitudes go round the circle and whose latitudes reach
 within a step and a half of each pole is global, on an `AngularGrid`:
@@ -89,13 +96,14 @@ from ..sampling import AngularGrid, equiangular
 from ..units import DIMENSIONLESS, LENGTH, Scales, parse_unit
 from ..vocabulary import spec
 from .models import over_reference, reference_of, standalone
+from .projections import PolarStereographic
 
 if TYPE_CHECKING:
     from .registry import Dataset
 
 __all__ = ["VERTICAL_RTOL", "SAME_RTOL", "EARTH_RADIUS", "Variables", "GridData",
-           "read_grid", "read_table", "ring_poles", "grid_model", "RegionalGrid",
-           "GridReader"]
+           "ProjectedData", "Gridded", "read_grid", "read_table", "ring_poles",
+           "grid_model", "RegionalGrid", "GridReader"]
 
 #: Two slices this close, relative to the surface radius, are one radius.
 VERTICAL_RTOL = 1e-5
@@ -112,6 +120,7 @@ EARTH_RADIUS = 6371.0e3
 type Variables = Mapping[str, tuple[str, str | None]]
 
 _ROLES = {"latitude": ("latitude", "lat"), "longitude": ("longitude", "lon"),
+          "x": ("x", "projection_x_coordinate"), "y": ("y", "projection_y_coordinate"),
           "depth": ("depth",), "radius": ("radius",),
           "elevation": ("elevation", "height", "altitude")}
 _VERTICAL = ("depth", "radius", "elevation")
@@ -145,6 +154,36 @@ class GridData:
         return self.grid is not None
 
 
+@dataclass(frozen=True, eq=False)
+class ProjectedData:
+    """A gridded source on a projected plane in the library's form: `y`
+    and `x` its northing and easting (metres, increasing), `radius` as a
+    `GridData`'s, `values` by the file's names shaped (radius, y, x) or
+    (y, x), in the file's `units`, NaN where missing, and the
+    `projection` that takes the library's angles to (x, y)."""
+
+    y: np.ndarray
+    x: np.ndarray
+    radius: np.ndarray | None
+    values: Mapping[str, np.ndarray]
+    units: Mapping[str, str]
+    projection: PolarStereographic
+    _: KW_ONLY
+    surface: float = EARTH_RADIUS
+    long_names: Mapping[str, str] = field(default_factory=dict)
+    attributes: Mapping[str, Any] = field(default_factory=dict)
+    source: str | None = None
+
+    @property
+    def is_global(self) -> bool:
+        """A projected grid is regional."""
+        return False
+
+
+#: What `read_grid` gives: a grid of latitude and longitude, or a projected one.
+type Gridded = GridData | ProjectedData
+
+
 def _roles(ds: Any) -> dict[str, str]:
     """The coordinate variable of each axis a file has, by its role."""
     found: dict[str, str] = {}
@@ -162,11 +201,12 @@ def _roles(ds: Any) -> dict[str, str]:
             role = "longitude"
         if role is not None and role not in found:
             found[role] = name
-    if "latitude" not in found or "longitude" not in found:
-        projected = [n for n in ("x", "y", "X", "Y") if n in ds.variables]
-        raise ValueError(
-            "the file has no latitude and longitude axes"
-            + (f" (it is projected, on {projected})" if projected else ""))
+    geographic = "latitude" in found and "longitude" in found
+    if not geographic and not ("x" in found and "y" in found):
+        raise ValueError("the file has neither latitude and longitude axes nor x and "
+                         "y ones")
+    for role in (("x", "y") if geographic else ("latitude", "longitude")):
+        found.pop(role, None)
     vertical = [r for r in _VERTICAL if r in found]
     if len(vertical) > 1:
         raise ValueError(f"the file has more than one vertical axis: {vertical}")
@@ -285,18 +325,44 @@ def _horizontal(path: str, lat: np.ndarray, lon: np.ndarray,
     return theta, phi, values, grid
 
 
+def _plane(path: str, coords: Mapping[str, np.ndarray], unit: Mapping[str, str],
+           values: dict[str, np.ndarray], *, regular: bool
+           ) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
+    """A projected grid's northing and easting in metres, increasing, and
+    its values reordered to match (their last two axes)."""
+    out = []
+    for role, axis in (("y", -2), ("x", -1)):
+        c = np.asarray(coords[role], dtype=float)
+        dims, factor = parse_unit(unit[role] or "m")
+        if dims != LENGTH:
+            raise ValueError(f"{path}: the {role} axis's unit {unit[role]!r} is not a "
+                             "length")
+        if regular:
+            c = _regular(c, f"{role} coordinates")
+        order = np.argsort(c, kind="stable")
+        c = factor * c[order]
+        if np.any(np.diff(c) <= 0.0):
+            raise ValueError(f"{path}: the {role} coordinates repeat")
+        values = {n: np.take(v, order, axis=axis) for n, v in values.items()}
+        out.append(c)
+    values = {n: np.array(v, dtype=float) for n, v in values.items()}
+    return out[0], out[1], values
+
+
 def read_grid(source: str | os.PathLike[str], *,
               variables: tuple[str, ...] | None = None,
               surface: float | None = None, vertical_units: str | None = None,
               pairs: tuple[tuple[float, float], ...] = (), regular: bool = False,
               seam: str = "refuse", pole_rows: str = "refuse", stride: int = 1,
-              vertical: tuple[float | None, float | None] | None = None) -> GridData:
+              vertical: tuple[float | None, float | None] | None = None,
+              projection: PolarStereographic | None = None) -> Gridded:
     """A netCDF grid in the library's form, by the rules of the module
     docstring: `variables` the names to read (every field on the grid's
     axes by default), `surface` the radius of a depth of zero in metres
     where the file states none, `vertical_units` the vertical axis's unit
     where it states none, `pairs` the values of the vertical coordinate
-    of slices that are the two sides of one discontinuity."""
+    of slices that are the two sides of one discontinuity, `projection`
+    a projected grid's, in place of its `proj4text`."""
     import netCDF4
 
     for what, rule in (("seam", seam), ("pole_rows", pole_rows)):
@@ -306,7 +372,9 @@ def read_grid(source: str | os.PathLike[str], *,
     with netCDF4.Dataset(path) as ds:
         ds.set_auto_mask(False)
         roles = _roles(ds)
-        axes = [r for r in _VERTICAL if r in roles] + ["latitude", "longitude"]
+        projected = "x" in roles
+        horizontal = ["y", "x"] if projected else ["latitude", "longitude"]
+        axes = [r for r in _VERTICAL if r in roles] + horizontal
         dims = [roles[r] for r in axes]
         names = (tuple(n for n, v in ds.variables.items()
                        if n not in dims and set(v.dimensions) == set(dims))
@@ -320,8 +388,8 @@ def read_grid(source: str | os.PathLike[str], *,
         stride = int(stride)
         if stride < 1:
             raise ValueError(f"stride must be a positive integer, got {stride}")
-        take = {roles["latitude"]: slice(None, None, stride),
-                roles["longitude"]: slice(None, None, stride)}
+        take = {roles[horizontal[0]]: slice(None, None, stride),
+                roles[horizontal[1]]: slice(None, None, stride)}
         if vertical is not None:
             if axis is None:
                 raise ValueError(f"{path}: vertical= cuts a grid with a vertical axis")
@@ -354,10 +422,19 @@ def read_grid(source: str | os.PathLike[str], *,
             values[n] = np.transpose(a, [var.dimensions.index(d) for d in dims])
             units[n] = str(getattr(var, "units", ""))
             long_names[n] = str(getattr(var, "long_name", ""))
-    theta, phi, values, grid = _horizontal(path, coords["latitude"],
-                                           coords["longitude"], values,
-                                           regular=regular, seam=seam,
-                                           pole_rows=pole_rows)
+    if projected:
+        y, x, values = _plane(path, coords, vunit, values, regular=regular)
+        if projection is None:
+            text = attributes.get("proj4text")
+            if text is None:
+                raise ValueError(f"{path}: a projected grid with no proj4text; give "
+                                 "projection=")
+            projection = PolarStereographic.from_proj4(str(text))
+    else:
+        theta, phi, values, grid = _horizontal(path, coords["latitude"],
+                                               coords["longitude"], values,
+                                               regular=regular, seam=seam,
+                                               pole_rows=pole_rows)
     radius = None
     vertical = axis
     if vertical is not None:
@@ -393,6 +470,12 @@ def read_grid(source: str | os.PathLike[str], *,
         surface = top
     for v in values.values():
         v.setflags(write=False)
+    if projected:
+        return ProjectedData(y, x, radius, MappingProxyType(values),
+                             MappingProxyType(units), projection,
+                             surface=float(surface or EARTH_RADIUS),
+                             long_names=MappingProxyType(long_names),
+                             attributes=MappingProxyType(attributes), source=path)
     return GridData(theta, phi, radius, MappingProxyType(values),
                     MappingProxyType(units), grid=grid,
                     surface=float(surface or EARTH_RADIUS),
@@ -467,7 +550,7 @@ def read_table(source: str | os.PathLike[str], *,
                     source=path)
 
 
-def _si(data: GridData, file_name: str, name: str, kind: str | None,
+def _si(data: Gridded, file_name: str, name: str, kind: str | None,
         units: Mapping[str, str] | None) -> np.ndarray:
     """A variable's values in SI, its unit checked against what it is."""
     unit = (units or {}).get(file_name, data.units[file_name])
@@ -587,24 +670,34 @@ def grid_model(data: GridData, variables: Variables, *, reference: Model | None 
 
 class RegionalGrid:
     """A regional grid's variables in SI by their vocabulary names, each
-    with its kind, evaluated inside its box: linear in radius between the
-    slices of each segment (a radius on a discontinuity reads the side
-    above) and in latitude and longitude, NaN outside the box or the
-    support.  `reference` names what a perturbation is relative to."""
+    with its kind, evaluated inside its region: linear in radius between
+    the slices of each segment (a radius on a discontinuity reads the side
+    above) and in its own two horizontal coordinates, NaN outside the
+    region or the support.  Its coordinates are colatitude and longitude
+    for a box in latitude and longitude (`GridData`), northing and easting
+    for a projected grid (`ProjectedData`), reached from the library's
+    angles by the grid's map, the identity or the projection; asked for
+    the angle of a point inside its region's edge (`edge_distance`), a box
+    measures it along great circles to its sides, a projected grid on its
+    plane to the edge of the nodes holding a value at some radius, divided
+    by the projection's scale there.  `reference` names what a
+    perturbation is relative to."""
 
-    def __init__(self, data: GridData, variables: Variables, *,
+    def __init__(self, data: Gridded, variables: Variables, *,
                  units: Mapping[str, str] | None = None,
                  reference: str | None = None) -> None:
         if data.is_global or data.radius is None:
             raise ValueError("a RegionalGrid holds a regional grid with a vertical "
                              "axis")
         self._data = data
+        self._projected = isinstance(data, ProjectedData)
         self._kinds = {vocab: kind for vocab, kind in variables.values()}
         self._values = {vocab: _si(data, f, vocab, kind, units)
                         for f, (vocab, kind) in variables.items()}
         self._segments = _segments(data.radius)
         self.reference = reference
         self._interp: dict[tuple[str, int], RegularGridInterpolator] = {}
+        self._edge: RegularGridInterpolator | None = None
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -622,38 +715,103 @@ class RegionalGrid:
         return MappingProxyType(self._kinds)
 
     @property
+    def projection(self) -> PolarStereographic | None:
+        """A projected grid's projection; None for a box."""
+        return self._data.projection if self._projected else None
+
+    def _axes(self) -> tuple[np.ndarray, np.ndarray]:
+        d = self._data
+        return (d.y, d.x) if self._projected else (d.theta, d.phi)
+
+    @property
     def extent(self) -> tuple[tuple[float, float], tuple[float, float],
                               tuple[float, float]]:
-        """The box: radii (m), colatitudes and longitudes (radians), each
-        (low, high), the longitudes contiguous."""
-        d = self._data
-        return ((float(d.radius[0]), float(d.radius[-1])),
-                (float(d.theta[0]), float(d.theta[-1])),
-                (float(d.phi[0]), float(d.phi[-1])))
+        """The grid's box in its own coordinates: radii (m), then
+        colatitudes and longitudes (radians, the longitudes contiguous) for
+        a box, northings and eastings (m) for a projected grid, each (low,
+        high)."""
+        a, b = self._axes()
+        r = self._data.radius
+        return ((float(r[0]), float(r[-1])), (float(a[0]), float(a[-1])),
+                (float(b[0]), float(b[-1])))
 
     def coordinates(self, theta: ArrayLike, phi: ArrayLike
                     ) -> tuple[np.ndarray, np.ndarray]:
         """The grid's own coordinates of points: colatitude, and longitude
-        reduced into the turn the box's longitudes start."""
+        reduced into the turn the box's longitudes start; or northing and
+        easting by the projection."""
+        if self._projected:
+            x, y = self._data.projection.from_angles(theta, phi)
+            return y, x
         start = float(self._data.phi[0])
         phi = start + np.mod(np.asarray(phi, dtype=float) - start, 2 * np.pi)
-        return np.asarray(theta, dtype=float), phi
+        return np.broadcast_arrays(np.asarray(theta, dtype=float), phi)
+
+    def _in_box(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        (_, _), (a0, a1), (b0, b1) = self.extent
+        return (a >= a0) & (a <= a1) & (b >= b0) & (b <= b1)
 
     def contains(self, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
-        """Whether points lie inside the box."""
+        """Whether points lie inside the region: the box, or the part of a
+        projected grid's plane where it holds values."""
+        if self._projected:
+            return self.edge_distance(theta, phi) > 0.0
+        return self._in_box(*self.coordinates(theta, phi))
+
+    def edge_distance(self, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
+        """The angle (radians) of points inside the region's edge, by the
+        rule of the class docstring, zero outside it; a box's edge at a
+        pole, or its longitudes round the whole circle, is no edge
+        (infinity where nothing else is)."""
+        if self._projected:
+            return self._footprint_distance(theta, phi)
         (_, _), (t0, t1), (p0, p1) = self.extent
         t, p = self.coordinates(theta, phi)
-        return (t >= t0) & (t <= t1) & (p >= p0) & (p <= p1)
+        d = np.full(t.shape, np.inf)
+        if t0 > 1e-12:
+            d = np.minimum(d, t - t0)
+        if t1 < np.pi - 1e-12:
+            d = np.minimum(d, t1 - t)
+        if p1 - p0 < 2.0 * np.pi * (1.0 - 1e-6):
+            sn = np.sin(t)
+            d = np.minimum(d, np.arcsin(np.clip(sn * np.abs(np.sin(p - p0)), 0.0, 1.0)))
+            d = np.minimum(d, np.arcsin(np.clip(sn * np.abs(np.sin(p1 - p)), 0.0, 1.0)))
+        return np.where(self._in_box(t, p), d, 0.0)
+
+    def _footprint_distance(self, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
+        """A projected grid's edge distance: on its plane, the distance of
+        each node holding a value at some radius to the nearest one that
+        holds none or to the plane's border, read bilinearly at the point
+        and divided by the projection's scale and the semi-major axis."""
+        from scipy.ndimage import distance_transform_edt
+        y, x = self._axes()
+        if self._edge is None:
+            held = np.zeros((y.size, x.size), dtype=bool)
+            for v in self._values.values():
+                held |= np.isfinite(v).any(axis=0)
+            padded = np.pad(held, 1)
+            dy, dx = float(np.median(np.diff(y))), float(np.median(np.diff(x)))
+            d = distance_transform_edt(padded, sampling=(dy, dx))[1:-1, 1:-1]
+            self._edge = RegularGridInterpolator((y, x), d, bounds_error=False,
+                                                 fill_value=0.0)
+        a, b = self.coordinates(theta, phi)
+        flat = self._edge(np.stack([np.ravel(a), np.ravel(b)], axis=-1))
+        proj = self._data.projection
+        lat = proj.geodetic_latitude(np.broadcast_to(np.asarray(theta, dtype=float),
+                                                     a.shape))
+        flat = flat.reshape(a.shape)
+        return flat / (proj.scale_factor(lat) * proj.semi_major_axis)
 
     def __call__(self, name: str, r: ArrayLike, theta: ArrayLike, phi: ArrayLike
                  ) -> np.ndarray:
-        """The variable `name` at points, NaN outside the box or support."""
+        """The variable `name` at points, NaN outside the region or support."""
         if name not in self._values:
             raise KeyError(f"the grid holds {self.names}, not {name!r}")
-        t, p = self.coordinates(theta, phi)
-        r, t, p = np.broadcast_arrays(np.asarray(r, dtype=float), t, p)
+        a, b = self.coordinates(theta, phi)
+        r, a, b = np.broadcast_arrays(np.asarray(r, dtype=float), a, b)
         out = np.full(r.shape, np.nan)
         radius = self._data.radius
+        first, second = self._axes()
         for k, s in enumerate(self._segments):
             lo, hi = radius[s][0], radius[s][-1]
             top = k == len(self._segments) - 1
@@ -663,9 +821,9 @@ class RegionalGrid:
             key = (name, k)
             if key not in self._interp:
                 self._interp[key] = RegularGridInterpolator(
-                    (radius[s], self._data.theta, self._data.phi),
-                    self._values[name][s], bounds_error=False, fill_value=np.nan)
-            out[inside] = self._interp[key](np.stack([r[inside], t[inside], p[inside]],
+                    (radius[s], first, second), self._values[name][s],
+                    bounds_error=False, fill_value=np.nan)
+            out[inside] = self._interp[key](np.stack([r[inside], a[inside], b[inside]],
                                                      axis=-1))
         return out
 
@@ -677,7 +835,8 @@ class GridReader:
     and `grid_model` as the entry knows them (a mislabelled unit, the
     surface radius, discontinuity pairs, a glitched coordinate, a seam or
     pole rows to average, a fill, the lateral rule, a stride, a window of
-    the vertical axis)."""
+    the vertical axis, a projected grid's projection where its file states
+    it wrongly or not at all)."""
 
     variables: Variables
     _: KW_ONLY
@@ -692,6 +851,7 @@ class GridReader:
     lateral: str = "linear"
     stride: int = 1
     vertical: tuple[float | None, float | None] | None = None
+    projection: PolarStereographic | None = None
 
     def read(self, paths: tuple[Path, ...], dataset: Dataset, *,
              reference: Model | None = None, scales: Scales | None = None,
@@ -706,7 +866,7 @@ class GridReader:
                          pairs=self.pairs, regular=self.regular, seam=self.seam,
                          pole_rows=self.pole_rows,
                          stride=self.stride if stride is None else stride,
-                         vertical=self.vertical)
+                         vertical=self.vertical, projection=self.projection)
         if not data.is_global:
             return RegionalGrid(data, self.variables, units=self.units,
                                 reference=dataset.reference)

@@ -15,9 +15,8 @@ from types import MappingProxyType
 from ..catalogue import MineosModel
 from ..deck import MINEOS, ND, TVEL, nd_names
 from .decks import DeckReader
-from .grids import GridReader
+from .grids import EARTH_RADIUS, GridReader
 from .registry import Dataset, Source
-from .grids import EARTH_RADIUS
 from .sph import SphReader
 from .strata import Crust1Reader, Litho1Reader, TableStrataReader
 from .surfaces import CoefficientReader, GridSurfaceReader
@@ -557,6 +556,27 @@ _ENTRIES: tuple[Dataset, ...] = (
               "(the sphere of 6371 km), on 2-degree cells, each with its density, "
               "and the sublithospheric mantle's beneath; the table's geoid and "
               "gravity columns are not read."),
+    Dataset(
+        "ANT-20",
+        (Source(f"{_EMC}/ANT-20-voigtVs.r0.0-n4c.nc",
+                "ea0e3ed6aa1c7ec9eb7ba656e087e1bc5c470dbe00055aec5034be74b194bceb"),),
+        GridReader({"voigtVs": ("vs", None)}),
+        title="The Voigt-average shear velocity of Antarctica and the surrounding "
+              "oceans",
+        citation=("Lloyd, A. J., D. A. Wiens, H. Zhu, J. Tromp, A. A. Nyblade, R. C. "
+                  "Aster, S. E. Hansen, I. W. D. Dalziel, T. J. Wilson, E. R. Ivins "
+                  "and J. P. O'Donnell (2020).  Seismic structure of the Antarctic "
+                  "upper mantle imaged with adjoint tomography.  J. Geophys. Res. "
+                  "Solid Earth 125, e2019JB017823, doi:10.1029/2019JB017823",
+                  *_emc_cites("10.17611/dp/emc.2020.ant20.1")),
+        licence=_EMC_LICENCE,
+        notes="Voigt-average vs in km/s on EPSG:3031's polar stereographic plane "
+              "(true scale at 71 S), every 40 km to 6440 km from the pole, from 800 "
+              "km deep to 4 km above sea level, missing outside the model (42 % of "
+              "the square): a regional grid, for merging into a global model.  "
+              "Its axes are those its comment and proj4text state (x along 90 E, "
+              "y along 0 E); its variables' long names swap them, which the data "
+              "refute.  Most reliable south of 60 S between 60 and about 650 km."),
 )
 
 
