@@ -151,6 +151,30 @@ def _moon(name: str, member: str, title: str, cite: str, *,
                    notes=" ".join(filter(None, (_MOON_NOTES, notes))))
 
 
+#: GLAD-M25, as its paper is cited.
+_GLAD = ("Lei, W., Y. Ruan, E. Bozdağ, D. Peter, M. Lefebvre, D. Komatitsch, J. Tromp, "
+         "J. Hill, N. Podhorszki and D. Pugmire (2020).  Global adjoint tomography: "
+         "model GLAD-M25.  Geophys. J. Int. 223, 1-21, doi:10.1093/gji/ggaa253")
+
+#: Steffen & Steffen's ten models: (background profile, beta profile) and sha256.
+_SMEAN2 = "https://zenodo.org/records/13907989/files"
+_SMEAN2_SHA = {
+    ("K05", 1): "06d4405ee2b8aa7be7407412c53988f5c6905f028ecc64ae6aa776829387c49e",
+    ("K05", 4): "186bae58d544f37029f243ac0cdc8442f2e1b5cf641c2cfa041cf9577f654b96",
+    ("OM13", 1): "47cd7127c021f57d9d1b2ef512985610c53e8193a423385363626d5673fb0569",
+    ("OM13", 4): "c9020a7f27878ad9555b353a70b76c37655be70faef49a95693c5721fb164fc9",
+    ("W12back", 1): "abdcfb81b03c451ff2791673fc66bca575cf1e702602d093d3ead157c8dd0bf2",
+    ("W12back", 4): "add8316a377c0805b45cd52d3d56cbbd1a9323482e27bd2e1c16608992f761b4",
+    ("VM2", 1): "3efcaf27cb3fc2fdfba174c4cb5189f615789b8979650eb71faa045e2be876a5",
+    ("VM2", 4): "c946c8e00092b11dfe33f2510c99e1cab0fb1ad1284783b43c6ebd0d278f9dd8",
+    ("VM5a", 1): "7d8a8c80d6a09d65b15fe7e560e3c832b41fa21ff2a7f92a019f0b8402cf9c66",
+    ("VM5a", 4): "6b6b583227866e47f336212b0fe53c78eb900ce5c2e47520ad554dc495be8fa6",
+}
+
+#: Steffen & Steffen's beta profiles, as their readme states them.
+_SMEAN2_BETA = {1: "0.65 to 665 km, 0.75 to 1200 km, 1 below",
+                4: "0.8 to 1200 km, 1 below"}
+
 _ENTRIES: tuple[Dataset, ...] = (
     Dataset(
         "S20RTS",
@@ -296,11 +320,7 @@ _ENTRIES: tuple[Dataset, ...] = (
                    vertical=(50.0, None), seam="mean"),
         title="A global model from adjoint tomography, its shear velocities on EMC's "
               "half-degree grid",
-        citation=("Lei, W., Y. Ruan, E. Bozdağ, D. Peter, M. Lefebvre, D. Komatitsch, "
-                  "J. Tromp, J. Hill, N. Podhorszki and D. Pugmire (2020).  Global "
-                  "adjoint tomography: model GLAD-M25.  Geophys. J. Int. 223, 1-21, "
-                  "doi:10.1093/gji/ggaa253",
-                  *_emc_cites("10.17611/dp/emc.2020.gladm2500.1")),
+        citation=(_GLAD, *_emc_cites("10.17611/dp/emc.2020.gladm2500.1")),
         licence=_EMC_LICENCE, reference="STW105",
         notes="vsv and vsh in km/s at 342 depths from -5 to 2891 km on a half-degree "
               "grid with both poles (505 MB), discontinuities at 410 and 650 km.  Read "
@@ -577,6 +597,55 @@ _ENTRIES: tuple[Dataset, ...] = (
               "Its axes are those its comment and proj4text state (x along 90 E, "
               "y along 0 E); its variables' long names swap them, which the data "
               "refute.  Most reliable south of 60 S between 60 and about 650 km."),
+    Dataset(
+        "GLAD-M25-viscosity",
+        (Source("https://webservices.bgs.ac.uk/accessions/download/184161"
+                "?fileName=3DViscosity.nc.tar.gz",
+                "98f2a8ce993f4e74fae99aafda5184cab52efc68ea38758e4c16d8f645c20a74",
+                name="3DViscosity.nc.tar.gz", members=("3D_visc_infer_GLAD-M25.nc",)),),
+        GridReader({"log10eta": ("viscosity", None)}, units={"log10eta": "Pa s"},
+                   log10=("log10eta",), seam="mean", pole_rows="mean", stride=2),
+        title="A 3D viscosity of the mantle inferred from GLAD-M25",
+        citation=("Lloyd, A. J., O. Crawford, D. Al-Attar, J. Austermann, M. J. "
+                  "Hoggard, F. D. Richards and F. Syvret (2024).  GIA imaging of 3-D "
+                  "mantle viscosity based on palaeo sea level observations - Part I: "
+                  "Sensitivity kernels for an Earth with laterally varying viscosity.  "
+                  "Geophys. J. Int. 236, 1139-1171, doi:10.1093/gji/ggad455", _GLAD,
+                  "British Geological Survey, National Geoscience Data Centre: 3D "
+                  "viscosity model inferred from GLAD-M25, deposited data item "
+                  "184161"),
+        licence="Open Government Licence v3.0, with the acknowledgement 'Contains "
+                "data supplied by UKRI.'",
+        notes="log10 of the viscosity in Pa s from the surface to the CMB (201 depths, "
+              "1 km apart to 80 km, 5 to 400, 25 to 700, 50 below) on a half-degree "
+              "grid; read as the viscosity itself, every second node (one degree), "
+              "bilinear between nodes.  Upper 400 km from GLAD-M25's shear speed "
+              "through a calibrated anelastic parameterisation, lower mantle through "
+              "mineral physics; the crust set to the lithosphere's mean, about 1.5e26 "
+              "Pa s, its two seam columns differing by up to 6 in log10 in the top 80 "
+              "km (averaged as it is read, as are the pole rows).  Unclipped, from "
+              "10^18.3 to 10^39.1 Pa s; the paper floors it at 2e19 Pa s after "
+              "filtering to degree 64."),
+    *[Dataset(
+        f"SMEAN2-{profile}-b{beta}",
+        (Source(f"{_SMEAN2}/SMEAN2_{profile}_b{beta}.nc", sha),),
+        GridReader({"viscosity": ("viscosity", None)}, vertical_units="km",
+                   units={"viscosity": "Pa s"}, clip={"viscosity": (1e18, 1e30)}),
+        title=f"A 3D viscosity of the mantle from SMEAN2 by Wu's beta scaling, "
+              f"background {profile}, beta profile {beta}",
+        citation=("Steffen, R. and H. Steffen (2024).  A set of global "
+                  "three-dimensional viscosity models based on the SMEAN2 shear-wave "
+                  "velocity tomography model.  Zenodo, doi:10.5281/zenodo.13907989",),
+        licence="CC BY 4.0",
+        notes=f"Viscosity in Pa s at 58 depths from 25 to 2875 km (layer midpoints) on "
+              f"a half-degree grid; SMEAN2 to temperature by Karato's scaling, to "
+              f"viscosity by Wu, Wang & Steffen (2013) with Ivins & Sammis's (1995) "
+              f"activation, about the {profile} background profile, beta "
+              f"{_SMEAN2_BETA[beta]}.  "
+              f"Unclipped as published (10^2.65 Pa s at 75 km; the 25 km slice 1e40 Pa "
+              f"s everywhere, the lithosphere's marker); read clipped to 1e18 to 1e30 "
+              f"Pa s, so the lithosphere stays effectively elastic.")
+      for (profile, beta), sha in _SMEAN2_SHA.items()],
 )
 
 

@@ -173,3 +173,29 @@ def test_an_entry_is_loaded_and_its_reference_used(tmp_path, monkeypatch):
                 return RegionalGrid.__new__(RegionalGrid)
         transplanted(pm.PREM(), Dataset("r", d.sources, Regional(), title="t",
                                         citation=("c",), licence="l"))
+
+
+def test_a_source_of_values_reaching_beyond_the_layers_asked_for():
+    """A viscosity source reaching into layers that hold none is
+    re-referenced only over the layers asked for."""
+    prem = pm.PREM(ocean=False)
+    for lay in prem.layers:
+        lo, hi = lay.interval
+        if CMB <= lo and hi <= 6291e3:
+            prem = prem.with_field(lay.index, "viscosity", pm.constant_field(
+                (lo, hi), 1e21, name="viscosity"))
+    mantle = [lay.index for lay in prem.layers if "viscosity" in lay]
+
+    def eta(r, t, p):
+        return 1e21 * np.exp(np.cos(t) * np.sin(p) + (r - 5e6) / 2e6)
+
+    src = standalone({"viscosity": pm.AnalyticField((3500e3, 6340e3), eta,
+                                                    name="viscosity")}, surface=R)
+    m = transplanted(prem, src, names={"viscosity": "viscosity"}, mode="absolute",
+                     kind="log", layers=mantle, extend=True)
+    i = m.layer("lower_mantle").index
+    f = m.layer(i)["viscosity"]
+    assert isinstance(f, pm.PerturbedField) and f.kind == "log"
+    r, t, p = np.array([4000e3, 5200e3]), np.array([0.4, 2.1]), np.array([1.0, 3.0])
+    assert np.allclose(f(r, t, p), eta(r, t, p), rtol=1e-12)
+    assert "viscosity" not in m.layer("lid")

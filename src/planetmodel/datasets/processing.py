@@ -127,12 +127,17 @@ def _layer_at(model: Model, r: float) -> Any:
     return model.layer(model.skeleton.locate(r).layer)
 
 
-def _pieces(holders: list[Any], *, split: Sequence[float]) -> list[tuple[float, float,
-                                                                         Any]]:
-    """(lo, hi, layer) for every holder layer cut at the radii of `split`."""
+def _pieces(holders: list[Any], *, split: Sequence[float],
+            span: tuple[float, float] | None = None) -> list[tuple[float, float, Any]]:
+    """(lo, hi, layer) for every holder layer cut at the radii of `split`,
+    within `span` where one is given."""
     out = []
     for layer in holders:
         lo, hi = (float(x) for x in layer.interval)
+        if span is not None:
+            lo, hi = max(lo, span[0]), min(hi, span[1])
+            if not hi > lo:
+                continue
         cuts = sorted({lo, hi} | {float(r) for r in split if lo < r < hi})
         out += [(a, b, layer) for a, b in zip(cuts, cuts[1:])]
     return out
@@ -140,12 +145,14 @@ def _pieces(holders: list[Any], *, split: Sequence[float]) -> list[tuple[float, 
 
 def rereferenced(source: Model, onto: Model, *, names: Sequence[str] | None = None,
                  mode: str = "relative", source_reference: Model | None = None,
-                 kind: str = "relative") -> dict[str, Perturbation]:
+                 kind: str = "relative",
+                 span: tuple[float, float] | None = None) -> dict[str, Perturbation]:
     """Each name's perturbation, by the rule of the module docstring:
     `names` the source's names to carry (every one it holds by default),
     `source_reference` the reference of a data set of values under
     `mode="relative"`, and `kind` the kind a data set of values is
-    expressed in (a perturbed source keeps its own)."""
+    expressed in (a perturbed source keeps its own), and `span` the radii
+    (lo, hi) of the source taken, all of its support by default."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     if kind not in KINDS:
@@ -179,7 +186,7 @@ def rereferenced(source: Model, onto: Model, *, names: Sequence[str] | None = No
         else:
             ref_model, split = onto, onto.skeleton.boundaries
         pieces = []
-        for a, b, layer in _pieces(holders, split=split):
+        for a, b, layer in _pieces(holders, split=split, span=span):
             v = layer[name]
             v = v if same_interval(v.interval, (a, b)) else v.on_interval(a, b)
             R = reference_field(_layer_at(ref_model, 0.5 * (a + b)), name)

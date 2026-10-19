@@ -79,7 +79,7 @@ from __future__ import annotations
 import os
 import warnings
 from collections.abc import Iterable, Mapping
-from dataclasses import KW_ONLY, dataclass, field
+from dataclasses import KW_ONLY, dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -848,7 +848,10 @@ class GridReader:
     surface radius, discontinuity pairs, a glitched coordinate, a seam or
     pole rows to average, a fill, the lateral rule, a stride, a window of
     the vertical axis, a projected grid's projection where its file states
-    it wrongly or not at all)."""
+    it wrongly or not at all); `log10` the variables that hold the base-10
+    logarithm of their quantity, in the unit `units` gives it, and `clip`
+    a floor and a cap in SI for a variable whose source leaves its values
+    unbounded, both applied as the file is read."""
 
     variables: Variables
     _: KW_ONLY
@@ -864,6 +867,22 @@ class GridReader:
     stride: int = 1
     vertical: tuple[float | None, float | None] | None = None
     projection: PolarStereographic | None = None
+    log10: tuple[str, ...] = ()
+    clip: Mapping[str, tuple[float, float]] | None = None
+
+    def _prepared(self, data: Gridded) -> Gridded:
+        """The data with `log10` and `clip` applied."""
+        if not self.log10 and not self.clip:
+            return data
+        values = dict(data.values)
+        for key in self.log10:
+            values[key] = 10.0 ** np.asarray(values[key], dtype=float)
+        for key, (lo, hi) in (self.clip or {}).items():
+            if not lo < hi:
+                raise ValueError(f"the floor of {key!r} is not below its cap")
+            factor = parse_unit((self.units or {}).get(key, data.units[key]))[1]
+            values[key] = np.clip(values[key], lo / factor, hi / factor)
+        return replace(data, values=values)
 
     def read(self, paths: tuple[Path, ...], dataset: Dataset, *,
              reference: Model | None = None, scales: Scales | None = None,
@@ -879,6 +898,7 @@ class GridReader:
                          pole_rows=self.pole_rows,
                          stride=self.stride if stride is None else stride,
                          vertical=self.vertical, projection=self.projection)
+        data = self._prepared(data)
         if not data.is_global:
             return RegionalGrid(data, self.variables, units=self.units,
                                 reference=dataset.reference, citation=dataset.citation)

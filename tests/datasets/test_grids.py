@@ -304,3 +304,40 @@ def test_the_shipped_emc_entries_hold_to_their_contract(name):
         "https://data.earthscope.org/archive/seismology/products/emc/netcdf/")
     assert "CC BY 4.0" in d.licence and any("10.17611/" in c for c in d.citation)
     assert any("Trabant" in c for c in d.citation)
+
+
+def test_a_log10_variable_and_a_floor_and_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLANETMODEL_DATA", str(tmp_path / "cache"))
+    rng = np.random.default_rng(2)
+    log10 = rng.uniform(17.0, 40.0, (DEPTHS.size, 46, 91))
+    log10[:, 0, :] = log10[:, 0, :1]                   # single-valued poles
+    log10[:, -1, :] = log10[:, -1, :1]
+    log10[:, :, -1] = log10[:, :, 0]                   # the seam repeated
+    path = write(tmp_path / "eta.nc", units="", name="log10eta", values=log10)
+
+    def entry(reader):
+        return Dataset("eta", (Source(path.as_uri(), hashlib.sha256(
+            path.read_bytes()).hexdigest()),), reader, title="t", citation=("c",),
+            licence="l")
+
+    plain = GridReader({"log10eta": ("viscosity", None)}, units={"log10eta": "Pa s"},
+                       log10=("log10eta",))
+    m = datasets.load(entry(plain))
+    lay = m.layer(m.skeleton.locate(5e6).layer)
+    r = R - 1e3 * DEPTHS[6]
+    theta, phi = np.radians(90.0 - 30.0), np.radians(40.0)     # a node of the grid
+    j, k = list(np.linspace(-90.0, 90.0, 46)).index(30.0), 55
+    assert np.isclose(np.linspace(-180.0, 180.0, 91)[k], 40.0)
+    assert lay["viscosity"](r, theta, phi) == pytest.approx(10.0 ** log10[6, j, k],
+                                                            rel=1e-5)
+    clipped = GridReader({"log10eta": ("viscosity", None)}, units={"log10eta": "Pa s"},
+                         log10=("log10eta",), clip={"log10eta": (1e18, 1e30)})
+    c = datasets.load(entry(clipped))
+    lay = c.layer(c.skeleton.locate(5e6).layer)
+    want = np.clip(10.0 ** log10[6, j, k], 1e18, 1e30)
+    assert lay["viscosity"](r, theta, phi) == pytest.approx(want, rel=1e-5)
+    check_dataset(entry(clipped), paths=datasets.fetch(entry(clipped)))
+    with pytest.raises(ValueError, match="not below its cap"):
+        datasets.load(entry(GridReader({"log10eta": ("viscosity", None)},
+                                       units={"log10eta": "Pa s"}, log10=("log10eta",),
+                                       clip={"log10eta": (1e30, 1e18)})))

@@ -132,8 +132,13 @@ def transplanted(model: Model, source: Model | DatasetLike, *,
             source_reference = reference_of(d)
         source = loaded
     landing = _landing(source, model, names)
+    span = None
+    if layers is not None:
+        chosen = [model.layer(k).interval for k in layers]
+        span = (min(lo for lo, _ in chosen), max(hi for _, hi in chosen))
     perturbations = rereferenced(source, model, names=list(landing), mode=mode,
-                                 source_reference=source_reference, kind=kind)
+                                 source_reference=source_reference, kind=kind,
+                                 span=span)
     out = model.with_citation(*source.citation, *(
         () if source_reference is None else source_reference.citation))
     for name, p in perturbations.items():

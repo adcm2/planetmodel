@@ -118,4 +118,3 @@ def test_the_base_as_geometry_and_as_a_lid():
     assert isinstance(f, pm.PerturbedField) and f.kind == "log"
     assert np.allclose(f(r, tt, pp), np.where(shallow, 1e30, 1e21), rtol=1e-12)
     assert lidded.citation == flat.citation
-
