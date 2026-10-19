@@ -42,17 +42,24 @@ The shipped sets are those read in their sources:
   (`"layered"`, after Tackley et al. 1993); beta and d ln Vs / dT are
   the caller's, the table giving neither (`CONVECTIONS`).
 
-The regime of each, purely thermal anomalies, is its docstring's, not a
-check.
+A set states the anomaly its law takes (`takes`, "velocity" or
+"temperature", as `building.ANOMALIES` names them) and applies the law to
+numbers at radii in metres (`temperature`, `relative_density`,
+`log_viscosity`), so that whatever applies it asks the set rather than
+its type.  The regime of each, purely thermal anomalies, is its
+docstring's, not a check.
 """
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import KW_ONLY, dataclass, fields
+from typing import ClassVar
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 from ..model import cited
+from . import laws
 from .profiles import (Profile, ProfileLike, as_profile, constant, polynomial, spline,
                        tabulated)
 
@@ -61,7 +68,8 @@ __all__ = ["ParameterSet", "Sensitivity", "DensityScaling", "Expansivity",
            "SL3D_EXPANSIVITY", "SL3D_VISCOSITY", "MILNE_2018_VISCOSITY",
            "PAULSON_2005_DENSITY_SCALING", "PAULSON_2005_EXPANSIVITY",
            "MITROVICA_2011_DENSITY_SCALING", "GPLSPEC_DENSITY_SCALING",
-           "IVINS_SAMMIS_1995_EXPANSIVITY", "ivins_sammis_beta", "CONVECTIONS"]
+           "IVINS_SAMMIS_1995_EXPANSIVITY", "ivins_sammis_beta", "CONVECTIONS",
+           "ViscosityLaw", "DensityLaw"]
 
 
 @dataclass(frozen=True)
@@ -76,7 +84,7 @@ class ParameterSet:
     def __post_init__(self) -> None:
         object.__setattr__(self, "citation", cited((), self.citation))
         for f in fields(self):
-            if f.name not in ("name", "citation", "_"):
+            if f.name not in ("name", "citation", "_", "takes"):
                 object.__setattr__(self, f.name, as_profile(getattr(self, f.name)))
 
     def cite(self) -> str:
@@ -88,28 +96,52 @@ class ParameterSet:
 class Sensitivity(ParameterSet):
     """d ln Vs / dT in 1/K, negative."""
 
+    takes: ClassVar[str] = "velocity"
     sensitivity: ProfileLike
+
+    def temperature(self, dlnvs: ArrayLike, r: ArrayLike) -> np.ndarray:
+        """dT in K of a velocity anomaly at radii `r` in metres."""
+        return laws.temperature_from_velocity(dlnvs, sensitivity=self.sensitivity(r))
 
 
 @dataclass(frozen=True)
 class DensityScaling(ParameterSet):
     """d ln rho / d ln Vs."""
 
+    takes: ClassVar[str] = "velocity"
     scaling: ProfileLike
+
+    def relative_density(self, dlnvs: ArrayLike, r: ArrayLike) -> np.ndarray:
+        """dln rho of a velocity anomaly at radii `r` in metres."""
+        return laws.density_from_velocity(dlnvs, scaling=self.scaling(r))
 
 
 @dataclass(frozen=True)
 class Expansivity(ParameterSet):
     """The volumetric thermal expansivity alpha in 1/K."""
 
+    takes: ClassVar[str] = "temperature"
     expansivity: ProfileLike
+
+    def relative_density(self, dt: ArrayLike, r: ArrayLike) -> np.ndarray:
+        """dln rho of a temperature anomaly in K at radii `r` in metres."""
+        return laws.density_from_temperature(dt, expansivity=self.expansivity(r))
+
+    def temperature(self, dlnrho: ArrayLike, r: ArrayLike) -> np.ndarray:
+        """dT in K of a relative density anomaly at radii `r` in metres."""
+        return laws.temperature_from_density(dlnrho, expansivity=self.expansivity(r))
 
 
 @dataclass(frozen=True)
 class ExponentialViscosity(ParameterSet):
     """eps in dln eta = -eps dT, in 1/K."""
 
+    takes: ClassVar[str] = "temperature"
     epsilon: ProfileLike
+
+    def log_viscosity(self, dt: ArrayLike, r: ArrayLike) -> np.ndarray:
+        """dln eta of a temperature anomaly in K at radii `r` in metres."""
+        return laws.exponential_viscosity(dt, epsilon=self.epsilon(r))
 
 
 @dataclass(frozen=True)
@@ -118,10 +150,25 @@ class BetaViscosity(ParameterSet):
     `activation` a = (E* + p V*) / R in K, `background` T_0 in K and
     `sensitivity` d ln Vs / dT in 1/K."""
 
+    takes: ClassVar[str] = "velocity"
     beta: ProfileLike
     activation: ProfileLike
     background: ProfileLike
     sensitivity: ProfileLike
+
+    def log_viscosity(self, dlnvs: ArrayLike, r: ArrayLike) -> np.ndarray:
+        """dln eta of a velocity anomaly at radii `r` in metres."""
+        return laws.beta_viscosity(dlnvs, beta=self.beta(r),
+                                   activation=self.activation(r),
+                                   background=self.background(r),
+                                   sensitivity=self.sensitivity(r))
+
+
+#: A set with a law of viscosity (`log_viscosity`).
+type ViscosityLaw = ExponentialViscosity | BetaViscosity
+
+#: A set with a law of density (`relative_density`).
+type DensityLaw = DensityScaling | Expansivity
 
 
 _CRAWFORD = ("Crawford, O. (2019).  On the viscoelastic deformation of the Earth.  "
@@ -236,4 +283,3 @@ def ivins_sammis_beta(beta: ProfileLike, sensitivity: ProfileLike, *,
         _TABLE1[convection], 1e3), sensitivity,
         name=f"Wu et al. 2013 with Ivins & Sammis 1995 ({convection})",
         citation=(_WU, _IVINS))
-

@@ -13,7 +13,9 @@ a model placed by boundary reliefs (the `geometry` group); one placed
 by a flattening (the `displacement` field); and a two-layer model with
 fields on both its interfaces (the `surfaces` group, a shape kernel by
 the bilinear rule and a shift by the bicubic one, on a grid without its
-poles).
+poles); and PREM given a viscosity and converted by sl3d's chain from a
+perturbation of its shear speeds (`model_converted.nc`, the viscosity a
+log perturbation and the model's citation the chain's).
 
 Beside them, `model_kinds.nc` (an absolute perturbation of `rho` and a
 log one of `viscosity`), `model_tensors.nc` (a rank-2 `stress`, radial
@@ -287,7 +289,34 @@ def model_files(directory: Path) -> list[Path]:
                     grid=pm.gauss_legendre(8)),
         write_model(directory / "model_surfaces.nc", kernel, grid=pm.gauss_legendre(4),
                     fields=["rho", "vp"], surfaces=on_faces),
+        write_model(directory / "model_converted.nc", converted(),
+                    grid=pm.gauss_legendre(6),
+                    fields=["rho", "vsv", "vsh", "viscosity"]),
     ]
+
+
+def converted() -> pm.Model:
+    """PREM with a viscosity of 2e21 Pa s below 670 km and 5e20 above, its
+    vsv and vsh perturbed over the lower mantle, through sl3d's chain."""
+    from planetmodel.conversion import building, parameters
+    prem = pm.PREM()
+    lo, hi = 3480e3, 5701e3
+    for lay in prem.layers:
+        a, b = lay.interval
+        if lo <= a and b <= 6291e3:
+            prem = prem.with_field(lay.index, "viscosity", pm.constant_field(
+                (a, b), 2e21 if b <= hi else 5e20, name="viscosity"))
+
+    def dlnvs(r: np.ndarray, t: np.ndarray, p: np.ndarray) -> np.ndarray:
+        return 0.01 * np.sin(t) ** 2 * np.cos(2 * p) * (0.5 + (r - lo) / (hi - lo))
+
+    for name in ("vsv", "vsh"):
+        prem = pm.perturbed(prem, name, pm.AnalyticField((lo, hi), dlnvs),
+                            kind="relative")
+    dt = building.temperature_anomaly(
+        building.velocity_anomaly(prem), scaling=parameters.SL3D_DENSITY_SCALING,
+        expansivity=parameters.SL3D_EXPANSIVITY)
+    return building.with_viscosity(prem, dt, parameters.SL3D_VISCOSITY)
 
 
 #: The JSON documents of the walk fixtures, as bytes on disk: the
