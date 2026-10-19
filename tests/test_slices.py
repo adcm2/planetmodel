@@ -365,3 +365,127 @@ def test_a_field_correlates_to_one_with_itself_and_to_zero_with_an_orthogonal_on
     assert np.allclose(both.by_degree[0, 2:], 1.0)
     with pytest.raises(ValueError, match="exactly one"):
         slices.correlation(ma, "vs", mb, lmax=3)
+
+
+# -- kernels ------------------------------------------------------------------
+
+def _cubic(r, t, p):
+    """Cubic in r, signed across the sphere."""
+    return (1.0 + r + r ** 3) * (np.cos(t) + 0.5 * np.sin(t) * np.cos(p))
+
+
+@pytest.fixture
+def kernel(two):
+    """`two` with a kernel K, cubic in r on the outer layer and held there
+    on gridded nodes that hold it exactly, of length^-2 by its spec."""
+    from planetmodel import FieldSpec, GriddedField, SCALAR
+    from planetmodel.units import Dimensions
+    grid = gauss_legendre(6)
+    k = GriddedField.sampled(AnalyticField((0.5, 1.0), _cubic), grid,
+                             breaks=[0.5, 0.7, 1.0], ngll=4, lateral="linear")
+    m = two.with_field(1, "K", k)
+    return m.replaced(specs={**m.specs, "K": FieldSpec(SCALAR, Dimensions(length=-2))})
+
+
+def test_an_integral_along_the_radius_is_its_closed_form(kernel):
+    grid = gauss_legendre(6)
+    t, p = np.meshgrid(grid.colatitudes, grid.longitudes, indexing="ij")
+    angular = np.cos(t) + 0.5 * np.sin(t) * np.cos(p)
+
+    def volume(a, b):
+        return (b ** 3 / 3 + b ** 4 / 4 + b ** 6 / 6) - (a ** 3 / 3 + a ** 4 / 4
+                                                        + a ** 6 / 6)
+
+    whole = slices.integrated(kernel, "K", grid=grid)
+    assert whole.radius == 1.0 and whole.grid == grid
+    assert np.allclose(whole.values, volume(0.5, 1.0) * angular, rtol=0, atol=1e-14)
+    assert whole.label == "K, integrated along the radius, r^2 dr [m]"
+    part = slices.integrated(kernel, "K", grid=grid, radii=(0.6, 0.9))
+    assert np.allclose(part.values, volume(0.6, 0.9) * angular, rtol=0, atol=1e-14)
+    along = slices.integrated(kernel, "K", grid=grid, weight="radius")
+    length = (1.0 + 1.0 / 2 + 1.0 / 4) - (0.5 + 0.125 + 0.5 ** 4 / 4)
+    assert np.allclose(along.values, length * angular, rtol=0, atol=1e-14)
+    assert along.label == "K, integrated along the radius, dr [m-1]"
+    # a radial field of pieces, across both layers
+    rho = slices.integrated(kernel, "rho", grid=grid)
+    assert np.allclose(rho.values, (10.0 * 0.125 + 4.0 * 0.875) / 3, rtol=1e-14)
+    # a field declaring no pieces, by n points on its layer
+    smooth = slices.integrated(kernel, "vs", grid=grid, radii=(0.5, 1.0))
+    exact = (4.0 * (1 - 0.125) / 3 + 0.3 * np.cos(t) * (1 - 0.5 ** 4) / 4
+             + 0.2 * np.sin(t) * np.cos(p) * (1 - 0.5 ** 4) / 4)
+    assert np.allclose(smooth.values, exact, rtol=1e-13)
+    with pytest.raises(ValueError, match="weight"):
+        slices.integrated(kernel, "K", grid=grid, weight="area")
+    with pytest.raises(ValueError, match="no layer"):
+        slices.integrated(kernel, "K", grid=grid, radii=(0.1, 0.4))
+
+
+def test_the_total_profile_is_r2_times_the_integral_over_the_sphere(two):
+    grid = gauss_legendre(10)
+    mean = slices.mean_profile(two, "vs", mean_grid=grid, n=6)
+    total = slices.mean_profile(two, "vs", mean_grid=grid, n=6, total=True)
+    for a, b in zip(mean.layers, total.layers):
+        assert np.allclose(b.values, 4.0 * np.pi * a.radius ** 2 * a.values,
+                           rtol=1e-15)
+    assert total.label == "vs, r^2 times the integral over the sphere [m3 s-1]"
+
+
+def test_a_function_on_an_interface_is_a_sphere_slice_at_its_radius(kernel):
+    from planetmodel import FieldSpec, GriddedFunction, SCALAR, flattening
+    from planetmodel.units import Dimensions
+
+    def shape(t, p):
+        return np.sin(t) ** 2 * np.cos(2 * p) - 0.2 * np.cos(t)
+
+    gf = GriddedFunction.sampled(shape, gauss_legendre(8))
+    m = kernel.replaced(specs={**kernel.specs,
+                               "K_shape": FieldSpec(SCALAR, Dimensions(length=-2))})
+    s = slices.surface(m, gf, 0, name="K_shape")
+    assert s.radius == 0.5 and s.grid == gf.grid
+    assert np.array_equal(s.values, gf.values)
+    assert s.label == "K_shape, on interface 0 [m-2]"
+    assert np.allclose(np.linalg.norm(s.reference, axis=-1), 0.5)
+    plain = slices.surface(m, shape, -1, grid=gauss_legendre(4))
+    t, p = np.meshgrid(plain.grid.colatitudes, plain.grid.longitudes, indexing="ij")
+    assert plain.radius == 1.0 and np.allclose(plain.values, shape(t, p))
+    assert plain.label == "field, on interface 1"
+    assert slices.surface(m, shape, 1).grid.ntheta == 180
+    flat = m.stretched(flattening(0.1))
+    moved = slices.surface(flat, gf, 1)
+    assert not np.allclose(np.linalg.norm(moved.physical, axis=-1), 1.0)
+    with pytest.raises(KeyError):
+        slices.surface(m, shape, "cmb")
+
+
+def test_any_sphere_slice_has_a_spectrum(kernel):
+    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
+    from planetmodel import GriddedFunction
+    from planetmodel.harmonics import synthesise
+    c = np.zeros((2, 4, 4))
+    c[0, 2, 1], c[1, 3, 3] = 1.5, -0.5
+    gf = GriddedFunction.sampled(lambda t, p: synthesise(c, t, p), gauss_legendre(6))
+    sp = slices.spectrum_of(slices.surface(kernel, gf, 1), lmax=3)
+    assert np.allclose(sp.power, [0, 0, 1.5 ** 2 / (4 * np.pi), 0.25 / (4 * np.pi)],
+                       atol=1e-14)
+    column = slices.spectrum_of(slices.integrated(kernel, "K", grid=gauss_legendre(6)),
+                                lmax=3)
+    assert column.power[1] > 0 and np.allclose(column.power[2:], 0, atol=1e-28)
+    with pytest.raises(ValueError, match="band"):
+        slices.spectrum_of(slices.surface(kernel, gf, 1), lmax=7)
+
+
+def test_a_normalised_slice_is_divided_by_its_largest_value(kernel):
+    grid = gauss_legendre(6)
+    s = slices.normalised(slices.integrated(kernel, "K", grid=grid))
+    assert np.isclose(np.max(np.abs(s.values)), 1.0)
+    assert s.label == "K, integrated along the radius, r^2 dr, normalised"
+    sec = slices.normalised(slices.section(kernel, "K", (0.6, 0.2), azimuth=1.0,
+                                           length=1.2, n=5, m=11))
+    held = np.concatenate([lay.values[np.isfinite(lay.values)] for lay in sec.layers])
+    assert np.isclose(np.max(np.abs(held)), 1.0) and sec.label == "K, normalised"
+    dep = slices.normalised(slices.profile(kernel, "vs", 1.0, 2.0, n=5,
+                                           relative_to="mean", mean_grid=grid))
+    assert dep.label == "vs, percent from the mean, normalised"
+    assert np.isclose(np.nanmax(np.abs(dep.layers[1].values)), 1.0)
+    with pytest.raises(ValueError, match="zero"):
+        slices.normalised(slices.surface(kernel, lambda t, p: 0.0 * t, 1, grid=grid))

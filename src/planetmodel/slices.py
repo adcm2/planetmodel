@@ -51,6 +51,23 @@ over the degrees from 1 to `lmax`, NaN where a degree has no power in
 either (its amplitude below `NO_POWER` of the field's); the fields may be
 two models' or two of one model's.
 
+**Kernels and other signed fields.**  `integrated` maps a field
+integrated along each radius over a span of reference radii, the
+integral of f r^2 dr (`weight="volume"`, the share of each direction in
+the field's volume integral: a sensitivity kernel's column) or of f dr
+(`weight="radius"`); within a layer it is Gauss-Legendre on each of the
+field's radial pieces, exact for a piecewise polynomial of their degree
+with the weight, or on the whole layer for a field that declares none,
+and a layer lacking the field adds nothing.  `mean_profile(...,
+total=True)` gives r^2 times the field's integral over the sphere, the
+one-dimensional kernel K_1D whose integral with dm dr is that of K dm dV
+for a radial dm.  `surface` is a sphere slice of a function of the
+angles on one of the model's interfaces (a field on interfaces from a
+model file, a shift of a boundary), on its own grid where it has one;
+`spectrum_of` analyses any sphere slice, a surface's or an integral's
+among them.  `normalised` divides a slice by its largest absolute
+value, its label saying so.
+
 **Interfaces.**  A section or a profile keeps both sides of an
 interface, each layer's numbers including its own ends.  A sphere slice
 is asked for one side, `side="below"` or `"above"`, required where its
@@ -75,12 +92,14 @@ from .model import Model
 from .units import Dimensions, Scales, scaled_unit
 
 if TYPE_CHECKING:
+    from .geometry import InterfaceInfo
     from .sampling import AngularGrid
 
-__all__ = ["AT", "SIDES", "DEPARTURES", "NO_POWER", "Fields", "RelativeTo", "Shown",
-           "SliceLayer", "SphereSlice", "SectionSlice", "ProfileSlice",
-           "Spectrum", "Correlation", "sphere", "section", "profile",
-           "mean_profile", "evaluate", "spectrum", "correlation"]
+__all__ = ["AT", "SIDES", "DEPARTURES", "WEIGHTS", "NO_POWER", "Fields", "RelativeTo",
+           "Slice", "Shown", "SliceLayer", "SphereSlice", "SectionSlice",
+           "ProfileSlice", "Spectrum", "Correlation", "sphere", "section", "profile",
+           "mean_profile", "integrated", "surface", "normalised", "evaluate",
+           "spectrum", "spectrum_of", "correlation"]
 
 #: Where a slice's points are: in the reference body, or the physical one.
 AT = ("reference", "physical")
@@ -90,6 +109,9 @@ SIDES = ("below", "above")
 
 #: How a departure is expressed.
 DEPARTURES = ("percent", "difference", "log10")
+
+#: The weights of an integral along the radius: r^2 dr and dr.
+WEIGHTS = ("volume", "radius")
 
 #: The amplitude of a degree, relative to the whole field's, below which a
 #: correlation takes the degree to have no power: what the analysis gives
@@ -121,7 +143,8 @@ class Shown:
     from (`"mean"`, `"reference"`, or the other model's name) and
     `departure` how it is expressed; `statistic` `"spherical mean"` for a
     mean profile; `dimensions` and `scales` the field's and the model's,
-    so that the label states the unit.
+    so that the label states the unit; `normalised` that the values were
+    divided by their largest absolute value, which leaves them no unit.
     """
 
     name: str | None
@@ -133,11 +156,12 @@ class Shown:
     statistic: str | None = None
     dimensions: Dimensions | None = None
     scales: Scales = Scales.SI
+    normalised: bool = False
 
     @property
     def label(self) -> str:
         """A label for an axis or a colour bar: "vs, percent from the mean
-        [%]", "rho [kg m-3]", "|u| [m]"."""
+        [%]", "rho [kg m-3]", "|u| [m]", "K, normalised"."""
         base = self.name or "field"
         if self.component == "norm":
             base = f"|{base}|"
@@ -147,16 +171,19 @@ class Shown:
             base = f"{base}, {self.statistic}"
         unit = None if self.dimensions is None else scaled_unit(self.dimensions,
                                                                  self.scales)
-        if self.relative_to is None:
-            return base if unit is None else f"{base} [{unit}]"
-        ref = (f"the {self.relative_to}" if self.relative_to in ("mean", "reference")
-               else self.relative_to)
-        if self.departure == "percent":
-            return f"{base}, percent from {ref} [%]"
-        if self.departure == "log10":
-            return f"{base}, log10 of the ratio to {ref}"
-        return (f"{base}, difference from {ref}" if unit is None
-                else f"{base}, difference from {ref} [{unit}]")
+        if self.relative_to is not None:
+            ref = self.relative_to
+            if ref in ("mean", "reference"):
+                ref = f"the {ref}"
+            if self.departure == "percent":
+                base, unit = f"{base}, percent from {ref}", "%"
+            elif self.departure == "log10":
+                base, unit = f"{base}, log10 of the ratio to {ref}", None
+            else:
+                base = f"{base}, difference from {ref}"
+        if self.normalised:
+            return f"{base}, normalised"
+        return base if unit is None else f"{base} [{unit}]"
 
     @property
     def is_departure(self) -> bool:
@@ -258,6 +285,10 @@ class ProfileSlice:
     def label(self) -> str:
         """The label of what the slice shows."""
         return self.shown.label
+
+
+#: A slice of any form, as `normalised` takes one.
+type Slice = SphereSlice | SectionSlice | ProfileSlice
 
 
 @dataclass(frozen=True)
@@ -760,19 +791,25 @@ def profile(model: Model, fields: Fields, theta: float, phi: float, *, n: int = 
 
 
 def mean_profile(model: Model, fields: Fields, *, n: int = 100,
-                 mean_grid: AngularGrid | None = None) -> ProfileSlice:
+                 mean_grid: AngularGrid | None = None,
+                 total: bool = False) -> ProfileSlice:
     """The spherical mean of a scalar field along the radius, `n` points
     per layer, its ends included; a field without a mean of its own takes
-    it on `mean_grid`."""
+    it on `mean_grid`.  With `total`, r^2 times the integral over the
+    sphere, 4 pi r^2 times the mean: the one-dimensional kernel of the
+    module docstring."""
     if int(n) < 2:
         raise ValueError(f"n must be at least 2, got {n}")
     name = fields if isinstance(fields, str) else None
     if name is not None and not model.layers_with(name):
         raise KeyError(f"no layer holds a field {name!r}")
     spec = None if name is None else model.spec(name)
-    shown = Shown(name, statistic="spherical mean",
-                  dimensions=None if spec is None else spec.dimensions,
-                  scales=model.scales)
+    dims = None if spec is None or spec.dimensions is None else spec.dimensions
+    if total and dims is not None:
+        dims = dims * Dimensions(length=2)
+    shown = Shown(name, statistic=("r^2 times the integral over the sphere" if total
+                                   else "spherical mean"),
+                  dimensions=dims, scales=model.scales)
     out = []
     for layer in range(model.nlayers):
         field = _field_of(model, fields, layer)
@@ -792,8 +829,136 @@ def mean_profile(model: Model, fields: Fields, *, n: int = 100,
                                  "its own: pass mean_grid=")
             mean = spherical_mean(field, grid=mean_grid)
             v = _real(mean.evaluate(r, None, None), mean)
+            if total:
+                v = 4.0 * np.pi * r ** 2 * v
         out.append(SliceLayer(layer, r, v, X, X))
     return ProfileSlice(None, None, tuple(out), shown)
+
+
+def _pieces(field: Field, lo: float, hi: float, n: int
+            ) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Gauss-Legendre radii and weights on [lo, hi] within a field's
+    layer: on each of its radial pieces, with points enough to be exact
+    for their degree times r^2, or `n` points on the whole span."""
+    pieces = getattr(field, "radial_pieces", lambda: None)()
+    if pieces is None:
+        breaks, count = np.array([lo, hi]), int(n)
+    else:
+        b, degree = pieces
+        inside = np.asarray(b, dtype=float)
+        breaks = np.unique(np.concatenate([[lo, hi], inside[(inside > lo)
+                                                            & (inside < hi)]]))
+        count = (int(degree) + 2) // 2 + 1
+    x, w = np.polynomial.legendre.leggauss(count)
+    out = []
+    for a, b in zip(breaks[:-1], breaks[1:]):
+        out.append((0.5 * (b - a) * x + 0.5 * (a + b), 0.5 * (b - a) * w))
+    return out
+
+
+def integrated(model: Model, fields: Fields, *,
+               radii: tuple[float, float] | None = None, weight: str = "volume",
+               grid: AngularGrid | None = None, n: int = 32,
+               component: int | str | None = None,
+               frame: str | None = None) -> SphereSlice:
+    """A map of a field integrated along each radius, by the rule of the
+    module docstring: over the reference radii `radii` (lo, hi), the whole
+    body by default, with `weight` one of `WEIGHTS`, on `grid`
+    (equiangular at one degree by default); `n` Gauss-Legendre points on
+    a layer whose field declares no radial pieces; a component and frame
+    as for a sphere.  The slice's radius is the span's outer end, its
+    points there."""
+    from .sampling import equiangular
+    if weight not in WEIGHTS:
+        raise ValueError(f"weight must be one of {WEIGHTS}, got {weight!r}")
+    if int(n) < 1:
+        raise ValueError(f"n must be at least 1, got {n}")
+    b = model.skeleton.boundaries
+    lo, hi = (float(b[0]), float(b[-1])) if radii is None else map(float, radii)
+    if not hi > lo:
+        raise ValueError(f"radii must be (lo, hi) with lo < hi, got {radii}")
+    grid = equiangular(180, 360) if grid is None else grid
+    values, shown = _evaluator(model, fields, component=component, frame=frame,
+                               relative_to=None, departure=None, mean_grid=None)
+    th, ph = np.broadcast_arrays(grid.colatitudes[:, None], grid.longitudes[None, :])
+    total = np.zeros(th.shape)
+    held = False
+    for layer in range(model.nlayers):
+        a, c = model.skeleton.interval(layer)
+        a, c = max(a, lo), min(c, hi)
+        field = _field_of(model, fields, layer)
+        if field is None or not c > a:
+            continue
+        held = True
+        for r, w in _pieces(field, a, c, n):
+            factor = w * (r ** 2 if weight == "volume" else 1.0)
+            for rk, fk in zip(r, factor):
+                total += fk * values(layer, np.full(th.shape, rk), th, ph)
+    if not held:
+        raise ValueError(f"no layer within [{lo}, {hi}] holds the field")
+    dims = shown.dimensions
+    if dims is not None:
+        dims = dims * Dimensions(length=3 if weight == "volume" else 1)
+    shown = Shown(shown.name, component=component, frame=frame,
+                  statistic=f"integrated along the radius, "
+                            f"{'r^2 dr' if weight == 'volume' else 'dr'}",
+                  dimensions=dims, scales=model.scales)
+    points = cartesian_points(hi, grid.colatitudes[:, None], grid.longitudes[None, :])
+    return SphereSlice(hi, grid, total, points, _forward(model, points), shown)
+
+
+def surface(model: Model, function: Callable[[np.ndarray, np.ndarray], ArrayLike],
+            interface: int | str, *, name: str | None = None,
+            grid: AngularGrid | None = None) -> SphereSlice:
+    """A function of (theta, phi) on one of the model's interfaces, by
+    index or name, as a sphere slice at its reference radius: on `grid`,
+    by default the function's own where it has one (a `GriddedFunction`'s,
+    whose values the slice then holds at its nodes) and equiangular at
+    one degree otherwise; `name` the function's, its unit the model's
+    spec of it."""
+    from .sampling import equiangular
+    face = model.geometry.interface(interface)
+    own = getattr(function, "grid", None)
+    grid = own if grid is None else grid
+    grid = equiangular(180, 360) if grid is None else grid
+    th, ph = np.broadcast_arrays(grid.colatitudes[:, None], grid.longitudes[None, :])
+    held = getattr(function, "values", None)
+    v = (np.asarray(held) if own is not None and held is not None and own == grid
+         else np.asarray(function(th, ph)))
+    if np.iscomplexobj(v):
+        raise TypeError("the function is complex; slice its real or imaginary part")
+    v = np.array(np.broadcast_to(v.astype(float, copy=False), th.shape))
+    spec = None if name is None else model.spec(name)
+    shown = Shown(name, statistic=f"on {_face_label(face)}",
+                  dimensions=None if spec is None else spec.dimensions,
+                  scales=model.scales)
+    points = cartesian_points(face.radius, th, ph)
+    return SphereSlice(face.radius, grid, v, points, _forward(model, points), shown)
+
+
+def _face_label(face: InterfaceInfo) -> str:
+    """An interface as a label names it."""
+    return (f"the interface {face.name}" if face.name
+            else f"interface {face.index}")
+
+
+def normalised(slice_: Slice) -> Slice:
+    """The slice divided by its largest absolute finite value, its label
+    saying so; a slice whose values are all zero is refused."""
+    from dataclasses import replace
+    if isinstance(slice_, SphereSlice):
+        parts = [slice_.values]
+    else:
+        parts = [lay.values for lay in slice_.layers]
+    finite = np.concatenate([v[np.isfinite(v)].ravel() for v in parts])
+    scale = float(np.max(np.abs(finite))) if finite.size else 0.0
+    if not scale > 0.0:
+        raise ValueError(f"{slice_.label} has no value but zero to be normalised by")
+    shown = replace(slice_.shown, normalised=True)
+    if isinstance(slice_, SphereSlice):
+        return replace(slice_, values=slice_.values / scale, shown=shown)
+    layers = tuple(replace(lay, values=lay.values / scale) for lay in slice_.layers)
+    return replace(slice_, layers=layers, shown=shown)
 
 
 def evaluate(model: Model, fields: Fields, layer: int, r: ArrayLike, theta: ArrayLike,
@@ -849,17 +1014,26 @@ def spectrum(model: Model, fields: Fields, *, lmax: int, radius: float | None = 
     module docstring; the sphere and the field's choices as `sphere`
     takes them.  A slice with NaN in it (a layer lacking the field, a
     physical sphere leaving the body) is refused."""
-    from .harmonics import analyse_grid
     grid = _band_grid(lmax, grid)
     s = sphere(model, fields, radius=radius, depth=depth, grid=grid, side=side, at=at,
                component=component, frame=frame, relative_to=relative_to,
                departure=departure, mean_grid=mean_grid)
-    if not np.all(np.isfinite(s.values)):
-        raise ValueError(f"{s.label} is not defined everywhere on the sphere of "
-                         f"radius {s.radius}, so it has no spectrum there")
-    c = analyse_grid(s.values, grid, lmax=int(lmax))
-    return Spectrum(s.radius, np.arange(int(lmax) + 1), _power(c), c, s.shown, at=at,
-                    side=s.side)
+    return spectrum_of(s, lmax=lmax)
+
+
+def spectrum_of(slice_: SphereSlice, *, lmax: int) -> Spectrum:
+    """A sphere slice's power by degree to `lmax`, analysed on its own
+    grid, which is of a shipped kind with a band of `lmax` at least (twice
+    that, for a field not limited to the band, keeps it from aliasing);
+    a slice with NaN in it is refused."""
+    from .harmonics import analyse_grid
+    grid = _band_grid(lmax, slice_.grid)
+    if not np.all(np.isfinite(slice_.values)):
+        raise ValueError(f"{slice_.label} is not defined everywhere on the sphere of "
+                         f"radius {slice_.radius}, so it has no spectrum there")
+    c = analyse_grid(slice_.values, grid, lmax=int(lmax))
+    return Spectrum(slice_.radius, np.arange(int(lmax) + 1), _power(c), c,
+                    slice_.shown, at=slice_.at, side=slice_.side)
 
 
 def correlation(model: Model, fields: Fields, other: Model, *,

@@ -66,6 +66,30 @@ def test_a_map_draws_the_slice_on_a_projection():
         plt.close(fig)
 
 
+def test_a_kernel_s_map_is_symmetric_clipped_and_normalised():
+    ccrs = pytest.importorskip("cartopy.crs",
+                               reason="needs the planetmodel[maps] extra")
+    plt = pytest.importorskip("matplotlib.pyplot")
+    from planetmodel import GriddedFunction
+    grid = gauss_legendre(16)
+    def kernel(t, p):
+        return np.cos(t) + 40.0 * np.exp(-((t - 1.0) ** 2 + (p - 2.0) ** 2) / 0.01)
+
+    spike = GriddedFunction.sampled(kernel, grid, lateral="linear")
+    s = slices.surface(_model(), spike, 1, name="K")
+    fig, ax = plt.subplots(subplot_kw={"projection": ccrs.Robinson()})
+    mesh = sphere_map(ax, s, diverging=True, clip=95, colorbar=True)
+    assert np.isclose(mesh.get_clim()[1], np.percentile(np.abs(s.values), 95))
+    assert mesh.get_clim()[0] == -mesh.get_clim()[1] and mesh.colorbar.extend == "max"
+    plt.close(fig)
+    fig, ax = plt.subplots(subplot_kw={"projection": ccrs.Robinson()})
+    mesh = sphere_map(ax, s, normalised=True, diverging=True, colorbar=True)
+    assert np.allclose(np.asarray(mesh.get_array()).reshape(s.values.shape),
+                       s.values / np.max(np.abs(s.values)))
+    assert fig.axes[-1].get_xlabel() == "K, on interface 1, normalised"
+    plt.close(fig)
+
+
 def test_a_map_is_refused_on_axes_other_than_cartopys():
     plt = pytest.importorskip("matplotlib.pyplot")
     s = slices.sphere(_model(), "vs", radius=0.8, grid=gauss_legendre(4))
