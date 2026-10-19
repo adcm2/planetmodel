@@ -80,6 +80,8 @@ VOCABULARY: dict[str, FieldSpec] = {
     "qmu": FieldSpec(SCALAR, units.DIMENSIONLESS,
                      meaning="shear quality factor; zero attenuates nothing "
                              "(a fluid)"),
+    "qp": FieldSpec(SCALAR, units.DIMENSIONLESS,
+                    meaning="quality factor of P waves; zero attenuates nothing"),
     "kappa": FieldSpec(DENSITY, units.MODULUS,
                        meaning="bulk modulus of an isotropic medium"),
     "mu": FieldSpec(DENSITY, units.MODULUS,

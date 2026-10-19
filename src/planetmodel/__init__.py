@@ -49,6 +49,8 @@ from .character import DENSITY, ELASTIC, SCALAR, STRESS, VECTOR, Character, Symm
 from .deck import (
     GIA,
     MINEOS,
+    ND,
+    TVEL,
     Deck,
     DeckFormat,
     Tabulated,
@@ -216,6 +218,8 @@ __all__ = [
     "DeckFormat",
     "MINEOS",
     "GIA",
+    "ND",
+    "TVEL",
     "read_deck",
     "write_deck",
     "deck_layers",

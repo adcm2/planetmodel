@@ -12,6 +12,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
 
+from ..catalogue import MineosModel
+from ..deck import MINEOS, ND, TVEL, nd_names
+from .decks import DeckReader
 from .registry import Dataset, Source
 from .sph import SphReader
 
@@ -36,6 +39,44 @@ _RTS_NOTES = ("Relative perturbations of the isotropic velocity, as fractions, "
               "between the CMB (3480 km) and the Moho (6346.6 km; 6346.619 km in "
               "Ritsema's code), relative to PREM's Voigt average; degree 0 is kept "
               "as the file holds it (Ritsema's maps leave it out).")
+
+#: TauP's standard models, at a release tag.
+_TAUP = ("https://raw.githubusercontent.com/crotwell/TauP/v3.2.1/src/main/resources/"
+         "edu/sc/seis/TauP/StdModels")
+
+#: TauP, cited where its files are used.
+_TAUP_CITE = ("Crotwell, H. P., T. J. Owens and J. Ritsema (1999).  The TauP "
+              "Toolkit: flexible seismic travel-time and ray-path utilities.  "
+              "Seismol. Res. Lett. 70, 154-160, doi:10.1785/gssrl.70.2.154")
+
+#: The licence of a model in TauP's repository, which states none of its own.
+_TAUP_LICENCE = ("none stated for the model; the file is from TauP's repository, "
+                 "LGPL-3.0")
+
+#: The compilation of the Moon's models, and its archive's members.
+_MOON = ("https://zenodo.org/records/3372489/files/"
+         "SSR_2019_Garcia_Moon_Seismological_structure_supplementary_zenodo.zip")
+_MOON_SHA = "dfdb5cb68db402d989e953f48f1a82cb8c4c7104d15897861f25e304ad4f3136"
+_MOON_DIR = ("SSR_2019_Garcia_Moon_Seismological_structure_supplementary_zenodo/"
+             "Sup_Material_SSR_Internal_Moon_Seismological_models/")
+_MOON_CITE = ("Garcia, R. F., A. Khan, M. Drilleau, L. Margerin, T. Kawamura, D. Sun, "
+              "M. A. Wieczorek, A. Rivoldini, C. Nunn, R. C. Weber, A. G. Marusiak, "
+              "P. Lognonné, Y. Nakamura and P. Zhu (2019).  Lunar seismology: an "
+              "update on interior structure models.  Space Sci. Rev. 215, 50, "
+              "doi:10.1007/s11214-019-0613-y; the files at Zenodo, "
+              "doi:10.5281/zenodo.3372489")
+_MOON_NOTES = ("TauP's named discontinuities, joined linearly as TauP joins them; the "
+               "body's radius is the deepest depth.")
+
+
+def _moon(name: str, member: str, title: str, cite: str, *,
+          notes: str = "") -> Dataset:
+    """An entry of one model of the Moon from the compilation's archive."""
+    return Dataset(name, (Source(_MOON, _MOON_SHA, members=(_MOON_DIR + member,)),),
+                   DeckReader(ND, names=nd_names, kind="linear"), title=title,
+                   citation=(cite, _MOON_CITE), licence="CC BY 4.0", body="Moon",
+                   notes=" ".join(filter(None, (_MOON_NOTES, notes))))
+
 
 _ENTRIES: tuple[Dataset, ...] = (
     Dataset(
@@ -90,6 +131,80 @@ _ENTRIES: tuple[Dataset, ...] = (
                   "Int. 204, 1024-1039, doi:10.1093/gji/ggv481", _RTS_RECORD),
         licence="CC BY 4.0", reference="PREM",
         notes=_RTS_NOTES + "  The S part (..ES) is vs, the P part (..EP) vp."),
+    Dataset(
+        "STW105",
+        (Source("https://zenodo.org/records/8357380/files/STW105",
+                "ccc2060674502b8032ef7bb11d2ea08fd4c8532f19455d62a784907bb5588352"),),
+        DeckReader(MINEOS, model=MineosModel),
+        title="The radial reference of S362ANI, S362ANI+M and GLAD-M25 (REF)",
+        citation=("Kustowski, B., G. Ekström and A. M. Dziewoński (2008).  "
+                  "Anisotropic shear-wave velocity structure of the Earth's mantle: "
+                  "a global model.  J. Geophys. Res. 113, B06306, "
+                  "doi:10.1029/2007JB005169",
+                  "Moulik, P. and G. Ekström (2014).  An anisotropic shear velocity "
+                  "model of the Earth's mantle using normal modes, body waves, "
+                  "surface waves and long-period waveforms.  Geophys. J. Int. 199, "
+                  "1713-1738, doi:10.1093/gji/ggu356; the files at Zenodo, "
+                  "doi:10.5281/zenodo.8357380"),
+        licence="none stated",
+        notes="A mineos deck in SI, its discontinuities repeated radii; the third "
+              "header line's two extra integers are kept.  EMC's copy moves the "
+              "upper side of each discontinuity up by 0.1 m and is not this file."),
+    Dataset(
+        "ak135-F",
+        (Source(f"{_TAUP}/ak135favg.nd",
+                "d08d19dbaad8d90a51c663011239cc45ad48ea2ed9b4ec9e7647b1a196f1eb19"),),
+        DeckReader(ND, names=nd_names, kind="linear"),
+        title="ak135 with density and attenuation, the average Earth",
+        citation=("Kennett, B. L. N., E. R. Engdahl and R. Buland (1995).  "
+                  "Constraints on seismic velocities in the Earth from traveltimes.  "
+                  "Geophys. J. Int. 122, 108-124, "
+                  "doi:10.1111/j.1365-246X.1995.tb03540.x",
+                  "Montagner, J.-P. and B. L. N. Kennett (1996).  How to reconcile "
+                  "body-wave and normal-mode reference Earth models.  Geophys. J. "
+                  "Int. 125, 229-248, doi:10.1111/j.1365-246X.1996.tb06548.x",
+                  _TAUP_CITE),
+        licence=_TAUP_LICENCE,
+        notes="TauP's ak135favg.nd: the average of the oceanic and continental "
+              "forms, with its 3 km ocean, joined linearly as TauP joins it; its "
+              "Q columns are TauP's Qp (the published table's 'Q kappa') and Qs "
+              "(qmu)."),
+    Dataset(
+        "iasp91",
+        (Source(f"{_TAUP}/iasp91.tvel",
+                "c16b31d1eeae292e857a4224ac98719abcad7aff5c0068204fcadeb2868dd6f2"),),
+        DeckReader(TVEL, kind="linear"),
+        title="The IASPEI 1991 seismological tables' velocity model",
+        citation=("Kennett, B. L. N. and E. R. Engdahl (1991).  Traveltimes for "
+                  "global earthquake location and phase identification.  Geophys. "
+                  "J. Int. 105, 429-465, doi:10.1111/j.1365-246X.1991.tb06724.x",
+                  _TAUP_CITE),
+        licence=_TAUP_LICENCE,
+        notes="TauP's iasp91.tvel, joined linearly; its density column is not "
+              "part of the published model and its source is not stated."),
+    _moon("VPREMOON", "MoonGarcia_PEPI_2011.nd",
+          "VPREMOON, a very preliminary reference Moon model",
+          "Garcia, R. F., J. Gagnepain-Beyneix, S. Chevrot and P. Lognonné (2011).  "
+          "Very preliminary reference Moon model.  Phys. Earth Planet. Inter. 188, "
+          "96-113, doi:10.1016/j.pepi.2011.06.015"),
+    _moon("MoonWeber2011", "MoonWeber_Science_2011.nd",
+          "A seismic model of the Moon's core",
+          "Weber, R. C., P.-Y. Lin, E. J. Garnero, Q. Williams and P. Lognonné "
+          "(2011).  Seismic detection of the lunar core.  Science 331, 309-312, "
+          "doi:10.1126/science.1199375"),
+    _moon("ISSI-MOON-M1", "ISSI_MOON_M1.nd",
+          "The ISSI lunar team's model M1, the median of an ensemble",
+          "Garcia et al. (2019), as below: the ISSI lunar team's models",
+          notes="Its crust-mantle boundary is marked for the codes that need one; "
+                "the ensemble does not define it."),
+    _moon("ISSI-MOON-M2", "ISSI_MOON_M2.nd",
+          "The ISSI lunar team's model M2, the median of an ensemble",
+          "Garcia et al. (2019), as below: the ISSI lunar team's models"),
+    _moon("ISSI-MOON-M3", "ISSI_MOON_M3.nd",
+          "The ISSI lunar team's model M3, the median of an ensemble",
+          "Garcia et al. (2019), as below: the ISSI lunar team's models",
+          notes="Its crust-mantle boundary is marked for the codes that need one; "
+                "it varies across the ensemble."),
 )
 
 

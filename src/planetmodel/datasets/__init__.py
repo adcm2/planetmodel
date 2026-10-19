@@ -22,7 +22,9 @@ that slices, pictures and the model file take it as it stands.  The
 reference is the entry's (`REFERENCES` from the catalogue, or another
 data set) or the caller's.  The Woodhouse-Ritsema `.sph` files (S20RTS,
 S40RTS, S12RTS, SP12RTS) are read exactly, as harmonic fields on their
-radial splines (`read_sph`, `sph_field`, `SphReader`).
+radial splines (`read_sph`, `sph_field`, `SphReader`); radial references
+published as decks (STW105, ak135-F, iasp91, the Moon's models) read
+through `planetmodel.deck` by `DeckReader`.
 
 `fetch` downloads into `cache_directory()` (`PLANETMODEL_DATA`, or the
 platform's per-user cache), checks each file's sha256 every time it is
@@ -33,6 +35,7 @@ to the entry's reader.  Everything here is the standard library, numpy
 and scipy; a reader needing an extra imports it where it is used.  The
 sub-package is reached by module, off the top-level surface.
 """
+from .decks import DeckReader, Names
 from .entries import REGISTRY, DatasetLike, as_dataset, cite, describe
 from .fetch import (CACHE_VARIABLE, OFFLINE_VARIABLE, TIMEOUT, cache_directory, fetch,
                     load, sha256_of)
@@ -46,4 +49,5 @@ __all__ = ["Source", "Dataset", "Reader", "DatasetLike", "REGISTRY", "ARCHIVES",
            "fetch", "load", "sha256_of", "CACHE_VARIABLE", "OFFLINE_VARIABLE",
            "TIMEOUT", "REFERENCES", "reference_of", "reference_field",
            "over_reference", "SphFile", "SphReader", "read_sph", "sph_field",
-           "sph_splines", "SPLINE_KNOTS", "SPH_RADII", "SLOTS", "MANTLE_SLOTS"]
+           "sph_splines", "SPLINE_KNOTS", "SPH_RADII", "SLOTS", "MANTLE_SLOTS",
+           "DeckReader", "Names"]

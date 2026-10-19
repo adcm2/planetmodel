@@ -49,6 +49,7 @@ struct FieldSpec {
       {"qkappa", {SCALAR, u::DIMENSIONLESS, "bulk quality factor; zero attenuates nothing"}},
       {"qmu",
        {SCALAR, u::DIMENSIONLESS, "shear quality factor; zero attenuates nothing (a fluid)"}},
+      {"qp", {SCALAR, u::DIMENSIONLESS, "quality factor of P waves; zero attenuates nothing"}},
       {"kappa", {DENSITY, u::MODULUS, "bulk modulus of an isotropic medium"}},
       {"mu", {DENSITY, u::MODULUS, "shear modulus of an isotropic medium"}},
       {"A", {DENSITY, u::MODULUS, "Love modulus A = rho vph^2"}},
