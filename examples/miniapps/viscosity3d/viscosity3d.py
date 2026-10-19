@@ -4,9 +4,11 @@
 # From S40RTS to a model file a GIA code reads: PREM given a radial
 # viscosity and an elastic lid, S40RTS put on its mantle without degree
 # 0, the shear-speed anomaly taken through sl3d's chain to a viscosity
-# (or a Burgers body's two Prony branches in its place), the model
-# written with the works it rests on, read back, drawn, and read by the
-# C++ library's example reader when its path is given. See README.md.
+# (or a published viscosity model in its place), a thicker lid where the
+# viscosity stays high, power-law creep and a Burgers body's Prony
+# branches if asked, the model written with the works it rests on, read
+# back, drawn, and read by the C++ library's example reader when its
+# path is given. See README.md.
 #
 # Needs: netcdf, maps
 # Network: first run (S40RTS, 3 MB)
@@ -24,7 +26,7 @@ import numpy as np
 
 import planetmodel as pm
 from planetmodel import datasets
-from planetmodel.conversion import building, parameters, prony
+from planetmodel.conversion import building, lithosphere, parameters, prony
 from planetmodel.mesh1d import RadialMesh
 from planetmodel.modelfile import read_model, write_model
 from planetmodel.plotting import sphere_map
@@ -43,6 +45,16 @@ parser.add_argument("--burgers", action="store_true",
                          "the Maxwell viscosity")
 parser.add_argument("--lmax", type=int, default=None,
                     help="filter S40RTS to this degree (all 40 by default)")
+parser.add_argument("--published", default=None,
+                    help="a registry viscosity model in place of S40RTS's chain, as "
+                         "GLAD-M25-viscosity or SMEAN2-VM5a-b1")
+parser.add_argument("--lid", type=float, default=None,
+                    help="a viscosity (Pa s): above the depth, within 400 km, where "
+                         "the viscosity falls to it, a lid of 1e30 Pa s")
+parser.add_argument("--power-law", type=float, nargs=2, default=None,
+                    metavar=("N", "SIGMA"),
+                    help="power-law creep: its stress exponent and transition stress "
+                         "(Pa)")
 parser.add_argument("--band", type=int, default=96,
                     help="the band of the Gauss-Legendre grid the file holds (96)")
 parser.add_argument("--out", type=Path, default=None,
@@ -74,20 +86,47 @@ print("viscous layers:", [model.layer(i).name for i in mantle])
 # Degree 0 is removed, so the radial model's mean stays its own.
 
 # %%
-model = datasets.transplanted(model, "S40RTS", remove_mean=True, layers=mantle,
-                              lmax=args.lmax)
-dt = building.temperature_anomaly(building.velocity_anomaly(model, layers=mantle),
-                                  scaling=parameters.SL3D_DENSITY_SCALING,
-                                  expansivity=parameters.SL3D_EXPANSIVITY)
-model = building.with_viscosity(model, dt, LAWS[args.law],
-                                renormalise=pm.gauss_legendre(32) if args.renormalise
-                                else None)
+if args.published is None:
+    model = datasets.transplanted(model, "S40RTS", remove_mean=True, layers=mantle,
+                                  lmax=args.lmax)
+    dt = building.temperature_anomaly(building.velocity_anomaly(model, layers=mantle),
+                                      scaling=parameters.SL3D_DENSITY_SCALING,
+                                      expansivity=parameters.SL3D_EXPANSIVITY)
+    model = building.with_viscosity(model, dt, LAWS[args.law],
+                                    renormalise=pm.gauss_legendre(32)
+                                    if args.renormalise else None)
+else:
+    model = datasets.transplanted(model, args.published,
+                                  names={"viscosity": "viscosity"}, mode="absolute",
+                                  kind="log", layers=mantle, extend=True)
+
+# %% [markdown]
+# ## A thicker lid, and power-law creep, if asked
+#
+# Where the viscosity stays above `--lid` going down from the lid's
+# base, as under the old continents, the lithosphere goes on: the
+# viscosity above the depth where it first falls to that value, within
+# 400 km, is raised to 1e30 Pa s.
+
+# %%
+if args.lid is not None:
+    upper = [i for i in mantle if model.layer(i).interval[0] >= 5971e3]
+    base = lithosphere.viscosity_threshold(model, args.lid, layers=upper,
+                                           grid=pm.equiangular(90, 180))
+    depth = (6371e3 - base.function.values) / 1e3
+    print(f"the lid's base from {depth.min():.0f} to {depth.max():.0f} km deep")
+    model = lithosphere.with_lid(model, base, viscosity=1e30)
+if args.power_law is not None:
+    model = building.with_power_law(model, exponent=args.power_law[0],
+                                    transition_stress=args.power_law[1])
 names = ["rho", "vpv", "vph", "vsv", "vsh", "eta", "viscosity"]
+if args.power_law is not None:
+    names += ["stress_exponent", "transition_stress"]
 if args.burgers:
     model = prony.with_branches(model, prony.burgers_series(strength=5.0,
                                                             viscosity_ratio=5.0))
-    names = names[:-1] + [f"relaxation_{k}_{n}" for n in (1, 2)
-                          for k in ("strength", "time")]
+    names = [n for n in names if n != "viscosity"] + [
+        f"relaxation_{k}_{n}" for n in (1, 2) for k in ("strength", "time")]
 
 # %% [markdown]
 # ## The model file, and back

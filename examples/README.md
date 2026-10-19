@@ -23,10 +23,14 @@ each one's markers, so the test suite runs every example it can.
 | `conversion/02_temperature_to_viscosity.py` | the exponential law's viscosity, sl3d's eps against Milne et al.'s, and Latychev et al.'s renormalisation (`plot`) |
 | `conversion/03_sl3d_chain.py` | sl3d's chain on S20RTS, maps at three depths, and what the model cites (`maps`, network) |
 | `conversion/04_prony_branches.py` | Maxwell, Burgers and a fitted Andrade body as Prony branches, their moduli and losses, and a Burgers mantle frozen at a 100-year period (`plot`) |
+| `conversion/05_temperature_from_a_table.py` | a table of Vs against temperature and pressure, written and read, inverted for temperature, and a temperature anomaly from it on PREM (`plot`, `netcdf`) |
+| `conversion/06_lithosphere_base.py` | the base of the lithosphere at a viscosity and at a Maxwell time, as geometry (an interface moved onto it) and as a lid, mapped (`maps`) |
+| `conversion/07_published_viscosity.py` | Lloyd et al.'s viscosity from GLAD-M25, fetched, put on PREM's mantle and mapped at three depths (`netcdf`, `maps`, network) |
+| `conversion/08_power_law.py` | power-law creep's stress exponent and transition stress on a model, and AdGIA's gamma from them |
 
 | mini-app | what it does |
 |---|---|
-| `miniapps/viscosity3d/` | S40RTS to a 3D viscosity model file for a GIA code: a radial viscosity with an elastic lid, sl3d's chain or Milne's eps, optionally renormalised or a Burgers body, written, read back, read by the C++ example reader, drawn (`netcdf`, `maps`, network) |
+| `miniapps/viscosity3d/` | S40RTS (or a published viscosity model) to a 3D viscosity model file for a GIA code: a radial viscosity with an elastic lid, sl3d's chain or Milne's eps, optionally renormalised, a thicker lid where the viscosity stays high, power-law creep or a Burgers body, written, read back, read by the C++ example reader, drawn (`netcdf`, `maps`, network) |
 
 `tutorials/` walks through the ideas of the library in order, one script
 per idea. Each is a plain Python file with `# %%` cell markers, so it runs
