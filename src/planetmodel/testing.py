@@ -9,12 +9,14 @@ imports of the rest of the package happen inside the functions.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import ArrayLike
 
 if TYPE_CHECKING:
+    from .datasets import Dataset
     from .displacement import RadialDisplacement
     from .fields import Field
     from .geometry import Geometry
@@ -29,7 +31,7 @@ if TYPE_CHECKING:
 __all__ = ["check_displacement", "check_mapping", "check_geometry",
            "check_layer_function", "check_field", "check_model",
            "check_refinement", "check_sample", "check_spectral_basis",
-           "check_spherical_basis", "check_model_file"]
+           "check_spherical_basis", "check_model_file", "check_dataset"]
 
 
 def _rel(a: ArrayLike, b: ArrayLike, *, rtol: float, floor: float = 1.0) -> bool:
@@ -1069,3 +1071,53 @@ def check_model_file(path: str | os.PathLike[str], model: Model, *,
             want = np.broadcast_to(h(np.full(theta.shape, radius), theta, phi),
                                    g.values[j].shape)
             stored_against(g.values[j], want, f"geometry/boundary_displacement[{j}]")
+
+
+def check_dataset(dataset: Dataset, *,
+                  paths: Iterable[str | os.PathLike[str]] | None = None,
+                  options: Mapping[str, Any] | None = None) -> None:
+    """Hold a data set's entry, and the object its reader makes, to their
+    protocols.
+
+    Checks that the entry's sources would be cached under distinct names
+    and its reader has `read`; that `describe` and `cite` name it and its
+    works; and, given the `paths` `fetch` gave, that there is one for each
+    file and member in the sources' order, each a file, a plain source's
+    with the entry's sha256, and that the reader reads them, with
+    `options`, into an object that holds to its own protocol: a `Model`
+    to `check_model`.  Nothing here touches the network.
+    """
+    from pathlib import Path
+
+    from .datasets import cite, describe, sha256_of
+    from .model import Model
+
+    names = [s.name for s in dataset.sources]
+    assert len(set(names)) == len(names), f"{dataset.name}: sources share a name"
+    assert callable(getattr(dataset.reader, "read", None)), (
+        f"{dataset.name}: the reader has no read method")
+    text = describe(dataset)
+    assert dataset.name in text and dataset.licence in text, (
+        f"{dataset.name}: describe does not name the data set and its licence")
+    assert cite(dataset).splitlines() == list(dataset.citation), (
+        f"{dataset.name}: cite does not give the entry's citation a work a line")
+    if paths is None:
+        return
+    paths = tuple(os.fspath(p) for p in paths)
+    want = sum(1 if s.members is None else len(s.members) for s in dataset.sources)
+    assert len(paths) == want, (
+        f"{dataset.name}: {len(paths)} paths for {want} files and members")
+    i = 0
+    for source in dataset.sources:
+        count = 1 if source.members is None else len(source.members)
+        for p in paths[i:i + count]:
+            assert os.path.isfile(p), f"{dataset.name}: {p} is not a file"
+        if source.members is None:
+            assert sha256_of(paths[i]) == source.sha256, (
+                f"{dataset.name}: {paths[i]} does not have the entry's sha256")
+        i += count
+    product = dataset.reader.read(tuple(Path(p) for p in paths), dataset,
+                                  **dict(options or {}))
+    assert product is not None, f"{dataset.name}: the reader gave nothing"
+    if isinstance(product, Model):
+        check_model(product)

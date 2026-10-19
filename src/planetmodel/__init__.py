@@ -30,6 +30,8 @@ Modules reached by name, one level down:
   mesh1d       radial spectral-element meshes (GLL), nodal values, gravity
   mesh3d       2D and 3D meshes via gmsh, and MFEM export
   randomfield  Matern random fields on balls, annuli and layers
+  datasets     published models: their entries, fetched on demand into a
+               cache, read into the library's objects
   testing      the executable contracts, `check_field` and its kin
 """
 

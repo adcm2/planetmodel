@@ -71,9 +71,11 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 norecursedirs = [".*", "build", "dist"]
 # The fast suite is the default: it needs numpy and scipy alone, and the
-# `plot` and `harmonics` extras where installed.  `-m "not slow"` adds the
-# gmsh unit geometries and the MFEM exports, `-m ""` everything.
-addopts = "-m 'not gmsh and not mfem and not slow'"
+# `plot` and `harmonics` extras where installed.  `-m "not slow and not
+# network"` adds the gmsh unit geometries and the MFEM exports, `-m "not
+# network"` everything off the network, and `-m network` the registry check,
+# which fetches every data set.
+addopts = "-m 'not gmsh and not mfem and not slow and not network'"
 # netCDF4 1.7.4 sets an array's shape when writing a variable of two or
 # more dimensions, which numpy 2.5 deprecates; nothing of ours to change.
 filterwarnings = [
@@ -86,6 +88,7 @@ markers = [
     "harmonics: requires ducc0 (planetmodel[harmonics])",
     "netcdf: requires netCDF4 (planetmodel[netcdf])",
     "maps: requires cartopy (planetmodel[maps])",
+    "network: fetches published data sets from their hosts; run with -m network",
 ]
 
 [tool.ruff]

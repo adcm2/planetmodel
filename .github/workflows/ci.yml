@@ -267,8 +267,9 @@ jobs:
             exit "$status"
           fi
 
-  # Everything, including whatever is marked slow.  Run by hand: Actions ->
-  # CI -> Run workflow.  Worth doing before a release.
+  # Everything off the network, including whatever is marked slow.  Run by
+  # hand: Actions -> CI -> Run workflow.  Worth doing before a release.  The
+  # tests marked `network` fetch published data sets and run on their own.
   full-tests:
     name: Full test suite (including slow)
     if: github.event_name == 'workflow_dispatch'
@@ -296,4 +297,4 @@ jobs:
           sudo apt-get install -y libglu1-mesa libxrender1 libxcursor1 libxft2 libxinerama1
 
       - name: Test with pytest
-        run: poetry run pytest -m "" --cov=planetmodel --cov-report=term-missing
+        run: poetry run pytest -m "not network" --cov=planetmodel --cov-report=term-missing
