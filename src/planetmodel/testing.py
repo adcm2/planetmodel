@@ -16,7 +16,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 if TYPE_CHECKING:
-    from .datasets import Dataset, Surface
+    from .datasets import Dataset, Strata, Surface
     from .displacement import RadialDisplacement
     from .fields import Field
     from .geometry import Geometry
@@ -33,7 +33,7 @@ __all__ = ["check_displacement", "check_mapping", "check_geometry",
            "check_layer_function", "check_field", "check_model",
            "check_refinement", "check_sample", "check_spectral_basis",
            "check_spherical_basis", "check_model_file", "check_dataset",
-           "check_surface"]
+           "check_surface", "check_strata"]
 
 
 def _rel(a: ArrayLike, b: ArrayLike, *, rtol: float, floor: float = 1.0) -> bool:
@@ -1134,12 +1134,13 @@ def check_dataset(dataset: Dataset, *,
     with the entry's sha256, and that the reader reads them, with
     `options`, into an object that holds to its own protocol: a `Model`
     to `check_model`, a `RegionalGrid` to values of the right shape at its
-    own corners and NaN outside its box, a `Surface` to `check_surface`.
+    own corners and NaN outside its box, a `Surface` to `check_surface`,
+    `Strata` to `check_strata`.
     Nothing here touches the network.
     """
     from pathlib import Path
 
-    from .datasets import RegionalGrid, Surface, cite, describe, sha256_of
+    from .datasets import RegionalGrid, Strata, Surface, cite, describe, sha256_of
     from .model import Model
 
     names = [s.name for s in dataset.sources]
@@ -1173,6 +1174,8 @@ def check_dataset(dataset: Dataset, *,
         check_model(product)
     if isinstance(product, Surface):
         check_surface(product)
+    if isinstance(product, Strata):
+        check_strata(product)
     if isinstance(product, RegionalGrid):
         (r0, r1), (t0, t1), (p0, p1) = product.extent
         r = np.array([r0, 0.5 * (r0 + r1), r1])[:, None]
@@ -1236,3 +1239,46 @@ def check_surface(surface: Surface, *, rng: np.random.Generator | None = None,
         assert np.isclose(surface.mean(), quadrature, rtol=0, atol=1e-9 * scale), (
             f"{surface!r}: its mean {surface.mean()} is not its values' "
             f"{quadrature}")
+
+
+def check_strata(strata: Strata, *, rng: np.random.Generator | None = None,
+                 n: int = 64) -> None:
+    """Hold `datasets.Strata` to their protocol at `n` random points: each
+    stratum's bottom the next one's top; every surface to `check_surface`;
+    no stratum of negative thickness (beyond a part in 1e9 of the radius);
+    every property, and those below, finite, and read by `value` at the
+    top and the bottom of each stratum as its two ends, and between them
+    between those ends."""
+    rng = np.random.default_rng(0) if rng is None else rng
+    for upper, lower in zip(strata.strata[:-1], strata.strata[1:]):
+        assert upper.bottom is lower.top, (
+            f"{strata!r}: {upper.name}'s bottom is not {lower.name}'s top")
+    for surface in strata.surfaces:
+        check_surface(surface, rng=rng, n=n)
+    theta = np.arccos(rng.uniform(-1.0, 1.0, n))
+    phi = rng.uniform(0.0, 2.0 * np.pi, n)
+    for s in strata:
+        top, bottom = s.top.radius(theta, phi), s.bottom.radius(theta, phi)
+        assert np.all(top - bottom >= -1e-9 * np.abs(top)), (
+            f"{strata!r}: {s.name} is of negative thickness somewhere")
+        for name, (at_top, at_bottom) in s.properties.items():
+            a = np.asarray(at_top(theta, phi), dtype=float)
+            b = np.asarray(at_bottom(theta, phi), dtype=float)
+            assert np.all(np.isfinite(a)) and np.all(np.isfinite(b)), (
+                f"{strata!r}: {s.name}'s {name} is not finite")
+            scale = max(float(np.max(np.abs(np.concatenate([a, b])))), 1e-300)
+            assert np.allclose(s.value(name, top, theta, phi), a, rtol=0,
+                               atol=1e-12 * scale), (
+                f"{strata!r}: {s.name}'s {name} at its top is not its top value")
+            thick = top - bottom > 0.0
+            assert np.allclose(s.value(name, bottom, theta, phi)[thick], b[thick],
+                               rtol=0, atol=1e-12 * scale), (
+                f"{strata!r}: {s.name}'s {name} at its bottom is not its bottom "
+                "value")
+            mid = s.value(name, 0.5 * (top + bottom), theta, phi)
+            lo, hi = np.minimum(a, b), np.maximum(a, b)
+            assert np.all((mid >= lo - 1e-12 * scale) & (mid <= hi + 1e-12 * scale)), (
+                f"{strata!r}: {s.name}'s {name} leaves its ends between them")
+    for name, fn in strata.below.items():
+        assert np.all(np.isfinite(np.asarray(fn(theta, phi), dtype=float))), (
+            f"{strata!r}: the {name} beneath is not finite")

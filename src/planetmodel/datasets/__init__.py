@@ -30,7 +30,10 @@ global grid (`grid_model`, `GridReader`) or a `RegionalGrid`.  A
 surface (a planet's shape, its topography, the radius of an interface
 within it, an ice sheet's thickness) is a `Surface`, a function of the
 angles with what it measures and from what datum, read from a table of
-harmonic coefficients by `read_coefficients` (`CoefficientReader`).  The
+harmonic coefficients by `read_coefficients` (`CoefficientReader`) or
+from a grid (`GridSurfaceReader`); a crustal or lithospheric model is
+`Strata`, surfaces from the top down with the properties between them
+(`read_crust1`, `litho1_strata`, a table's columns by `read_table`).  The
 processing that fits them to a model of one's own (`rereferenced`,
 `spread`, `filtered`, `merged`, one taper `raised_cosine`) is in
 `planetmodel.datasets.processing`, and `transplanted` takes them in their
@@ -51,7 +54,8 @@ from .building import PAIRS, transplanted
 from .decks import DeckReader, Names
 from .entries import REGISTRY, DatasetLike, as_dataset, cite, describe
 from .grids import (EARTH_RADIUS, SAME_RTOL, VERTICAL_RTOL, GridData, GridReader,
-                    RegionalGrid, Variables, grid_model, read_grid)
+                    RegionalGrid, Variables, grid_model, read_grid, read_table,
+                    ring_poles)
 from .fetch import (CACHE_VARIABLE, OFFLINE_VARIABLE, TIMEOUT, cache_directory, fetch,
                     load, sha256_of)
 from .models import (REFERENCES, Segments, over_reference, reference_field,
@@ -62,7 +66,10 @@ from .registry import ARCHIVES, Dataset, Reader, Source, archive_stem
 from .sph import (MANTLE_SLOTS, SLOTS, SPH_RADII, SPLINE_KNOTS, SphFile, SphReader,
                   read_sph, sph_field, sph_splines)
 from .coefficients import FORMATS, read_coefficients
-from .surfaces import MEASURES, CoefficientReader, Datum, Surface
+from .strata import (CRUST1_STRATA, LITHO1_PROPERTIES, LITHO1_STRATA, Crust1Reader,
+                     Litho1Reader, Property, Strata, Stratum, TableStrataReader,
+                     litho1_strata, read_crust1)
+from .surfaces import MEASURES, CoefficientReader, Datum, GridSurfaceReader, Surface
 
 __all__ = ["Source", "Dataset", "Reader", "DatasetLike", "REGISTRY", "ARCHIVES",
            "as_dataset", "archive_stem", "describe", "cite", "cache_directory",
@@ -75,4 +82,7 @@ __all__ = ["Source", "Dataset", "Reader", "DatasetLike", "REGISTRY", "ARCHIVES",
            "SAME_RTOL", "VERTICAL_RTOL", "MODES", "Perturbation", "filtered",
            "merged", "raised_cosine", "rereferenced", "spread", "resampled",
            "demeaned", "transplanted", "PAIRS", "FORMATS", "read_coefficients",
-           "MEASURES", "Datum", "Surface", "CoefficientReader"]
+           "MEASURES", "Datum", "Surface", "CoefficientReader", "GridSurfaceReader",
+           "read_table", "ring_poles", "CRUST1_STRATA", "LITHO1_STRATA",
+           "LITHO1_PROPERTIES", "Property", "Stratum", "Strata", "read_crust1",
+           "litho1_strata", "Crust1Reader", "Litho1Reader", "TableStrataReader"]

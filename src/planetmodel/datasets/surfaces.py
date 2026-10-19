@@ -20,6 +20,10 @@ values.
 `CoefficientReader` is the reader of a registry entry whose files are
 coefficient tables (`datasets.coefficients`): it reads one of them into
 a `Surface` of the measure and datum the entry states.
+`GridSurfaceReader` is the reader of one whose file is a global netCDF
+grid (`grids.read_grid`): one variable of it becomes the surface, on
+the grid's own nodes, bilinear between them, a pole the grid lacks the
+mean of its nearest ring.
 """
 from __future__ import annotations
 
@@ -31,14 +35,16 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy.typing import ArrayLike
 
+from ..units import LENGTH, parse_unit
 from .coefficients import FORMATS, read_coefficients
+from .grids import read_grid, ring_poles
 
 if TYPE_CHECKING:
     from ..displacement import Relief
     from ..sampling import AngularGrid
     from .registry import Dataset
 
-__all__ = ["MEASURES", "Datum", "Surface", "CoefficientReader"]
+__all__ = ["MEASURES", "Datum", "Surface", "CoefficientReader", "GridSurfaceReader"]
 
 #: What a surface's values measure.
 MEASURES = ("radius", "elevation", "depth", "thickness")
@@ -176,3 +182,44 @@ class CoefficientReader:
     def __repr__(self) -> str:
         return (f"CoefficientReader({self.format}, {self.measures}, "
                 f"{self.normalization}, csphase={self.csphase})")
+
+
+class GridSurfaceReader:
+    """The reader of a surface held as the variable `variable` of a global
+    netCDF grid, by the rules of the module docstring: its unit the
+    file's, or `units` where the file's is wrong or absent, a length;
+    measuring `measures` from `datum`; `regular` rebuilding glitched
+    coordinates as `read_grid` does; named `name`, the entry's by
+    default.  netCDF4 is the `netcdf` extra."""
+
+    def __init__(self, variable: str, *, measures: str, datum: Datum | None = None,
+                 units: str | None = None, regular: bool = False,
+                 name: str | None = None) -> None:
+        if measures not in MEASURES:
+            raise ValueError(f"measures must be one of {MEASURES}, got {measures!r}")
+        self.variable, self.measures, self.datum = variable, measures, datum
+        self.units, self.regular, self.name = units, regular, name
+
+    def read(self, paths: tuple[Path, ...], dataset: Dataset) -> Surface:
+        """The surface the grid's variable is."""
+        from ..gridded import GriddedFunction
+        data = read_grid(paths[0], variables=(self.variable,), regular=self.regular)
+        if data.grid is None or data.radius is not None:
+            raise ValueError(f"{paths[0]}: {self.variable} is not on a global grid "
+                             "of the angles alone")
+        unit = self.units or data.units.get(self.variable, "")
+        dims, factor = parse_unit(unit)
+        if dims != LENGTH:
+            raise ValueError(f"{paths[0]}: {self.variable} is in {unit!r}, not a "
+                             "length")
+        v = factor * np.asarray(data.values[self.variable], dtype=float)
+        if not np.all(np.isfinite(v)):
+            raise ValueError(f"{paths[0]}: {self.variable} is missing at "
+                             f"{int(np.sum(~np.isfinite(v)))} nodes")
+        function = GriddedFunction(data.grid, v, lateral="linear",
+                                   poles=ring_poles(v, data.grid))
+        return Surface(function, self.measures, datum=self.datum,
+                       name=self.name or dataset.name)
+
+    def __repr__(self) -> str:
+        return f"GridSurfaceReader({self.variable}, {self.measures})"

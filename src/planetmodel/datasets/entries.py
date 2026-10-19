@@ -17,8 +17,10 @@ from ..deck import MINEOS, ND, TVEL, nd_names
 from .decks import DeckReader
 from .grids import GridReader
 from .registry import Dataset, Source
+from .grids import EARTH_RADIUS
 from .sph import SphReader
-from .surfaces import CoefficientReader
+from .strata import Crust1Reader, Litho1Reader, TableStrataReader
+from .surfaces import CoefficientReader, GridSurfaceReader
 
 __all__ = ["DatasetLike", "REGISTRY", "as_dataset", "describe", "cite"]
 
@@ -117,6 +119,15 @@ _SHAPE_NOTES = ("4 pi normalised without the Condon-Shortley phase, in metres, o
 #: GRAIL's crustal thickness archive, and the directory of its members.
 _GRAIL = "https://zenodo.org/records/997347/files/GRAILCrustalThicknessArchive.zip"
 _GRAIL_DIR = "GRAILCrustalThicknessArchive/Data/"
+
+
+#: CRUST1.0's own files, in its tarball.
+_CRUST1 = "https://igppweb.ucsd.edu/~gabi/crust1/crust1.0.tar.gz"
+
+#: What the CAM entries say of their thickness.
+_CAM_NOTES = ("The thickness of the thermal lithosphere in km, taken here as "
+              "below the sphere of the Earth's mean radius, 6371 km: with_datum "
+              "measures it from another surface (Earth2014-BED, say).")
 
 
 def _earth2014(layer: str, measures: str, title: str, *, datum: float | None,
@@ -448,6 +459,104 @@ _ENTRIES: tuple[Dataset, ...] = (
               "phase, in the principal-axis frame.  The crustal thickness is the "
               "archive's LOLA surface (in the same frame) less this radius; the "
               "archive's thickness files are not read."),
+    Dataset(
+        "CRUST1.0",
+        (Source(_CRUST1,
+                "0b41b46fc3e1a76debbbcb66ab407febaeee4dc3033db7a0a24d2bb7c7adfe3e",
+                members=("crust1.bnds", "crust1.vp", "crust1.vs", "crust1.rho")),),
+        Crust1Reader(),
+        title="A 1-degree global model of the Earth's crust",
+        citation=("Laske, G., G. Masters, Z. Ma and M. Pasyanos (2013).  Update on "
+                  "CRUST1.0 - a 1-degree global model of Earth's crust.  Geophys. "
+                  "Res. Abstracts 15, EGU2013-2658",),
+        licence="none stated",
+        notes="Eight strata (water, ice, three sediments, three crystalline crust) "
+              "on 1-degree cells, their boundaries as elevations from sea level "
+              "(the sphere of 6371 km), vp, vs and rho constant in each, and the "
+              "mantle's beneath the Moho; an absent stratum has zero thickness.  "
+              "The readme asks that its prototype status be borne in mind."),
+    Dataset(
+        "LITHO1.0",
+        (Source(f"{_EMC}/LITHO1.0.r0.0-n4c.nc",
+                "ba13dfe1b7685d7ab07aa201590568f48b79fd3109e7ba17c01dded2892c375f"),),
+        Litho1Reader(),
+        title="An updated crust and lithospheric model of the Earth",
+        citation=("Pasyanos, M. E., T. G. Masters, G. Laske and Z. Ma (2014).  "
+                  "LITHO1.0: an updated crust and lithospheric model of the Earth.  "
+                  "J. Geophys. Res. Solid Earth 119, 2153-2173, "
+                  "doi:10.1002/2013JB010626",
+                  *_emc_cites("10.17611/dp/emc.2020.litho102nc.1")),
+        licence=_EMC_LICENCE,
+        notes="The Earth Model Collaboration's 1-degree grid of the model (natively "
+              "on 40962 icosahedral nodes): CRUST1.0's strata and the lid, whose "
+              "bottom is the lithosphere-asthenosphere boundary, as depths below "
+              "sea level, each property (rho, vpv, vsv, vph, vsh, qkappa, qmu, eta) "
+              "at each stratum's top and bottom, and the asthenosphere's beneath; "
+              "the grid's glitched latitudes rebuilt.  In 273 of its 64800 cells "
+              "a stratum's bottom lies below the next one's top (median 34 m, at "
+              "most 2.6 km): the next top is taken."),
+    Dataset(
+        "CAM2016",
+        (Source(f"{_EMC}/CAM2016Litho.r0.0-n4c.nc",
+                "52b52d36f8b47078a097c2d1a32943b6c0d46c45903fb9f9be778490f649fdad"),),
+        GridSurfaceReader("thickness", measures="thickness", datum=EARTH_RADIUS),
+        title="The thickness of the lithosphere from multimode surface waves",
+        citation=("Priestley, K., D. McKenzie and T. Ho (2018).  A lithosphere-"
+                  "asthenosphere boundary - a global model derived from multimode "
+                  "surface-wave tomography and petrology.  In Lithospheric "
+                  "Discontinuities, Geophys. Monogr. 239, 111-123, "
+                  "doi:10.1002/9781119249740.ch6",
+                  "Ho, T., K. Priestley and E. Debayle (2016).  A global horizontal "
+                  "shear velocity model of the upper mantle from multimode Love wave "
+                  "measurements.  Geophys. J. Int. 207, 542-561, "
+                  "doi:10.1093/gji/ggw292",
+                  "Priestley, K. and D. McKenzie (2013).  The relationship between "
+                  "shear wave velocity, temperature, attenuation and viscosity in "
+                  "the shallow part of the mantle.  Earth Planet. Sci. Lett. 381, "
+                  "78-91, doi:10.1016/j.epsl.2013.08.022",
+                  *_emc_cites("10.17611/DP/EMCCAM2016")),
+        licence=_EMC_LICENCE,
+        notes="2-degree cells.  " + _CAM_NOTES),
+    Dataset(
+        "CAM2022",
+        (Source(f"{_EMC}/CAM2022-lithosphere.r0.1-n4c.nc",
+                "1d43f8a7b58482da78a976fa998cd9050db6878c7ddfbf082b102fdaab027de9"),),
+        GridSurfaceReader("thickness", measures="thickness", datum=EARTH_RADIUS),
+        title="The thickness of the lithosphere from the thermal and anisotropic "
+              "structure of the upper mantle",
+        citation=("Priestley, K., T. Ho, Y. Takei and D. McKenzie (2024).  The "
+                  "thermal and anisotropic structure of the top 300 km of the "
+                  "mantle.  Earth Planet. Sci. Lett. 626, 118525, "
+                  "doi:10.1016/j.epsl.2023.118525",
+                  *_emc_cites("10.17611/dp/emc.2024.cam2022.1")),
+        licence=_EMC_LICENCE,
+        notes="2-degree cells.  " + _CAM_NOTES),
+    Dataset(
+        "LithoRef18",
+        (Source("https://www.earthbyte.org/webdav/ftp/earthbyte/gplates_portal/"
+                "Afonso_etal_lithospheric_thickness_GJI2019/"
+                "Afonso_etal_GJI_2019_LithoRef18.xyz",
+                "645dbe3154866d4db3dd465b439a540a8dcde24489e6ac8849980109b99a927e"),),
+        TableStrataReader(surfaces=("ELEVATION", "MOHO", "LAB"),
+                          names=("crust", "lithospheric_mantle"), measures="elevation",
+                          properties={"crust": {"rho": "RHO_C"},
+                                      "lithospheric_mantle": {"rho": "RHO_L"}},
+                          below={"rho": "RHO_SL"},
+                          units={"ELEVATION": "m", "MOHO": "m", "LAB": "m",
+                                 "RHO_C": "kg m-3", "RHO_L": "kg m-3",
+                                 "RHO_SL": "kg m-3"}),
+        title="A global reference model of the lithosphere and upper mantle",
+        citation=("Afonso, J. C., F. Salajegheh, W. Szwillus, J. Ebbing and C. Gaina "
+                  "(2019).  A global reference model of the lithosphere and upper "
+                  "mantle from joint inversion and analysis of multiple data sets.  "
+                  "Geophys. J. Int. 217, 1602-1628, doi:10.1093/gji/ggz094",),
+        licence="none stated",
+        notes="The crust from the solid surface (the sea floor in the oceans) to "
+              "the Moho, and the lithospheric mantle from the Moho to the "
+              "lithosphere-asthenosphere boundary, as elevations from sea level "
+              "(the sphere of 6371 km), on 2-degree cells, each with its density, "
+              "and the sublithospheric mantle's beneath; the table's geoid and "
+              "gravity columns are not read."),
 )
 
 

@@ -39,6 +39,11 @@ reads one into a `GridData` in the library's form:
   own precision kept until the grid is in its order, so that a large
   grid is copied only once it is cut down.
 
+`read_table` reads a text table of longitude, latitude and values, a
+node a row in any order (LithoRef18's), into the same form: the rows
+must be every node of a product of latitudes and longitudes, each once,
+and the coordinates then follow the rules above.
+
 A grid whose longitudes go round the circle and whose latitudes reach
 within a step and a half of each pole is global, on an `AngularGrid`:
 the shipped equiangular kind where its nodes are one (from wherever its
@@ -89,7 +94,8 @@ if TYPE_CHECKING:
     from .registry import Dataset
 
 __all__ = ["VERTICAL_RTOL", "SAME_RTOL", "EARTH_RADIUS", "Variables", "GridData",
-           "read_grid", "grid_model", "RegionalGrid", "GridReader"]
+           "read_grid", "read_table", "ring_poles", "grid_model", "RegionalGrid",
+           "GridReader"]
 
 #: Two slices this close, relative to the surface radius, are one radius.
 VERTICAL_RTOL = 1e-5
@@ -188,76 +194,15 @@ def _unwrapped(reduced: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return np.concatenate([reduced[start:], reduced[:start] + 360.0]), order
 
 
-def read_grid(source: str | os.PathLike[str], *,
-              variables: tuple[str, ...] | None = None,
-              surface: float | None = None, vertical_units: str | None = None,
-              pairs: tuple[tuple[float, float], ...] = (), regular: bool = False,
-              seam: str = "refuse", pole_rows: str = "refuse", stride: int = 1,
-              vertical: tuple[float | None, float | None] | None = None) -> GridData:
-    """A netCDF grid in the library's form, by the rules of the module
-    docstring: `variables` the names to read (every field on the grid's
-    axes by default), `surface` the radius of a depth of zero in metres
-    where the file states none, `vertical_units` the vertical axis's unit
-    where it states none, `pairs` the values of the vertical coordinate
-    of slices that are the two sides of one discontinuity."""
-    import netCDF4
-
-    for what, rule in (("seam", seam), ("pole_rows", pole_rows)):
-        if rule not in ("refuse", "mean"):
-            raise ValueError(f"{what} must be 'refuse' or 'mean', got {rule!r}")
-    path = os.fspath(source)
-    with netCDF4.Dataset(path) as ds:
-        ds.set_auto_mask(False)
-        roles = _roles(ds)
-        axes = [r for r in _VERTICAL if r in roles] + ["latitude", "longitude"]
-        dims = [roles[r] for r in axes]
-        names = (tuple(n for n, v in ds.variables.items()
-                       if n not in dims and set(v.dimensions) == set(dims))
-                 if variables is None else tuple(variables))
-        if not names:
-            raise ValueError(f"{path}: no field lies on the grid's axes {dims}")
-        coords = {r: np.asarray(ds.variables[roles[r]][:], dtype=float) for r in axes}
-        vunit = {r: str(getattr(ds.variables[roles[r]], "units", "")) for r in axes}
-        attributes = {k: ds.getncattr(k) for k in ds.ncattrs()}
-        axis = next((r for r in _VERTICAL if r in coords), None)
-        stride = int(stride)
-        if stride < 1:
-            raise ValueError(f"stride must be a positive integer, got {stride}")
-        take = {roles["latitude"]: slice(None, None, stride),
-                roles["longitude"]: slice(None, None, stride)}
-        if vertical is not None:
-            if axis is None:
-                raise ValueError(f"{path}: vertical= cuts a grid with a vertical axis")
-            lo, hi = vertical
-            c = coords[axis]
-            keep = np.ones(c.shape, dtype=bool)
-            if lo is not None:
-                keep &= c >= lo
-            if hi is not None:
-                keep &= c <= hi
-            if keep.sum() < 2:
-                raise ValueError(f"{path}: the window {vertical} keeps fewer than "
-                                 "two slices")
-            first, last = int(np.argmax(keep)), int(keep.size - np.argmax(keep[::-1]))
-            take[roles[axis]] = slice(first, last)
-        for r in axes:
-            coords[r] = coords[r][take.get(roles[r], slice(None))]
-        values, units, long_names = {}, {}, {}
-        for n in names:
-            var = ds.variables[n]
-            if set(var.dimensions) != set(dims):
-                raise ValueError(f"{path}: {n!r} lies on {var.dimensions}, not the "
-                                 f"grid's axes {dims}")
-            a = np.asarray(var[tuple(take.get(d, slice(None)) for d in var.dimensions)])
-            a = a.astype(np.float32 if a.dtype == np.float32 else float, copy=False)
-            for attr in ("_FillValue", "missing_value"):
-                if attr in var.ncattrs():
-                    fill = np.asarray(var.getncattr(attr), dtype=var.dtype).ravel()[0]
-                    a[a == fill] = np.nan
-            values[n] = np.transpose(a, [var.dimensions.index(d) for d in dims])
-            units[n] = str(getattr(var, "units", ""))
-            long_names[n] = str(getattr(var, "long_name", ""))
-    lat, lon = coords["latitude"], coords["longitude"]
+def _horizontal(path: str, lat: np.ndarray, lon: np.ndarray,
+                values: dict[str, np.ndarray], *, regular: bool, seam: str,
+                pole_rows: str
+                ) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray],
+                           AngularGrid | None]:
+    """A source's latitudes and longitudes, and its values on them (their
+    last two axes), in the library's form by the rules of the module
+    docstring: the colatitudes, the longitudes, the values reordered, and
+    a global grid's `AngularGrid` (None for a regional one)."""
     if regular:
         lat, lon = _regular(lat, "latitudes"), _regular(lon, "longitudes")
     # colatitude increasing from the north
@@ -337,6 +282,82 @@ def read_grid(source: str | os.PathLike[str], *,
         contiguous, order = _unwrapped(reduced)
         phi = np.radians(contiguous)
         values = {n: v[..., order] for n, v in values.items()}
+    return theta, phi, values, grid
+
+
+def read_grid(source: str | os.PathLike[str], *,
+              variables: tuple[str, ...] | None = None,
+              surface: float | None = None, vertical_units: str | None = None,
+              pairs: tuple[tuple[float, float], ...] = (), regular: bool = False,
+              seam: str = "refuse", pole_rows: str = "refuse", stride: int = 1,
+              vertical: tuple[float | None, float | None] | None = None) -> GridData:
+    """A netCDF grid in the library's form, by the rules of the module
+    docstring: `variables` the names to read (every field on the grid's
+    axes by default), `surface` the radius of a depth of zero in metres
+    where the file states none, `vertical_units` the vertical axis's unit
+    where it states none, `pairs` the values of the vertical coordinate
+    of slices that are the two sides of one discontinuity."""
+    import netCDF4
+
+    for what, rule in (("seam", seam), ("pole_rows", pole_rows)):
+        if rule not in ("refuse", "mean"):
+            raise ValueError(f"{what} must be 'refuse' or 'mean', got {rule!r}")
+    path = os.fspath(source)
+    with netCDF4.Dataset(path) as ds:
+        ds.set_auto_mask(False)
+        roles = _roles(ds)
+        axes = [r for r in _VERTICAL if r in roles] + ["latitude", "longitude"]
+        dims = [roles[r] for r in axes]
+        names = (tuple(n for n, v in ds.variables.items()
+                       if n not in dims and set(v.dimensions) == set(dims))
+                 if variables is None else tuple(variables))
+        if not names:
+            raise ValueError(f"{path}: no field lies on the grid's axes {dims}")
+        coords = {r: np.asarray(ds.variables[roles[r]][:], dtype=float) for r in axes}
+        vunit = {r: str(getattr(ds.variables[roles[r]], "units", "")) for r in axes}
+        attributes = {k: ds.getncattr(k) for k in ds.ncattrs()}
+        axis = next((r for r in _VERTICAL if r in coords), None)
+        stride = int(stride)
+        if stride < 1:
+            raise ValueError(f"stride must be a positive integer, got {stride}")
+        take = {roles["latitude"]: slice(None, None, stride),
+                roles["longitude"]: slice(None, None, stride)}
+        if vertical is not None:
+            if axis is None:
+                raise ValueError(f"{path}: vertical= cuts a grid with a vertical axis")
+            lo, hi = vertical
+            c = coords[axis]
+            keep = np.ones(c.shape, dtype=bool)
+            if lo is not None:
+                keep &= c >= lo
+            if hi is not None:
+                keep &= c <= hi
+            if keep.sum() < 2:
+                raise ValueError(f"{path}: the window {vertical} keeps fewer than "
+                                 "two slices")
+            first, last = int(np.argmax(keep)), int(keep.size - np.argmax(keep[::-1]))
+            take[roles[axis]] = slice(first, last)
+        for r in axes:
+            coords[r] = coords[r][take.get(roles[r], slice(None))]
+        values, units, long_names = {}, {}, {}
+        for n in names:
+            var = ds.variables[n]
+            if set(var.dimensions) != set(dims):
+                raise ValueError(f"{path}: {n!r} lies on {var.dimensions}, not the "
+                                 f"grid's axes {dims}")
+            a = np.asarray(var[tuple(take.get(d, slice(None)) for d in var.dimensions)])
+            a = a.astype(np.float32 if a.dtype == np.float32 else float, copy=False)
+            for attr in ("_FillValue", "missing_value"):
+                if attr in var.ncattrs():
+                    fill = np.asarray(var.getncattr(attr), dtype=var.dtype).ravel()[0]
+                    a[a == fill] = np.nan
+            values[n] = np.transpose(a, [var.dimensions.index(d) for d in dims])
+            units[n] = str(getattr(var, "units", ""))
+            long_names[n] = str(getattr(var, "long_name", ""))
+    theta, phi, values, grid = _horizontal(path, coords["latitude"],
+                                           coords["longitude"], values,
+                                           regular=regular, seam=seam,
+                                           pole_rows=pole_rows)
     radius = None
     vertical = axis
     if vertical is not None:
@@ -377,6 +398,73 @@ def read_grid(source: str | os.PathLike[str], *,
                     surface=float(surface or EARTH_RADIUS),
                     long_names=MappingProxyType(long_names),
                     attributes=MappingProxyType(attributes), source=path)
+
+
+def read_table(source: str | os.PathLike[str], *,
+               names: tuple[str, ...] | None = None, longitude: str = "LONG",
+               latitude: str = "LAT", columns: tuple[str, ...] | None = None,
+               units: Mapping[str, str] | None = None, regular: bool = False,
+               seam: str = "refuse", pole_rows: str = "refuse") -> GridData:
+    """A text table of a surface's values in the library's form, by the
+    rules of the module docstring: `names` the columns' names, by default
+    the words of the last line before the first row of numbers;
+    `longitude` and `latitude` the names of those two; `columns` the
+    names to read, every other column by default; `units` each one's
+    unit string, which a table does not state.  Whitespace or commas
+    separate the values; lines before the first row of numbers are its
+    header."""
+    path = os.fspath(source)
+    rows = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    first = None
+    for i, line in enumerate(rows):
+        words = line.replace(",", " ").split()
+        try:
+            if len(words) >= 3 and all(np.isfinite(float(w)) for w in words):
+                first = i
+                break
+        except ValueError:
+            continue
+    if first is None:
+        raise ValueError(f"{path}: no row of numbers")
+    if names is None:
+        heads = [line for line in rows[:first] if line.strip()]
+        if not heads:
+            raise ValueError(f"{path}: no line of column names; give names=")
+        names = tuple(heads[-1].replace(",", " ").split())
+    table = np.loadtxt([r.replace(",", " ") for r in rows[first:] if r.strip()],
+                       ndmin=2)
+    if table.shape[1] != len(names):
+        raise ValueError(f"{path}: {table.shape[1]} columns, named {list(names)}")
+    for want in (longitude, latitude):
+        if want not in names:
+            raise KeyError(f"{path}: no column {want!r}; the columns are {list(names)}")
+    picked = (tuple(n for n in names if n not in (longitude, latitude))
+              if columns is None else tuple(columns))
+    for n in picked:
+        if n not in names:
+            raise KeyError(f"{path}: no column {n!r}; the columns are {list(names)}")
+    lon_all = table[:, names.index(longitude)]
+    lat_all = table[:, names.index(latitude)]
+    lat, i = np.unique(lat_all, return_inverse=True)
+    lon, j = np.unique(lon_all, return_inverse=True)
+    seen = np.zeros((lat.size, lon.size), dtype=int)
+    np.add.at(seen, (i, j), 1)
+    if np.any(seen != 1):
+        raise ValueError(f"{path}: the rows are not every node of a grid of "
+                         f"{lat.size} latitudes and {lon.size} longitudes, each once")
+    values = {}
+    for n in picked:
+        v = np.empty((lat.size, lon.size))
+        v[i, j] = table[:, names.index(n)]
+        values[n] = v
+    theta, phi, values, grid = _horizontal(path, lat, lon, values, regular=regular,
+                                           seam=seam, pole_rows=pole_rows)
+    for v in values.values():
+        v.setflags(write=False)
+    units = dict(units or {})
+    return GridData(theta, phi, None, MappingProxyType(values),
+                    MappingProxyType({n: units.get(n, "") for n in picked}), grid=grid,
+                    source=path)
 
 
 def _si(data: GridData, file_name: str, name: str, kind: str | None,
@@ -426,9 +514,10 @@ def _segments(radius: np.ndarray) -> list[slice]:
     return out
 
 
-def _ring_poles(v: np.ndarray, grid: AngularGrid) -> np.ndarray:
-    """(slice, 2) values at the poles: a pole node's own, else the mean of
-    the nearest ring."""
+def ring_poles(v: np.ndarray, grid: AngularGrid) -> np.ndarray:
+    """The values at the poles, (..., 2) for values (..., ntheta, nphi) on
+    `grid`: a pole node's own, else the mean of the nearest ring, the
+    readers' rule for a grid without its poles."""
     with warnings.catch_warnings():                     # a slice missing everywhere
         warnings.simplefilter("ignore", RuntimeWarning)
         north = np.nanmean(v[..., 0, :], axis=-1)
@@ -476,7 +565,7 @@ def grid_model(data: GridData, variables: Variables, *, reference: Model | None 
             v[missing] = fill
         character = (spec(vocab).character if kind in (None, "absolute")
                      else SCALAR)
-        poles = _ring_poles(v, grid)
+        poles = ring_poles(v, grid)
         for k, node in enumerate(grid.pole_nodes):
             if node:
                 poles[..., k] = np.nan
