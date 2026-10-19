@@ -34,6 +34,13 @@ It carries the citations of the parameter sets that made it.
 - `attached(model, anomaly, name, spec)` attaches the anomaly itself
   under a name and spec of the caller's, converted to the model's units,
   for a look at it.
+- `sl3d_viscosity(model)` is sl3d's chain in one call: the velocity
+  anomaly, through sl3d's density scaling and expansivity to a
+  temperature, and its exponential law, with no renormalisation.  sl3d
+  applies it to S20RTS without its degree 0 over its viscoelastic
+  region, which is the caller's to set up (`datasets.transplanted` with
+  `remove_mean=True`); it holds the Fortran's own output at its nodes to
+  the Fortran's single precision.
 
 Each model written cites the works of the anomaly and the law after its
 own.
@@ -55,14 +62,15 @@ from ..model import Model, cited
 from ..perturbation import PerturbedField
 from ..units import Scales
 from ..vocabulary import FieldSpec
-from .parameters import (DensityLaw, DensityScaling, Expansivity, ParameterSet,
+from .parameters import (SL3D_DENSITY_SCALING, SL3D_EXPANSIVITY, SL3D_VISCOSITY,
+                         DensityLaw, DensityScaling, Expansivity, ParameterSet,
                          Sensitivity, ViscosityLaw)
 
 if TYPE_CHECKING:
     from ..sampling import AngularGrid
 
 __all__ = ["ANOMALIES", "Anomaly", "velocity_anomaly", "temperature_anomaly",
-           "with_viscosity", "with_density", "attached"]
+           "with_viscosity", "with_density", "attached", "sl3d_viscosity"]
 
 #: The kinds of anomaly: a relative velocity anomaly, a temperature anomaly.
 ANOMALIES = ("velocity", "temperature")
@@ -285,3 +293,12 @@ def attached(model: Model, anomaly: Anomaly, name: str, spec: FieldSpec) -> Mode
     specs = {**{n: s for n, s in model.specs.items()}, name: spec}
     return model.replaced(layers=layers, specs=specs).with_citation(*anomaly.citation)
 
+
+def sl3d_viscosity(model: Model, *, layers: Iterable[int | str] | None = None,
+                   name: str = "viscosity") -> Model:
+    """The model with the viscosity of sl3d's chain on the layers whose shear
+    speed varies (or `layers`), by the rule of the module docstring."""
+    dt = temperature_anomaly(velocity_anomaly(model, layers=layers),
+                             scaling=SL3D_DENSITY_SCALING,
+                             expansivity=SL3D_EXPANSIVITY)
+    return with_viscosity(model, dt, SL3D_VISCOSITY, name=name)

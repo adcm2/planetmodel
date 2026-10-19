@@ -26,8 +26,9 @@ from .laws import (GAS_CONSTANT, anelastic_sensitivity, beta_viscosity,
                    density_from_temperature, density_from_velocity,
                    exponential_viscosity, temperature_from_density,
                    temperature_from_velocity)
-from .building import (ANOMALIES, Anomaly, attached, temperature_anomaly,
-                       velocity_anomaly, with_density, with_viscosity)
+from .building import (ANOMALIES, Anomaly, attached, sl3d_viscosity,
+                       temperature_anomaly, velocity_anomaly, with_density,
+                       with_viscosity)
 from .parameters import (BetaViscosity, DensityLaw, DensityScaling, Expansivity,
                          ExponentialViscosity, ParameterSet, Sensitivity,
                          ViscosityLaw)
@@ -35,7 +36,8 @@ from .profiles import (Profile, ProfileLike, as_profile, constant, polynomial, s
                        tabulated)
 
 __all__ = ["building", "laws", "parameters", "profiles", "ANOMALIES", "Anomaly",
-           "attached", "temperature_anomaly", "velocity_anomaly", "with_density",
+           "attached", "sl3d_viscosity", "temperature_anomaly", "velocity_anomaly",
+           "with_density",
            "with_viscosity", "DensityLaw", "ViscosityLaw", "GAS_CONSTANT",
            "anelastic_sensitivity",
            "beta_viscosity", "density_from_temperature", "density_from_velocity",
