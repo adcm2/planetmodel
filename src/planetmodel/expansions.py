@@ -15,19 +15,16 @@ phi) alone, a fixed coefficient array, with its two angular derivatives,
 so that it serves as a relief of `layer_linear` and as a surface
 quantity.
 
-Both evaluate through scipy's harmonics (`harmonics.synthesise`), a
-block of points at a time, at a cost of order (lmax + 1)^2 a point and
-with the coefficients held once for each distinct radius; the points of
-a radius shared by `FAST_POINTS` or more (a sphere, a grid at a node of
-radius), and a harmonic function's `FAST_POINTS` or more, go through
-ducc0's synthesis at points where the `harmonics` extra is installed,
-to `harmonics.POINT_EPSILON` of the field's largest value and some
-thousand times faster, scipy remaining the definition the tests hold it
-to.  Above `harmonics.SCIPY_LMAX`, where scipy's harmonics overflow,
-every point goes through ducc0, and without it the evaluation is
-refused by name.  On the nodes of a grid, `on_grid` takes ducc0's grid
-transforms (a shipped kind of band at least lmax) or its synthesis at
-points (any other grid).  Entries of a coefficient array
+Both evaluate through ducc0's synthesis at points
+(`harmonics.synthesise`), to `harmonics.POINT_EPSILON` of the field's
+largest value.  A harmonic field groups its points by the polynomial
+piece of radius they lie in, and synthesises each piece's points once
+for each distinct radius among them, or, where they have more radii
+than the piece has terms, once for each term of the piece's polynomial,
+which it then sums at each point's radius: a section through many
+radii costs a few syntheses a piece.  On the nodes of a grid, `on_grid`
+takes ducc0's grid transforms (a shipped kind of band at least lmax) or
+its synthesis at points (any other grid).  Entries of a coefficient array
 that belong to no harmonic (the sine slot of order zero, orders above
 the degree) must be zero.  Everything is numbers.
 """
@@ -43,17 +40,13 @@ from scipy.interpolate import BSpline, PPoly
 
 from .character import SCALAR, Character
 from .fields import FieldBase, RadialField, radial_pieces_of
-from .harmonics import SCIPY_LMAX, synthesise, synthesise_gradient
+from .harmonics import synthesise, synthesise_grid, synthesise_gradient
 from .layerfunction import PolynomialLayer, as_interval
 
 if TYPE_CHECKING:
     from .sampling import AngularGrid
 
-__all__ = ["HarmonicField", "HarmonicFunction", "FAST_POINTS"]
-
-#: The points sharing one radius from which ducc0 synthesises them, where
-#: it is installed.
-FAST_POINTS = 512
+__all__ = ["HarmonicField", "HarmonicFunction"]
 
 
 def _harmonic_entries(lmax: int) -> np.ndarray:
@@ -155,22 +148,14 @@ class HarmonicField(FieldBase):
 
     def on_grid(self, r: ArrayLike, grid: AngularGrid) -> np.ndarray:
         """The values at radii `r`, within the interval, on the nodes of
-        `grid`, (r.size, ntheta, nphi): through ducc0 where it is
-        installed (its grid transforms on a shipped kind of band at least
-        `lmax`, its synthesis at points otherwise), through scipy's
-        harmonics point by point without it."""
+        `grid`, (r.size, ntheta, nphi): through ducc0's grid transforms on
+        a shipped kind of band at least `lmax`, its synthesis at points
+        otherwise."""
         r, _, _ = self._points(np.asarray(r, dtype=float).ravel(), 0.0, 0.0)
         c = self.coefficients_at(r)
-        try:
-            from .harmonics import synthesise_grid, synthesise_points
-            if (grid.kind != "custom" and grid.lmax is not None
-                    and grid.lmax >= self._lmax):
-                return synthesise_grid(c, grid)
-            return synthesise_points(c, grid.colatitudes[:, None],
-                                     grid.longitudes[None, :])
-        except ImportError:
-            return self.evaluate(r[:, None, None], grid.colatitudes[None, :, None],
-                                 grid.longitudes[None, None, :])
+        if grid.kind != "custom" and grid.lmax is not None and grid.lmax >= self._lmax:
+            return synthesise_grid(c, grid)
+        return synthesise(c, grid.colatitudes[:, None], grid.longitudes[None, :])
 
     def coefficients_at(self, r: ArrayLike) -> np.ndarray:
         """c_lm at the radii `r`: shape (2, lmax + 1, lmax + 1) + r's shape."""
@@ -180,29 +165,28 @@ class HarmonicField(FieldBase):
 
     def _values(self, r: np.ndarray, theta: np.ndarray | None,
                 phi: np.ndarray | None) -> np.ndarray:
-        radii, index = np.unique(r, return_inverse=True)
-        index = index.reshape(r.shape)
-        c = self.coefficients_at(radii)
-        counts = np.bincount(index.ravel(), minlength=radii.size)
-        many = np.flatnonzero((counts >= FAST_POINTS) | (self._lmax > SCIPY_LMAX))
-        if many.size:
-            from .harmonics import synthesise_points
-
-            t, p = np.broadcast_arrays(np.asarray(theta, dtype=float),
-                                       np.asarray(phi, dtype=float))
-            flat, tf, pf = index.ravel(), t.ravel(), p.ravel()
-            out = np.empty(flat.size)
-            try:
-                for u in many:
-                    at = flat == u
-                    out[at] = synthesise_points(c[..., u], tf[at], pf[at])
-            except ImportError:                       # without the harmonics extra
-                return synthesise(c, theta, phi, index=index)
-            rest = counts[flat] < FAST_POINTS
-            if rest.any():
-                out[rest] = synthesise(c, tf[rest], pf[rest], index=flat[rest])
-            return out.reshape(r.shape)
-        return synthesise(c, theta, phi, index=index)
+        r, t, p = np.broadcast_arrays(r, np.asarray(theta, dtype=float),
+                                      np.asarray(phi, dtype=float))
+        rf, tf, pf = r.ravel(), t.ravel(), p.ravel()
+        x, c = self._pp.x, self._pp.c
+        terms = c.shape[0]
+        piece = np.clip(np.searchsorted(x, rf, side="right") - 1, 0, x.size - 2)
+        out = np.empty(rf.size)
+        for i in np.unique(piece):
+            at = np.flatnonzero(piece == i)
+            radii, which = np.unique(rf[at], return_inverse=True)
+            if radii.size <= terms:                    # a synthesis a radius
+                held = self.coefficients_at(radii)
+                for u in range(radii.size):
+                    one = at[which == u]
+                    out[one] = synthesise(held[..., u], tf[one], pf[one])
+                continue
+            each = synthesise(np.moveaxis(c[:, i], 0, -1), tf[at], pf[at])
+            d, v = rf[at] - x[i], each[0]              # a synthesis a term
+            for k in range(1, terms):
+                v = v * d + each[k]
+            out[at] = v
+        return out.reshape(r.shape)
 
     def spherical_mean(self, *, grid: AngularGrid | None = None) -> RadialField:
         """c_00(r) / sqrt(4 pi), exact polynomial pieces; `grid` is not
@@ -276,44 +260,21 @@ class HarmonicFunction:
         return self._lmax
 
     def __call__(self, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
-        """The values at (theta, phi), broadcast together, by the route of
-        the module docstring."""
-        t, p = np.broadcast_arrays(np.asarray(theta, dtype=float),
-                                   np.asarray(phi, dtype=float))
-        if t.size >= FAST_POINTS or self._lmax > SCIPY_LMAX:
-            try:
-                from .harmonics import synthesise_points
-                return synthesise_points(self._c, t, p)
-            except ImportError:                       # without the harmonics extra
-                pass
-        return synthesise(self._c, t, p)
+        """The values at (theta, phi), broadcast together."""
+        return synthesise(self._c, theta, phi)
 
     def angular_gradient(self, theta: ArrayLike, phi: ArrayLike
                          ) -> tuple[np.ndarray, np.ndarray]:
-        """(d/dtheta, d/dphi) at (theta, phi), broadcast together, by the
-        route of the module docstring."""
-        t, p = np.broadcast_arrays(np.asarray(theta, dtype=float),
-                                   np.asarray(phi, dtype=float))
-        if t.size >= FAST_POINTS or self._lmax > SCIPY_LMAX:
-            try:
-                from .harmonics import synthesise_points_gradient
-                return synthesise_points_gradient(self._c, t, p)
-            except ImportError:                       # without the harmonics extra
-                pass
-        return synthesise_gradient(self._c, t, p)
+        """(d/dtheta, d/dphi) at (theta, phi), broadcast together."""
+        return synthesise_gradient(self._c, theta, phi)
 
     def on_grid(self, grid: AngularGrid) -> np.ndarray:
-        """The values on the nodes of `grid`, (ntheta, nphi), through
-        ducc0 where it is installed (its grid transforms on a shipped kind
-        of band at least `lmax`, its synthesis at points otherwise)."""
-        try:
-            from .harmonics import synthesise_grid
-            if (grid.kind != "custom" and grid.lmax is not None
-                    and grid.lmax >= self._lmax):
-                return synthesise_grid(self._c, grid)
-        except ImportError:                           # without the harmonics extra
-            pass
-        return self(grid.colatitudes[:, None], grid.longitudes[None, :])
+        """The values on the nodes of `grid`, (ntheta, nphi): through
+        ducc0's grid transforms on a shipped kind of band at least `lmax`,
+        its synthesis at points otherwise."""
+        if grid.kind != "custom" and grid.lmax is not None and grid.lmax >= self._lmax:
+            return synthesise_grid(self._c, grid)
+        return synthesise(self._c, grid.colatitudes[:, None], grid.longitudes[None, :])
 
     def mean(self) -> float:
         """The mean over the sphere, c_00 / sqrt(4 pi)."""

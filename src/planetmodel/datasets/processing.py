@@ -32,8 +32,8 @@ harmonic field harmonic.
 above `lmax` and below `lmin`, or rolled off by the raised cosine over
 `roll_off` degrees below `lmax`.  A harmonic field gives a harmonic
 field; a gridded field on a grid of a shipped kind is analysed at each
-node, weighted and synthesised back onto its own grid or `grid=` (the
-`harmonics` extra); a perturbed field is filtered in its perturbation;
+node, weighted and synthesised back onto its own grid or `grid=`; a
+perturbed field is filtered in its perturbation;
 a field composed from a gridded one (a data set of values made relative
 to a reference) is first sampled onto that field's grid and radial
 nodes (`resampled`).  `demeaned` is a field less its spherical mean at

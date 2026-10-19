@@ -170,7 +170,6 @@ def test_filtering_a_harmonic_field_by_degree():
 
 
 def test_filtering_a_gridded_field_by_degree():
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
     from planetmodel.harmonics import analyse_grid
     f = harmonic(lmax=6, seed=7)
     grid = pm.gauss_legendre(12)

@@ -14,9 +14,8 @@
 # a grid, a regional model of the North Atlantic, and a model of the Moon.
 # It needs the network the first time it runs (the files are a few
 # megabytes, and are kept in a cache afterwards), the `netcdf` extra
-# (netCDF4) for the gridded models, the `maps` extra (cartopy) for the
-# maps, and the `harmonics` extra (ducc0) for the spectra. The figures are
-# written to `examples/figures/`.
+# (netCDF4) for the gridded models, and the `maps` extra (cartopy) for the
+# maps. The figures are written to `examples/figures/`.
 
 # %%
 import tempfile

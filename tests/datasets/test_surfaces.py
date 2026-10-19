@@ -12,7 +12,7 @@ from scipy.special import lpmv
 from planetmodel import GriddedFunction, HarmonicFunction, gauss_legendre
 from planetmodel.datasets import (CoefficientReader, Dataset, Source, Surface,
                                   read_coefficients)
-from planetmodel.harmonics import SCIPY_LMAX, synthesise, to_convention
+from planetmodel.harmonics import to_convention
 from planetmodel.testing import check_dataset, check_surface
 
 L = 8
@@ -184,33 +184,17 @@ def test_a_surface_s_mean_and_its_values_on_a_grid():
     assert np.isclose(s.mean(), 1737e3)
     grid = gauss_legendre(12)
     t, p = np.meshgrid(grid.colatitudes, grid.longitudes, indexing="ij")
-    assert np.isclose(grid.mean(s(t, p)), 1737e3, rtol=1e-15)
+    assert np.isclose(grid.mean(s(t, p)), 1737e3, rtol=1e-13)    # POINT_EPSILON
     held = s.sampled(grid)
     assert isinstance(held.function, GriddedFunction) and held.name == "moon"
-    assert np.allclose(held.function.values, s(t, p), rtol=1e-14)
+    assert np.allclose(held.function.values, s(t, p), rtol=1e-13)
     assert np.isclose(held.mean(), 1737e3, rtol=1e-9)      # its interpolant's mean
     plain = Surface(lambda t, p: s(t, p), "radius")
     with pytest.raises(ValueError, match="grid="):
         plain.mean()
-    assert np.isclose(plain.mean(grid=grid), 1737e3, rtol=1e-15)
+    assert np.isclose(plain.mean(grid=grid), 1737e3, rtol=1e-13)
     check_surface(s)
     check_surface(held)
-
-
-def test_a_harmonic_function_above_scipy_s_band_goes_through_ducc0():
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
-    lmax = SCIPY_LMAX + 10
-    c = np.zeros((2, lmax + 1, lmax + 1))
-    c[0, 0, 0], c[0, lmax, 3], c[1, 2, 1] = 2.0, 0.5, -0.25
-    f = HarmonicFunction(c)
-    t, p = np.array([0.4, 1.9]), np.array([0.2, 5.0])     # a few points
-    values = f(t, p)
-    assert np.all(np.isfinite(values))
-    low = c[:, :3, :3]                        # the low degrees, which scipy reads
-    rest = values - synthesise(low, t, p)
-    assert np.all(np.abs(rest) < 0.5 * 4.0) and np.all(np.isfinite(rest))
-    with pytest.raises(ValueError, match="overflow"):
-        synthesise(c, t, p)
 
 
 # -- the reader of an entry -----------------------------------------------------

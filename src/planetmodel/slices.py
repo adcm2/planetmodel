@@ -38,7 +38,7 @@ radians; `frames.from_geographic` converts latitudes and longitudes.
 **Spectra.**  `spectrum` analyses a sphere slice into the library's
 real orthonormal harmonics (`planetmodel.harmonics`: the integral of
 Y_lm^2 over the unit sphere is one, with no Condon-Shortley phase),
-through the `harmonics` extra, and gives the power by degree
+and gives the power by degree
 
     P_l = sum_m c_lm^2 / (4 pi),
 

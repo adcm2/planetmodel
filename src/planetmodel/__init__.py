@@ -22,7 +22,7 @@ Modules reached by name, one level down:
   sampling     a model on a radial mesh times an angular grid
   lateral      values between the nodes of an angular grid: the lateral rules
   modelfile    the model file: a model in one netCDF file (netCDF4, optional)
-  harmonics    real spherical harmonics; grid transforms via ducc0 (optional)
+  harmonics    real spherical harmonics, through ducc0
   slices       a field on a sphere, a section or a profile; spectra and
                correlations by degree
   plotting     profiles, sections, maps and spectra drawn (matplotlib and

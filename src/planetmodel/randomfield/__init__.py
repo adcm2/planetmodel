@@ -18,8 +18,8 @@ Gaussian measure are made of.  `RadialGRF`, `SphericalGRF` and
 a shell and of the layers of a skeleton, by Karhunen-Loeve expansion in
 those bases, with an exact marginal standard deviation.  The shell
 fields are expanded in the real orthonormal harmonics of
-`planetmodel.harmonics`, whose grid synthesis needs the `harmonics`
-extra (ducc0); everything else here is numpy and scipy.  `fields`
+`planetmodel.harmonics`, synthesised through ducc0; everything else
+here is numpy and scipy.  `fields`
 states the construction of the samplers, `basis` that of the bases.
 
     grf = RadialGRF(r1, r2, nu, lam, sigma=sigma)

@@ -83,7 +83,7 @@ def test_a_4pi_mean_is_its_degree_zero_coefficient():
     C = np.zeros((2, 3, 3))
     C[0, 0, 0] = 3389500.0
     c = from_convention(C, normalization="4pi", csphase=1)
-    assert synthesise(c, 0.3, 1.2) == pytest.approx(3389500.0, rel=1e-15)
+    assert synthesise(c, 0.3, 1.2) == pytest.approx(3389500.0, rel=1e-13)
 
 
 def test_the_coefficient_files_convention():

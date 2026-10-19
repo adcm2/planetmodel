@@ -35,7 +35,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "harmonics netcdf"
+        run: poetry install --with dev --extras "netcdf"
 
       - name: Fetch, check and read every entry
         env:

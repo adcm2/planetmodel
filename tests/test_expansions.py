@@ -83,9 +83,7 @@ def test_exact_in_radius_beyond_the_ends_and_rescaled():
     assert f.renamed("q").name == "q" and f.name is None
 
 
-@pytest.mark.harmonics
 def test_gridded_on_a_grid_of_its_band_and_read_back_by_the_harmonic_rule():
-    pytest.importorskip("ducc0")
     rng = np.random.default_rng(3)
     pp = piecewise_cubic(10, rng)
     f = HarmonicField(INTERVAL, pp)
@@ -155,7 +153,6 @@ def test_a_harmonic_function_is_a_relief_whose_geometry_holds():
 
 
 def test_on_grid_holds_the_radius_and_takes_ducc0_on_any_grid():
-    pytest.importorskip("ducc0")
     from planetmodel import AngularGrid, gauss_legendre
 
     L = 6
@@ -174,28 +171,26 @@ def test_on_grid_holds_the_radius_and_takes_ducc0_on_any_grid():
         assert np.allclose(h.on_grid([0.7], grid), want, atol=1e-11)
 
 
-@pytest.mark.harmonics
-def test_many_points_at_one_radius_go_through_ducc0_to_its_accuracy():
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
-    from planetmodel.expansions import FAST_POINTS
+def test_points_by_radius_and_by_term_are_the_coefficients_there():
+    """A piece's points are synthesised a radius at a time where they have
+    few radii, a term at a time where they have many; both are the
+    expansion of the coefficients at each point's radius."""
     from planetmodel.harmonics import POINT_EPSILON
 
     rng = np.random.default_rng(14)
     L = 24
-    c = rng.standard_normal((2, 2, L + 1, L + 1))
+    c = rng.standard_normal((3, 2, 2, L + 1, L + 1))       # two quadratic pieces
     for l in range(L + 1):
-        c[:, :, l, l + 1:] = 0.0
-    c[:, 1, :, 0] = 0.0
-    f = HarmonicField((1.0, 2.0), PPoly(c[:, None], [1.0, 2.0]))
-    n = FAST_POINTS + 37
+        c[..., l, l + 1:] = 0.0
+    c[..., 1, :, 0] = 0.0
+    f = HarmonicField((1.0, 2.0), PPoly(c, [1.0, 1.5, 2.0]))
+    n = 300
     theta, phi = np.arccos(rng.uniform(-1, 1, n)), rng.uniform(0, 2 * np.pi, n)
-    r = np.full(n, 1.3)
-    r[:20] = rng.uniform(1.0, 2.0, 20)                   # a few at radii of their own
-    got = f(r, theta, phi)
+    r = np.where(np.arange(n) < 150, 1.2, rng.uniform(1.5, 2.0, n))   # one radius,
+    got = f(r, theta, phi)                                  # then many
     want = np.array([synthesise(f.coefficients_at(ri), ti, pi)
                      for ri, ti, pi in zip(r, theta, phi)])
     scale = np.abs(want).max()
     assert np.allclose(got, want, rtol=0.0, atol=10 * POINT_EPSILON * scale)
-    few = f(r[: FAST_POINTS - 1], theta[: FAST_POINTS - 1], phi[: FAST_POINTS - 1])
-    assert np.allclose(few, want[: FAST_POINTS - 1], rtol=0.0,
-                       atol=1e-13 * np.abs(want).max())
+    few = f(r[148:153], theta[148:153], phi[148:153])      # a radius at a time
+    assert np.allclose(few, want[148:153], rtol=0.0, atol=10 * POINT_EPSILON * scale)

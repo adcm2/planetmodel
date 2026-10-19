@@ -52,8 +52,8 @@ jobs:
           SKIP: no-commit-to-branch,pytest
         run: pre-commit run --all-files --show-diff-on-failure --color=always
 
-  # The fast suite: numpy and scipy, plus the `plot`, `harmonics` and `netcdf` extras
-  # so that the plotting and grid-transform tests run rather than skip.  Every
+  # The fast suite: the dependencies, plus the `plot`, `netcdf` and `maps` extras
+  # so that the plotting, model-file and map tests run rather than skip.  Every
   # platform and every supported Python.
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.python-version }})
@@ -79,7 +79,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics netcdf maps"
+        run: poetry install --with dev --extras "plot netcdf maps"
 
       - name: Test with pytest
         # The default selection is the fast suite (pyproject's addopts).
@@ -111,7 +111,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics netcdf"
+        run: poetry install --with dev --extras "plot netcdf"
 
       - name: Step numpy and scipy down to their floors
         run: pip install "numpy==2.0.*" "scipy==1.15.*"
@@ -142,7 +142,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics meshing mfem netcdf"
+        run: poetry install --with dev --extras "plot meshing mfem netcdf"
 
       # gmsh's wheel needs the X and OpenGL libraries even headless.
       - name: Install gmsh's system libraries
@@ -188,10 +188,10 @@ jobs:
           pip install poetry
           poetry config virtualenvs.create false
 
-      # plot, maps and harmonics for the kernel tutorial, run on the C++
-      # example's file below.
+      # plot and maps for the kernel tutorial, run on the C++ example's
+      # file below.
       - name: Install dependencies
-        run: poetry install --with dev --extras "netcdf meshing mfem plot maps harmonics"
+        run: poetry install --with dev --extras "netcdf meshing mfem plot maps"
 
       - name: Write the fixtures
         run: poetry run python cpp/tests/make_fixtures.py
@@ -298,7 +298,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics meshing mfem netcdf"
+        run: poetry install --with dev --extras "plot meshing mfem netcdf"
 
       - name: Install gmsh's system libraries
         run: |

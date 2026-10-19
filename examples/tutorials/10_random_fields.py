@@ -160,7 +160,7 @@ print("map std at r = 0.9:", surface.values.std().round(3), "(sigma = 1)")
 # %% [markdown]
 # `sample_grid` draws a sample directly on a Gauss-Legendre grid, as an
 # array of mesh nodes by grid points, using the fast spherical-harmonic
-# transforms of ducc0 (the `harmonics` extra). The transforms themselves
+# transforms of ducc0. The transforms themselves
 # are reached through `planetmodel.harmonics`. `analyse_grid` is the inverse
 # transform for a field band-limited at the grid's degree, and the two
 # round-trip to rounding error. The average of the square of one sample

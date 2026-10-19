@@ -162,8 +162,7 @@ def test_a_fully_3d_model_comes_back(tmp_path):
     q, qb = m.layer(0)["q"], back.layer(0)["q"]
     assert isinstance(qb, GriddedField) and qb.lateral == "harmonic"
     rq = rng.uniform(0.05, 0.45, 30)
-    if pytest.importorskip("ducc0"):
-        assert np.allclose(qb(rq, t, p), q(rq, t, p), rtol=0, atol=1e-11)
+    assert np.allclose(qb(rq, t, p), q(rq, t, p), rtol=0, atol=1e-11)
 
 
 def test_a_field_without_pieces_subdivides_its_own_layer(tmp_path):

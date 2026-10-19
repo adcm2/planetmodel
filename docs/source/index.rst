@@ -32,13 +32,13 @@ Installation
 
    pip install planetmodel
 
-The base install depends on numpy and scipy alone.  Meshing, MFEM
-export, spherical-harmonic grid transforms, the model file and plotting
-are extras:
+The base install depends on numpy, scipy and ducc0, which does the
+spherical-harmonic transforms.  Meshing, MFEM export, the model file,
+plotting and maps are extras:
 
 .. code-block:: bash
 
-   pip install "planetmodel[meshing,mfem,harmonics,netcdf,plot]"
+   pip install "planetmodel[meshing,mfem,netcdf,plot,maps]"
 
 File formats
 ============

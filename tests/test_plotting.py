@@ -231,7 +231,6 @@ def _harmonic_model(layered, coeffs, name):
 
 
 def test_a_spectrum_is_a_line_of_power_by_degree(layered):
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
     from planetmodel.plotting import spectrum
     c = np.zeros((2, 4, 4))
     c[0, 0, 0], c[0, 2, 1], c[1, 3, 3] = 1.0, 0.5, 0.25
@@ -248,7 +247,6 @@ def test_a_spectrum_is_a_line_of_power_by_degree(layered):
 
 
 def test_a_correlation_is_an_image_by_degree_and_radius(layered):
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
     from planetmodel.plotting import correlation, correlation_total
     a, b = np.zeros((2, 4, 4)), np.zeros((2, 4, 4))
     a[0, 2, 1], a[0, 3, 0], a[0, 1, 1] = 1.0, 0.5, 0.3

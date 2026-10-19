@@ -37,10 +37,10 @@
 #
 #     python 15_kernels.py ../../build/cpp/tests/written/kernel.nc
 #
-# It needs the `netcdf` extra (netCDF4) for the model file, the `maps`
-# extra (cartopy) for the maps, and the `harmonics` extra (ducc0) for the
-# spectra. The figures are written to `examples/figures/`, and the
-# ParaView files to `examples/figures/tutorial_15_vtk/`.
+# It needs the `netcdf` extra (netCDF4) for the model file and the `maps`
+# extra (cartopy) for the maps. The figures are written to
+# `examples/figures/`, and the ParaView files to
+# `examples/figures/tutorial_15_vtk/`.
 
 # %%
 import sys

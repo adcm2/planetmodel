@@ -113,7 +113,6 @@ def gridded_values():
 
 
 def test_a_data_set_of_values_is_filtered_through_its_grid():
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
     src, v = gridded_values()
     ref = pm.PREM()
     m = transplanted(pm.PREM(), src, source_reference=ref, lmax=4, remove_mean=True)

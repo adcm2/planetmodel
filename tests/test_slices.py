@@ -295,7 +295,6 @@ def harmonic_model(two):
 
 def test_the_power_of_a_field_is_at_its_degrees_and_sums_to_its_mean_square(
         harmonic_model):
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
     m, c = harmonic_model
     sp = slices.spectrum(m, "vs", radius=0.8, lmax=6)
     want = np.zeros(7)
@@ -313,7 +312,6 @@ def test_the_power_of_a_field_is_at_its_degrees_and_sums_to_its_mean_square(
 
 
 def test_the_coefficients_are_the_scipy_basis_by_quadrature(two):
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
     from planetmodel.harmonics import real_harmonics
     m = _with(two, 1, lateral)
     grid = gauss_legendre(8)
@@ -326,7 +324,6 @@ def test_the_coefficients_are_the_scipy_basis_by_quadrature(two):
 
 
 def test_a_spectrum_wants_a_grid_with_a_band_and_the_field_everywhere(two):
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
     from planetmodel import AngularGrid
     with pytest.raises(ValueError, match="band"):
         slices.spectrum(two, "vs", radius=0.8, lmax=6, grid=gauss_legendre(4))
@@ -340,7 +337,6 @@ def test_a_spectrum_wants_a_grid_with_a_band_and_the_field_everywhere(two):
 
 def test_a_field_correlates_to_one_with_itself_and_to_zero_with_an_orthogonal_one(
         two):
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
     a = np.zeros((2, 4, 4))
     b = np.zeros((2, 4, 4))
     a[0, 2, 1], a[0, 3, 0] = 1.0, 0.5
@@ -458,7 +454,6 @@ def test_a_function_on_an_interface_is_a_sphere_slice_at_its_radius(kernel):
 
 
 def test_any_sphere_slice_has_a_spectrum(kernel):
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
     from planetmodel import GriddedFunction
     from planetmodel.harmonics import synthesise
     c = np.zeros((2, 4, 4))

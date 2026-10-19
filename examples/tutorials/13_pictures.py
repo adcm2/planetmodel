@@ -17,9 +17,9 @@
 # the model as files for ParaView, a program for looking at
 # three-dimensional data interactively, and says how to start with it.
 #
-# It needs the `plot` extra (matplotlib), the `maps` extra (cartopy) for
-# the maps, and the `harmonics` extra (ducc0) for the spectra. The
-# figures are written to `examples/figures/`, and the ParaView files to
+# It needs the `plot` extra (matplotlib) and the `maps` extra (cartopy)
+# for the maps. The figures are written to `examples/figures/`, and the
+# ParaView files to
 # `examples/figures/tutorial_13_vtk/`.
 
 # %%

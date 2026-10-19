@@ -901,10 +901,9 @@ files = [
 name = "ducc0"
 version = "0.41.0"
 description = "Distinctly useful code collection: contains efficient algorithms for Fast Fourier (and related) transforms, spherical harmonic transforms involving very general spherical grids, gridding/degridding tools for radio interferometry, 4pi spherical convolution operators and much more."
-optional = true
+optional = false
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"harmonics\""
 files = [
     {file = "ducc0-0.41.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:3f459afc64a7ee0d39634fcb5e9aeacab385a20214f64bc451e6caded44447a1"},
     {file = "ducc0-0.41.0-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6770425751f5521edc4f8d83ad78adaeb6860acd53a7bfc556e70ea27dc28a12"},
@@ -3324,7 +3323,6 @@ types = ["pandas-stubs", "scipy-stubs", "types-PyYAML", "types-Pygments", "types
 viz = ["cartopy (>=0.24)", "matplotlib (>=3.10)", "nc-time-axis", "seaborn"]
 
 [extras]
-harmonics = ["ducc0"]
 maps = ["cartopy", "matplotlib"]
 meshing = ["gmsh"]
 mfem = ["mfem"]
@@ -3335,4 +3333,4 @@ plot = ["matplotlib"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "881c2f501b3ee9139e2644d948141756e94dcbf762c6e8a0402566aa6201c1cc"
+content-hash = "fbb7247127c4069b3360b7f5cfa4bb423246544505519be4c518c2b74d2a84b0"
