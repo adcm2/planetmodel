@@ -16,8 +16,8 @@ the bilinear rule and a shift by the bicubic one, on a grid without its
 poles); and PREM given a viscosity and converted by sl3d's chain from a
 perturbation of its shear speeds (`model_converted.nc`, the viscosity a
 log perturbation and the model's citation the chain's), and the same
-with that viscosity made a Burgers body's two Prony branches
-(`model_prony.nc`).
+with that viscosity made a Burgers body's two Prony branches and
+power-law creep beside them (`model_prony.nc`).
 
 Beside them, `model_kinds.nc` (an absolute perturbation of `rho` and a
 log one of `viscosity`), `model_tensors.nc` (a rank-2 `stress`, radial
@@ -302,9 +302,10 @@ def model_files(directory: Path) -> list[Path]:
 
 def with_burgers(model: pm.Model) -> pm.Model:
     """The model with its viscosity made a Burgers body's two branches."""
-    from planetmodel.conversion import prony
-    return prony.with_branches(model, prony.burgers_series(strength=5.0,
-                                                           viscosity_ratio=5.0))
+    from planetmodel.conversion import building, prony
+    burgers = prony.with_branches(model, prony.burgers_series(strength=5.0,
+                                                              viscosity_ratio=5.0))
+    return building.with_power_law(burgers, exponent=3.5, transition_stress=1e6)
 
 
 def converted() -> pm.Model:

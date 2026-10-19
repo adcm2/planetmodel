@@ -111,6 +111,14 @@ VOCABULARY: dict[str, FieldSpec] = {
     "viscosity": FieldSpec(SCALAR, units.VISCOSITY, meaning="dynamic viscosity"),
     "temperature": FieldSpec(SCALAR, units.TEMPERATURE,
                              meaning="absolute temperature"),
+    "stress_exponent": FieldSpec(
+        SCALAR, units.DIMENSIONLESS,
+        meaning="stress exponent n of power-law creep, its strain rate growing as "
+                "the stress to the n"),
+    "transition_stress": FieldSpec(
+        DENSITY, units.MODULUS,
+        meaning="deviatoric stress at which power-law creep strains as fast as "
+                "linear creep"),
     "pressure": FieldSpec(DENSITY, units.MODULUS,
                           meaning="hydrostatic pressure of the spherically "
                                   "symmetric reference"),

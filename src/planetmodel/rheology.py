@@ -16,6 +16,12 @@ manner of `is_fluid` and `moduli`:
   case (w_1 = 1, tau_1 = viscosity / mu), so a layer holding both is
   refused, as is a branch without its partner or a gap in the indices
   (`branches`);
+- `stress_exponent` n and `transition_stress` sigma_t: power-law creep
+  beside the linear rheology, which a code that steps in time reads (a
+  relaxation time divided by 1 + gamma (|dev sigma| / 2 mu_0)^(n - 1),
+  gamma = (2 mu_0 / sigma_t)^(n - 1), so that power-law creep strains as
+  fast as linear creep at sigma_t); being nonlinear they are no part of
+  a frozen model, and freezing ignores them;
 - `qmu`, `qkappa`: a constant-Q absorption band about the reference
   frequency omega_0,
   mu(omega) = mu [1 + (2 / pi Q_mu) ln(omega / omega_0) + i / Q_mu],
@@ -61,7 +67,7 @@ if TYPE_CHECKING:
 
 __all__ = ["is_viscoelastic", "frozen_moduli", "dispersive_moduli", "frozen",
            "is_frozen", "reference_omega", "RHEOLOGY_NAMES", "BRANCH_STEMS",
-           "branches", "is_rheology_name"]
+           "POWER_LAW_NAMES", "branches", "is_rheology_name"]
 
 #: The fields a layer's rheology is read from, beside its Prony branches.
 RHEOLOGY_NAMES = ("viscosity", "qmu", "qkappa")
@@ -69,10 +75,18 @@ RHEOLOGY_NAMES = ("viscosity", "qmu", "qkappa")
 #: The stems of a Prony branch's two names: its strength and its time.
 BRANCH_STEMS = ("relaxation_strength", "relaxation_time")
 
+#: The names of power-law creep, read beside the linear rheology.
+POWER_LAW_NAMES = ("stress_exponent", "transition_stress")
+
 
 def is_rheology_name(name: str) -> bool:
     """Whether a layer's rheology is read from fields of this name: one of
-    `RHEOLOGY_NAMES` or a branch's."""
+    `RHEOLOGY_NAMES`, a branch's, or one of `POWER_LAW_NAMES`."""
+    return name in POWER_LAW_NAMES or _linear(name)
+
+
+def _linear(name: str) -> bool:
+    """Whether a name is one a linear rheology is read from."""
     found = member(name)
     return name in RHEOLOGY_NAMES or (found is not None and found[0] in BRANCH_STEMS)
 
@@ -82,7 +96,7 @@ def branches(layer: LayerLike) -> tuple[tuple[Field, Field], ...]:
     empty where it holds none, refused where a branch lacks its partner or
     the indices skip one."""
     held: dict[int, dict[str, Field]] = {}
-    for name in layer.names:
+    for name in layer:
         found = member(name)
         if found is not None and found[0] in BRANCH_STEMS:
             held.setdefault(found[1], {})[found[0]] = layer[name]
@@ -102,7 +116,7 @@ def branches(layer: LayerLike) -> tuple[tuple[Field, Field], ...]:
 
 def is_viscoelastic(layer: LayerLike) -> bool:
     """Whether a layer holds any of `RHEOLOGY_NAMES` or a Prony branch."""
-    return any(is_rheology_name(n) for n in layer.names)
+    return any(_linear(n) for n in layer)
 
 
 def _maxwell_shift(mu: Field, eta: Field, omega: float) -> ComposedField:

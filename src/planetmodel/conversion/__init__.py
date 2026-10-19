@@ -31,7 +31,7 @@ from .laws import (GAS_CONSTANT, anelastic_sensitivity, beta_viscosity,
                    temperature_from_velocity)
 from .building import (ANOMALIES, Anomaly, attached, sl3d_viscosity,
                        temperature_anomaly, velocity_anomaly, with_density,
-                       with_viscosity)
+                       with_power_law, with_viscosity)
 from .parameters import (BetaViscosity, DensityLaw, DensityScaling, Expansivity,
                          ExponentialViscosity, ParameterSet, Sensitivity,
                          ViscosityLaw)
@@ -44,7 +44,7 @@ __all__ = ["building", "laws", "parameters", "profiles", "prony", "PronySeries",
            "andrade_series", "burgers_series", "fitted_series", "maxwell_series",
            "with_branches", "ANOMALIES", "Anomaly",
            "attached", "sl3d_viscosity", "temperature_anomaly", "velocity_anomaly",
-           "with_density",
+           "with_density", "with_power_law",
            "with_viscosity", "DensityLaw", "ViscosityLaw", "GAS_CONSTANT",
            "anelastic_sensitivity",
            "beta_viscosity", "density_from_temperature", "density_from_velocity",

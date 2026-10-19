@@ -34,6 +34,10 @@ It carries the citations of the parameter sets that made it.
 - `attached(model, anomaly, name, spec)` attaches the anomaly itself
   under a name and spec of the caller's, converted to the model's units,
   for a look at it.
+- `with_power_law(model, *, exponent, transition_stress)` sets power-law
+  creep's two parameters (`rheology.POWER_LAW_NAMES`) directly, numbers
+  or profiles in SI, as radial fields on every layer holding a viscosity
+  or Prony branches (or on `layers`).
 - `sl3d_viscosity(model)` is sl3d's chain in one call: the velocity
   anomaly, through sl3d's density scaling and expansivity to a
   temperature, and its exponential law, with no renormalisation.  sl3d
@@ -56,12 +60,13 @@ import numpy as np
 
 from ..character import SCALAR
 from ..fields import ComposedField, Field, RadialField
-from ..layerfunction import polynomial_layer
+from ..layerfunction import NumericLayer, polynomial_layer
 from ..means import spherical_mean
 from ..model import Model, cited
 from ..perturbation import PerturbedField
 from ..units import Scales
 from ..vocabulary import FieldSpec
+from .profiles import ProfileLike, as_profile
 from .parameters import (SL3D_DENSITY_SCALING, SL3D_EXPANSIVITY, SL3D_VISCOSITY,
                          DensityLaw, DensityScaling, Expansivity, ParameterSet,
                          Sensitivity, ViscosityLaw)
@@ -70,7 +75,8 @@ if TYPE_CHECKING:
     from ..sampling import AngularGrid
 
 __all__ = ["ANOMALIES", "Anomaly", "velocity_anomaly", "temperature_anomaly",
-           "with_viscosity", "with_density", "attached", "sl3d_viscosity"]
+           "with_viscosity", "with_density", "attached", "sl3d_viscosity",
+           "with_power_law"]
 
 #: The kinds of anomaly: a relative velocity anomaly, a temperature anomaly.
 ANOMALIES = ("velocity", "temperature")
@@ -302,3 +308,29 @@ def sl3d_viscosity(model: Model, *, layers: Iterable[int | str] | None = None,
                              scaling=SL3D_DENSITY_SCALING,
                              expansivity=SL3D_EXPANSIVITY)
     return with_viscosity(model, dt, SL3D_VISCOSITY, name=name)
+
+
+def with_power_law(model: Model, *, exponent: ProfileLike,
+                   transition_stress: ProfileLike,
+                   layers: Iterable[int | str] | None = None) -> Model:
+    """The model with `stress_exponent` and `transition_stress` (in Pa)
+    on its creeping layers, by the rule of the module docstring."""
+    from ..rheology import POWER_LAW_NAMES, branches
+    which = ([lay.index for lay in model.layers
+              if "viscosity" in lay or branches(lay)]
+             if layers is None else sorted({model.layer(k).index for k in layers}))
+    if not which:
+        raise ValueError("no layer holds a viscosity or Prony branches to creep")
+    profiles = dict(zip(POWER_LAW_NAMES, (as_profile(exponent),
+                                          as_profile(transition_stress))))
+    length = model.scales.length
+    out = model
+    for i in which:
+        lo, hi = model.layer(i).interval
+        for name, profile in profiles.items():
+            k = model.scales.factor(model.spec(name).dimensions)
+            fn = NumericLayer((lo, hi), lambda r, p=profile, k=k: p(r * length) / k)
+            out = out.with_field(i, name, RadialField(
+                (lo, hi), fn, character=model.spec(name).character, name=name),
+                replace=True)
+    return out

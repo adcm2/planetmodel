@@ -9,7 +9,7 @@ from planetmodel.vocabulary import CONSTANTS, VOCABULARY, Constant, FieldSpec, s
 EXPECTED_NAMES = {
     "rho", "vp", "vs", "vpv", "vsv", "vph", "vsh", "eta", "qkappa", "qmu", "qp",
     "kappa", "mu", "A", "C", "F", "L", "N", "elastic_moduli", "viscosity", "g",
-    "drho_dphi0", "temperature", "pressure",
+    "drho_dphi0", "temperature", "pressure", "stress_exponent", "transition_stress",
 }
 
 
