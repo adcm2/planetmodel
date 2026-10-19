@@ -1,5 +1,33 @@
 # Examples
 
+Two kinds of material, after MFEM's: **examples**, small scripts that
+each show one idea in under a hundred lines or so, grouped by area
+(`conversion/`, more areas to come as the tutorials are split), and
+**mini-apps** (`miniapps/`), medium-sized programs that use several
+parts of the library together on a real problem, each in a directory
+with its README. Each starts with a header naming what it needs:
+
+```
+# Needs: plot, maps
+# Network: first run (S20RTS, 0.1 MB)
+# Run: poetry run python examples/conversion/03_sl3d_chain.py
+```
+
+`Needs` lists the extras, `Network` whether it fetches a data set, `Run`
+how to run it; `tests/test_examples.py` reads these lines to choose
+each one's markers, so the test suite runs every example it can.
+
+| example | what it shows |
+|---|---|
+| `conversion/01_velocity_to_temperature.py` | a shear-speed anomaly on PREM as a temperature anomaly, by a sensitivity and through density as sl3d does, with sl3d's parameter profiles (`plot`) |
+| `conversion/02_temperature_to_viscosity.py` | the exponential law's viscosity, sl3d's eps against Milne et al.'s, and Latychev et al.'s renormalisation (`plot`) |
+| `conversion/03_sl3d_chain.py` | sl3d's chain on S20RTS, maps at three depths, and what the model cites (`maps`, network) |
+| `conversion/04_prony_branches.py` | Maxwell, Burgers and a fitted Andrade body as Prony branches, their moduli and losses, and a Burgers mantle frozen at a 100-year period (`plot`) |
+
+| mini-app | what it does |
+|---|---|
+| `miniapps/viscosity3d/` | S40RTS to a 3D viscosity model file for a GIA code: a radial viscosity with an elastic lid, sl3d's chain or Milne's eps, optionally renormalised or a Burgers body, written, read back, read by the C++ example reader, drawn (`netcdf`, `maps`, network) |
+
 `tutorials/` walks through the ideas of the library in order, one script
 per idea. Each is a plain Python file with `# %%` cell markers, so it runs
 as a script from any directory and cell by cell in an editor. Every

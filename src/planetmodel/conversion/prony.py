@@ -13,7 +13,11 @@ strengths w_k and its times in units of the Maxwell time eta / mu
 model whose viscosity varies: `with_branches(model, series)` writes
 `relaxation_strength_k` = w_k and `relaxation_time_k` = c_k eta / mu on
 every solid layer holding a viscosity (or on `layers`), and removes the
-viscosity, which the branches replace.  Built:
+viscosity, which the branches replace.  A time that varies laterally is
+written as a log perturbation of c_k eta_0 / mu_0, the layer's
+unperturbed viscosity and shear modulus, as a viscosity is: it spans
+orders of magnitude, so its values sampled into a file and read between
+nodes would overshoot, where its logarithm does not.  Built:
 
 - `maxwell_series()`: one branch, w = 1, c = 1, the viscosity itself;
 - `burgers_series(*, strength, viscosity_ratio)`: a Maxwell element (mu_M,
@@ -49,9 +53,10 @@ from scipy.optimize import nnls
 from scipy.special import gamma
 
 from ..character import SCALAR
-from ..fields import ComposedField, constant_field
+from ..fields import ComposedField, Field, constant_field
 from ..materials import is_fluid, kappa_mu
 from ..model import Model, cited
+from ..perturbation import PerturbedField, unperturbed
 
 __all__ = ["PronySeries", "maxwell_series", "burgers_series", "fitted_series",
            "andrade_series", "with_branches"]
@@ -180,6 +185,7 @@ def with_branches(model: Model, series: PronySeries, *,
     if not which:
         raise ValueError(f"no solid layer holds {name!r} to build branches from")
     fields = [dict(lay.fields) for lay in model.layers]
+    plain = unperturbed(model)
     for i in which:
         lay = model.layer(i)
         if name not in lay:
@@ -187,14 +193,30 @@ def with_branches(model: Model, series: PronySeries, *,
         if is_fluid(lay):
             raise ValueError(f"layer {i} ({lay.name}) is fluid: it has no shear to "
                              "relax")
-        eta = lay[name]
-        _, mu = kappa_mu(lay)
+        eta, eta0 = lay[name], plain.layer(i)[name]
+        mu, mu0 = kappa_mu(lay)[1], kappa_mu(plain.layer(i))[1]
         for k, (w, c) in enumerate(zip(series.strengths, series.times), start=1):
+            key = f"relaxation_time_{k}"
             fields[i][f"relaxation_strength_{k}"] = constant_field(
                 lay.interval, w, name=f"relaxation_strength_{k}")
-            fields[i][f"relaxation_time_{k}"] = ComposedField(
-                lambda e, m, c=c: c * np.asarray(e) / np.asarray(m), [eta, mu],
-                character=SCALAR, name=f"relaxation_time_{k}")
+            fields[i][key] = _time(c, eta, mu, eta0, mu0, key)
         del fields[i][name]
     return model.replaced(layers=fields).with_citation(*series.citation)
 
+
+
+
+def _time(c: float, eta: Field, mu: Field, eta0: Field, mu0: Field,
+          name: str) -> Field:
+    """c eta / mu, as a log perturbation of c eta_0 / mu_0 where it varies
+    laterally and the latter does not."""
+    def ratio(e: np.ndarray, m: np.ndarray) -> np.ndarray:
+        return c * np.asarray(e) / np.asarray(m)
+
+    time = ComposedField(ratio, [eta, mu], character=SCALAR, name=name)
+    ref = ComposedField(ratio, [eta0, mu0], character=SCALAR, name=name)
+    if time.is_radial or not ref.is_radial:
+        return time
+    log = ComposedField(lambda t, t0: np.log(np.asarray(t) / np.asarray(t0)),
+                        [time, ref], character=SCALAR, name=name)
+    return PerturbedField(ref, log, kind="log", name=name)

@@ -139,6 +139,28 @@ def test_branches_are_rheology_and_have_units():
         prony.with_branches(pm.PREM(), prony.maxwell_series())
 
 
+def test_a_laterally_varying_time_is_a_log_perturbation():
+    from planetmodel.conversion import building, parameters
+    m = viscous_prem()
+    f = pm.AnalyticField((3480e3, 5701e3), lambda r, t, p: 0.02 * np.cos(t) + 0 * r * p)
+    for n in ("vsv", "vsh"):
+        m = pm.perturbed(m, n, f, kind="relative")
+    dt = building.temperature_anomaly(building.velocity_anomaly(m),
+                                      scaling=parameters.SL3D_DENSITY_SCALING,
+                                      expansivity=parameters.SL3D_EXPANSIVITY)
+    m = building.with_viscosity(m, dt, parameters.MILNE_2018_VISCOSITY)
+    b = prony.with_branches(m, prony.burgers_series(strength=5.0, viscosity_ratio=5.0))
+    i = m.layer("lower_mantle").index
+    tau = b.layer(i)["relaxation_time_2"]
+    assert isinstance(tau, pm.PerturbedField) and tau.kind == "log"
+    r, t, p = np.array([5000e3, 4000e3]), np.array([0.3, 2.0]), np.array([1.0, 4.0])
+    c = prony.burgers_series(strength=5.0, viscosity_ratio=5.0).times[1]
+    want = c * m.layer(i)["viscosity"](r, t, p) / pm.kappa_mu(m.layer(i))[1](r, t, p)
+    assert np.allclose(tau(r, t, p), want, rtol=1e-12)
+    flat = prony.with_branches(viscous_prem(), prony.maxwell_series())
+    assert not isinstance(flat.layer(i)["relaxation_time_1"], pm.PerturbedField)
+
+
 @pytest.mark.netcdf
 def test_branches_write_and_read_back(tmp_path):
     pytest.importorskip("netCDF4", reason="needs the planetmodel[netcdf] extra")
