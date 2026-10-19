@@ -50,6 +50,17 @@ def test_the_pictures_tutorial():
     run("13_pictures.py")
 
 
+@pytest.mark.network
+@pytest.mark.netcdf
+@pytest.mark.maps
+@pytest.mark.harmonics
+def test_the_published_models_tutorial():
+    """Fetches its data sets, so it runs with the registry check (`-m
+    network`); not strict, since netCDF4 1.7.4 warns under numpy 2.5."""
+    pytest.importorskip("netCDF4")
+    run("14_published_models.py", strict=False)
+
+
 @pytest.mark.gmsh
 @pytest.mark.mfem
 @pytest.mark.parametrize("script", ["04_a_mesh_for_mfem.py", "09_fields_for_mfem.py"])

@@ -8,7 +8,7 @@ and geometry pass their contracts.
 """
 import numpy as np
 import pytest
-from scipy.interpolate import CubicSpline, make_interp_spline
+from scipy.interpolate import CubicSpline, PPoly, make_interp_spline
 
 from planetmodel import (Geometry, GriddedField, HarmonicField, HarmonicFunction,
                          RadialStretch, Skeleton, gauss_legendre, layer_linear,
@@ -172,3 +172,30 @@ def test_on_grid_holds_the_radius_and_takes_ducc0_on_any_grid():
                           grid.colatitudes[None, :, None],
                           grid.longitudes[None, None, :])
         assert np.allclose(h.on_grid([0.7], grid), want, atol=1e-11)
+
+
+@pytest.mark.harmonics
+def test_many_points_at_one_radius_go_through_ducc0_to_its_accuracy():
+    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
+    from planetmodel.expansions import FAST_POINTS
+    from planetmodel.harmonics import POINT_EPSILON
+
+    rng = np.random.default_rng(14)
+    L = 24
+    c = rng.standard_normal((2, 2, L + 1, L + 1))
+    for l in range(L + 1):
+        c[:, :, l, l + 1:] = 0.0
+    c[:, 1, :, 0] = 0.0
+    f = HarmonicField((1.0, 2.0), PPoly(c[:, None], [1.0, 2.0]))
+    n = FAST_POINTS + 37
+    theta, phi = np.arccos(rng.uniform(-1, 1, n)), rng.uniform(0, 2 * np.pi, n)
+    r = np.full(n, 1.3)
+    r[:20] = rng.uniform(1.0, 2.0, 20)                   # a few at radii of their own
+    got = f(r, theta, phi)
+    want = np.array([synthesise(f.coefficients_at(ri), ti, pi)
+                     for ri, ti, pi in zip(r, theta, phi)])
+    scale = np.abs(want).max()
+    assert np.allclose(got, want, rtol=0.0, atol=10 * POINT_EPSILON * scale)
+    few = f(r[: FAST_POINTS - 1], theta[: FAST_POINTS - 1], phi[: FAST_POINTS - 1])
+    assert np.allclose(few, want[: FAST_POINTS - 1], rtol=0.0,
+                       atol=1e-13 * np.abs(want).max())

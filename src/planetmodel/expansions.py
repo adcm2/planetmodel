@@ -17,10 +17,14 @@ quantity.
 
 Both evaluate through scipy's harmonics (`harmonics.synthesise`), a
 block of points at a time, at a cost of order (lmax + 1)^2 a point and
-with the coefficients held once for each distinct radius; on the nodes
-of a grid, `on_grid` takes ducc0's grid transforms (a shipped kind of
-band at least lmax) or its synthesis at points (any other grid), the
-fast routes of the `harmonics` extra.  Entries of a coefficient array
+with the coefficients held once for each distinct radius; the points of
+a radius shared by `FAST_POINTS` or more (a sphere, a grid at a node of
+radius) go through ducc0's synthesis at points where the `harmonics`
+extra is installed, to `harmonics.POINT_EPSILON` of the field's largest
+value and some thousand times faster, scipy remaining the definition
+the tests hold it to.  On the nodes of a grid, `on_grid` takes ducc0's
+grid transforms (a shipped kind of band at least lmax) or its synthesis
+at points (any other grid).  Entries of a coefficient array
 that belong to no harmonic (the sine slot of order zero, orders above
 the degree) must be zero.  Everything is numbers.
 """
@@ -42,7 +46,11 @@ from .layerfunction import PolynomialLayer, as_interval
 if TYPE_CHECKING:
     from .sampling import AngularGrid
 
-__all__ = ["HarmonicField", "HarmonicFunction"]
+__all__ = ["HarmonicField", "HarmonicFunction", "FAST_POINTS"]
+
+#: The points sharing one radius from which ducc0 synthesises them, where
+#: it is installed.
+FAST_POINTS = 512
 
 
 def _harmonic_entries(lmax: int) -> np.ndarray:
@@ -170,8 +178,28 @@ class HarmonicField(FieldBase):
     def _values(self, r: np.ndarray, theta: np.ndarray | None,
                 phi: np.ndarray | None) -> np.ndarray:
         radii, index = np.unique(r, return_inverse=True)
-        return synthesise(self.coefficients_at(radii), theta, phi,
-                          index=index.reshape(r.shape))
+        index = index.reshape(r.shape)
+        c = self.coefficients_at(radii)
+        counts = np.bincount(index.ravel(), minlength=radii.size)
+        many = np.flatnonzero(counts >= FAST_POINTS)
+        if many.size:
+            from .harmonics import synthesise_points
+
+            t, p = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                       np.asarray(phi, dtype=float))
+            flat, tf, pf = index.ravel(), t.ravel(), p.ravel()
+            out = np.empty(flat.size)
+            try:
+                for u in many:
+                    at = flat == u
+                    out[at] = synthesise_points(c[..., u], tf[at], pf[at])
+            except ImportError:                       # without the harmonics extra
+                return synthesise(c, theta, phi, index=index)
+            rest = counts[flat] < FAST_POINTS
+            if rest.any():
+                out[rest] = synthesise(c, tf[rest], pf[rest], index=flat[rest])
+            return out.reshape(r.shape)
+        return synthesise(c, theta, phi, index=index)
 
     def spherical_mean(self, *, grid: AngularGrid | None = None) -> RadialField:
         """c_00(r) / sqrt(4 pi), exact polynomial pieces; `grid` is not
