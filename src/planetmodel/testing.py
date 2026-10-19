@@ -1085,11 +1085,13 @@ def check_dataset(dataset: Dataset, *,
     file and member in the sources' order, each a file, a plain source's
     with the entry's sha256, and that the reader reads them, with
     `options`, into an object that holds to its own protocol: a `Model`
-    to `check_model`.  Nothing here touches the network.
+    to `check_model`, a `RegionalGrid` to values of the right shape at its
+    own corners and NaN outside its box.  Nothing here touches the
+    network.
     """
     from pathlib import Path
 
-    from .datasets import cite, describe, sha256_of
+    from .datasets import RegionalGrid, cite, describe, sha256_of
     from .model import Model
 
     names = [s.name for s in dataset.sources]
@@ -1121,3 +1123,14 @@ def check_dataset(dataset: Dataset, *,
     assert product is not None, f"{dataset.name}: the reader gave nothing"
     if isinstance(product, Model):
         check_model(product)
+    if isinstance(product, RegionalGrid):
+        (r0, r1), (t0, t1), (p0, p1) = product.extent
+        r = np.array([r0, 0.5 * (r0 + r1), r1])[:, None]
+        for name in product.names:
+            corners = product(name, r, np.array([t0, t1]), np.array([p0, p1]))
+            assert corners.shape == (3, 2), (
+                f"{dataset.name}: {name} gives the wrong shape at its corners")
+            if p1 - p0 < np.pi:
+                away = product(name, 0.5 * (r0 + r1), 0.5 * (t0 + t1),
+                               0.5 * (p0 + p1) + np.pi)
+                assert np.isnan(away), f"{dataset.name}: {name} reads outside its box"

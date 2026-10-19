@@ -24,7 +24,9 @@ data set) or the caller's.  The Woodhouse-Ritsema `.sph` files (S20RTS,
 S40RTS, S12RTS, SP12RTS) are read exactly, as harmonic fields on their
 radial splines (`read_sph`, `sph_field`, `SphReader`); radial references
 published as decks (STW105, ak135-F, iasp91, the Moon's models) read
-through `planetmodel.deck` by `DeckReader`.
+through `planetmodel.deck` by `DeckReader`; netCDF grids of latitude and
+longitude, EMC's among them, normalised by `read_grid` into a model of a
+global grid (`grid_model`, `GridReader`) or a `RegionalGrid`.
 
 `fetch` downloads into `cache_directory()` (`PLANETMODEL_DATA`, or the
 platform's per-user cache), checks each file's sha256 every time it is
@@ -37,9 +39,12 @@ sub-package is reached by module, off the top-level surface.
 """
 from .decks import DeckReader, Names
 from .entries import REGISTRY, DatasetLike, as_dataset, cite, describe
+from .grids import (EARTH_RADIUS, SAME_RTOL, VERTICAL_RTOL, GridData, GridReader,
+                    RegionalGrid, Variables, grid_model, read_grid)
 from .fetch import (CACHE_VARIABLE, OFFLINE_VARIABLE, TIMEOUT, cache_directory, fetch,
                     load, sha256_of)
-from .models import REFERENCES, over_reference, reference_field, reference_of
+from .models import (REFERENCES, Segments, over_reference, reference_field,
+                     reference_of, standalone)
 from .registry import ARCHIVES, Dataset, Reader, Source, archive_stem
 from .sph import (MANTLE_SLOTS, SLOTS, SPH_RADII, SPLINE_KNOTS, SphFile, SphReader,
                   read_sph, sph_field, sph_splines)
@@ -50,4 +55,6 @@ __all__ = ["Source", "Dataset", "Reader", "DatasetLike", "REGISTRY", "ARCHIVES",
            "TIMEOUT", "REFERENCES", "reference_of", "reference_field",
            "over_reference", "SphFile", "SphReader", "read_sph", "sph_field",
            "sph_splines", "SPLINE_KNOTS", "SPH_RADII", "SLOTS", "MANTLE_SLOTS",
-           "DeckReader", "Names"]
+           "DeckReader", "Names", "Segments", "standalone", "GridData", "GridReader",
+           "RegionalGrid", "Variables", "grid_model", "read_grid", "EARTH_RADIUS",
+           "SAME_RTOL", "VERTICAL_RTOL"]

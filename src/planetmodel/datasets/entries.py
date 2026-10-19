@@ -15,6 +15,7 @@ from types import MappingProxyType
 from ..catalogue import MineosModel
 from ..deck import MINEOS, ND, TVEL, nd_names
 from .decks import DeckReader
+from .grids import GridReader
 from .registry import Dataset, Source
 from .sph import SphReader
 
@@ -67,6 +68,23 @@ _MOON_CITE = ("Garcia, R. F., A. Khan, M. Drilleau, L. Margerin, T. Kawamura, D.
               "doi:10.5281/zenodo.3372489")
 _MOON_NOTES = ("TauP's named discontinuities, joined linearly as TauP joins them; the "
                "body's radius is the deepest depth.")
+
+
+#: Where the Earth Model Collaboration serves its netCDF files.
+_EMC = "https://data.earthscope.org/archive/seismology/products/emc/netcdf"
+
+#: The licence of an EMC file, stated in its DataCite record.
+_EMC_LICENCE = "CC BY 4.0 (stated in the EMC's DataCite records)"
+
+
+def _emc_cites(doi: str) -> tuple[str, str]:
+    """What the EMC asks cited beside a model's paper: its page and itself."""
+    return (f"EarthScope Data Services, Earth Model Collaboration: the model's page, "
+            f"doi:{doi}; and the EMC, doi:10.17611/DP/EMC.1",
+            "Trabant, C., A. R. Hutko, M. Bahavar, R. Karstens, T. Ahern and R. Aster "
+            "(2012).  Data products at the IRIS DMC: stepping stones for research "
+            "and other applications.  Seismol. Res. Lett. 83, 846-854, "
+            "doi:10.1785/0220120032")
 
 
 def _moon(name: str, member: str, title: str, cite: str, *,
@@ -182,6 +200,120 @@ _ENTRIES: tuple[Dataset, ...] = (
         licence=_TAUP_LICENCE,
         notes="TauP's iasp91.tvel, joined linearly; its density column is not "
               "part of the published model and its source is not stated."),
+    Dataset(
+        "S362ANI+M",
+        (Source(f"{_EMC}/S362ANI%2BM_kmps.r0.0-n4c.nc",
+                "7bf5076e70ab9cc59b6d0f5a20d513c34d9309eecd33873b9d30e2b47188b425"),),
+        GridReader({"vs": ("vs", None), "vsv": ("vsv", None), "vsh": ("vsh", None)}),
+        title="A radially anisotropic shear-velocity model of the mantle, on EMC's "
+              "2-degree grid",
+        citation=("Moulik, P. and G. Ekström (2014).  An anisotropic shear velocity "
+                  "model of the Earth's mantle using normal modes, body waves, "
+                  "surface waves and long-period waveforms.  Geophys. J. Int. 199, "
+                  "1713-1738, doi:10.1093/gji/ggu356",
+                  *_emc_cites("10.17611/DP/9991784")),
+        licence=_EMC_LICENCE, reference="STW105",
+        notes="Absolute velocities in km/s at 25 depths from 25 to 2890 km on a "
+              "2-degree grid with both poles, from the native model on spherical "
+              "splines; relative to STW105 as published."),
+    Dataset(
+        "SEMUCB-WM1",
+        (Source(f"{_EMC}/semucb-2014-ucb-vs-viz-only.r0.1-n4c.nc",
+                "92b191f909c05e32151044695ff2be956ca25dfa0f62470f38c0ea976857cd43"),),
+        GridReader({"vs": ("vs", None)}),
+        title="A whole-mantle shear-velocity model from spectral-element waveform "
+              "tomography, on EMC's grid",
+        citation=("French, S. W. and B. A. Romanowicz (2014).  Whole-mantle radially "
+                  "anisotropic shear velocity structure from spectral-element "
+                  "waveform tomography.  Geophys. J. Int. 199, 1303-1327, "
+                  "doi:10.1093/gji/ggu334",
+                  *_emc_cites("10.17611/dp/emc.2023.semucbwm1.1")),
+        licence=_EMC_LICENCE,
+        notes="Voigt-average vs in km/s at 74 depths from 30 to 2891 km, on a grid of "
+              "about 0.99 degrees with a short last interval (a custom grid with "
+              "both poles); EMC calls this grid one for viewing.  Its own 1D "
+              "reference is not shipped, so it is read as values."),
+    Dataset(
+        "GLAD-M25",
+        (Source(f"{_EMC}/glad-m25-vs.r0.0-n4c.nc",
+                "8916f703b07b2c23587dc8f6a7eddd89505d5a5491bc6712cd9ca70fe1e23d93"),),
+        GridReader({"vsv": ("vsv", None), "vsh": ("vsh", None)}, stride=2,
+                   vertical=(50.0, None), seam="mean"),
+        title="A global model from adjoint tomography, its shear velocities on EMC's "
+              "half-degree grid",
+        citation=("Lei, W., Y. Ruan, E. Bozdağ, D. Peter, M. Lefebvre, D. Komatitsch, "
+                  "J. Tromp, J. Hill, N. Podhorszki and D. Pugmire (2020).  Global "
+                  "adjoint tomography: model GLAD-M25.  Geophys. J. Int. 223, 1-21, "
+                  "doi:10.1093/gji/ggaa253",
+                  *_emc_cites("10.17611/dp/emc.2020.gladm2500.1")),
+        licence=_EMC_LICENCE, reference="STW105",
+        notes="vsv and vsh in km/s at 342 depths from -5 to 2891 km on a half-degree "
+              "grid with both poles (505 MB), discontinuities at 410 and 650 km.  Read "
+              "by default from 50 km down, every second node (one degree, about 1.3 "
+              "GB as a model): its crust, with zeros in water and air, differs by up "
+              "to 3.2 km/s between the columns at -180 and 180 degrees, which differ "
+              "by at most 0.04 % from 50 km down, where they are averaged.  "
+              "load(..., stride=1) reads the half-degree grid.  Its starting model's "
+              "reference is STW105."),
+    Dataset(
+        "SGLOBE-rani",
+        (Source(f"{_EMC}/SGLOBE-rani-voigt_percent.r0.0-n4c.nc",
+                "78a90fa796659ae99539612126c8e4ec72ebf9c3d3dad1f0c45a754319b32113"),),
+        GridReader({"dvs": ("vs", "relative")}),
+        title="A joint model of isotropic and radially anisotropic mantle structure, "
+              "its Voigt-average shear velocity on EMC's 2-degree grid",
+        citation=("Chang, S.-J., A. M. G. Ferreira, J. Ritsema, H. J. van Heijst and "
+                  "J. H. Woodhouse (2015).  Joint inversion for global isotropic and "
+                  "radially anisotropic mantle structure including crustal thickness "
+                  "perturbations.  J. Geophys. Res. Solid Earth 120, 4278-4300, "
+                  "doi:10.1002/2014JB011824",
+                  *_emc_cites("10.17611/dp/emc2015sgloberani")),
+        licence=_EMC_LICENCE, reference="PREM",
+        notes="The relative perturbation of the Voigt-average vs, in percent, at 37 "
+              "depths from 25 to 2800 km, latitudes -88 to 88 every 2 degrees (the "
+              "poles by the nearest ring); relative to PREM."),
+    Dataset(
+        "GyPSuM",
+        (Source(f"{_EMC}/GYPSUMS_kmps.r0.0-n4c.nc",
+                "acb1e8d9563dfdeffb016ededdbba9890ceab0efefb0139554856d4c97799cc5"),),
+        GridReader({"vs": ("vs", None)}, seam="mean"),
+        title="A joint tomographic model of mantle density and wave speeds: its "
+              "shear velocity on EMC's 1-degree grid",
+        citation=("Simmons, N. A., A. M. Forte, L. Boschi and S. P. Grand (2010).  "
+                  "GyPSuM: a joint tomographic model of mantle density and seismic "
+                  "wave speeds.  J. Geophys. Res. 115, B12310, "
+                  "doi:10.1029/2010JB007631", *_emc_cites("10.17611/DP/9991624")),
+        licence=_EMC_LICENCE,
+        notes="Absolute vs in km/s, a layered model sampled at the top and bottom of "
+              "each block 1 km apart (read linearly, a step a 1 km ramp).  Its "
+              "columns at -180 and 180 degrees differ by up to 1.1 %, the source's "
+              "gridding not being periodic; they are averaged.  The file's id says "
+              "percent; it holds km/s."),
+    Dataset(
+        "CSEM-North-Atlantic",
+        (Source(f"{_EMC}/csem-north-atlantic-2019.12.01.r0.0-n4c.nc",
+                "d4151db9dbfdacbb90086140aea86f528225730eab7051f2ac3c731dbd8f1f04"),),
+        GridReader({"vsv": ("vsv", None), "vsh": ("vsh", None)}),
+        title="The North Atlantic of the Collaborative Seismic Earth Model, a regional "
+              "grid",
+        citation=("Fichtner, A., D.-P. van Herwaarden, M. Afanasiev, S. Simutė, L. "
+                  "Krischer, Y. Çubuk-Sabuncu, T. Taymaz, L. Colli, E. Saygin, A. "
+                  "Villaseñor, J. Trampert, P. Cupillard, H.-P. Bunge and H. Igel "
+                  "(2018).  The Collaborative Seismic Earth Model: generation 1.  "
+                  "Geophys. Res. Lett. 45, 4007-4016, doi:10.1029/2018GL077338",
+                  "Krischer, L., A. Fichtner, C. Boehm and H. Igel (2018).  Automated "
+                  "large-scale full seismic waveform inversion for North America and "
+                  "the North Atlantic.  J. Geophys. Res. Solid Earth 123, 5902-5928, "
+                  "doi:10.1029/2017JB015289",
+                  "Rickers, F., A. Fichtner and J. Trampert (2013).  The Iceland-Jan "
+                  "Mayen plume system and its impact on mantle dynamics in the North "
+                  "Atlantic region: evidence from full-waveform inversion.  Earth "
+                  "Planet. Sci. Lett. 367, 39-51, doi:10.1016/j.epsl.2013.02.022",
+                  *_emc_cites("10.17611/dp/emccsemnatl20191201")),
+        licence=_EMC_LICENCE,
+        notes="vsv and vsh in km/s from the surface to 500 km, latitudes 20 to 75 and "
+              "longitudes -55 to 10 every half degree: a regional grid, for merging "
+              "into a global model."),
     _moon("VPREMOON", "MoonGarcia_PEPI_2011.nd",
           "VPREMOON, a very preliminary reference Moon model",
           "Garcia, R. F., J. Gagnepain-Beyneix, S. Chevrot and P. Lognonné (2011).  "

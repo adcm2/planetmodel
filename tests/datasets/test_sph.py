@@ -336,7 +336,7 @@ def test_a_support_inside_layers_is_cut_out_of_them():
     held = [lay.interval for lay in m.layers if lay.names]
     assert held[0] == (4000e3, 5600e3) and held[-1][1] == 6000e3
     assert not m.layer(len(held)).names
-    with pytest.raises(ValueError, match="different intervals"):
+    with pytest.raises(ValueError, match="do not tile the support"):
         datasets.over_reference(pm.PREM(), {
             "vs": pert, "vp": pm.HarmonicField((4000e3, 6100e3), np.zeros((2, 2, 2)))},
             kind="relative")
