@@ -523,6 +523,11 @@ class RegionalGrid:
         return tuple(self._values)
 
     @property
+    def radii(self) -> np.ndarray:
+        """The radii of its slices (m), a repeat at each discontinuity."""
+        return self._data.radius
+
+    @property
     def kinds(self) -> Mapping[str, str | None]:
         """Each name's kind: None for values, else a perturbation's."""
         return MappingProxyType(self._kinds)

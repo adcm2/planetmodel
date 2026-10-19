@@ -26,7 +26,10 @@ radial splines (`read_sph`, `sph_field`, `SphReader`); radial references
 published as decks (STW105, ak135-F, iasp91, the Moon's models) read
 through `planetmodel.deck` by `DeckReader`; netCDF grids of latitude and
 longitude, EMC's among them, normalised by `read_grid` into a model of a
-global grid (`grid_model`, `GridReader`) or a `RegionalGrid`.
+global grid (`grid_model`, `GridReader`) or a `RegionalGrid`.  The
+processing that fits them to a model of one's own (`rereferenced`,
+`spread`, `filtered`, `merged`, one taper `raised_cosine`) is in
+`planetmodel.datasets.processing`.
 
 `fetch` downloads into `cache_directory()` (`PLANETMODEL_DATA`, or the
 platform's per-user cache), checks each file's sha256 every time it is
@@ -45,6 +48,8 @@ from .fetch import (CACHE_VARIABLE, OFFLINE_VARIABLE, TIMEOUT, cache_directory, 
                     load, sha256_of)
 from .models import (REFERENCES, Segments, over_reference, reference_field,
                      reference_of, standalone)
+from .processing import (MODES, Perturbation, filtered, merged, raised_cosine,
+                         rereferenced, spread)
 from .registry import ARCHIVES, Dataset, Reader, Source, archive_stem
 from .sph import (MANTLE_SLOTS, SLOTS, SPH_RADII, SPLINE_KNOTS, SphFile, SphReader,
                   read_sph, sph_field, sph_splines)
@@ -57,4 +62,5 @@ __all__ = ["Source", "Dataset", "Reader", "DatasetLike", "REGISTRY", "ARCHIVES",
            "sph_splines", "SPLINE_KNOTS", "SPH_RADII", "SLOTS", "MANTLE_SLOTS",
            "DeckReader", "Names", "Segments", "standalone", "GridData", "GridReader",
            "RegionalGrid", "Variables", "grid_model", "read_grid", "EARTH_RADIUS",
-           "SAME_RTOL", "VERTICAL_RTOL"]
+           "SAME_RTOL", "VERTICAL_RTOL", "MODES", "Perturbation", "filtered",
+           "merged", "raised_cosine", "rereferenced", "spread"]
