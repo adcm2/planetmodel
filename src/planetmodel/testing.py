@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from .mapping import Mapping
     from .mesh3d.spec import Refinement
     from .model import Model
+    from .modelfile import Surfaces
     from .randomfield.basis import SpectralBasis, SphericalBasis
     from .sampling import Sample
     from .skeleton import Skeleton
@@ -935,6 +936,7 @@ def check_spherical_basis(basis: SphericalBasis, *,
 
 
 def check_model_file(path: str | os.PathLike[str], model: Model, *,
+                     surfaces: Surfaces | None = None,
                      rng: np.random.Generator | None = None, n: int = 48,
                      rtol: float = 1e-12) -> None:
     """Hold a model file to the model it was written from.
@@ -951,11 +953,16 @@ def check_model_file(path: str | os.PathLike[str], model: Model, *,
     reliefs at its nodes, and a displacement variable the mapping's
     displacement; and that the model read back from the file takes the
     stored values at those nodes, for every variable read by a local
-    rule.  Tolerances are `rtol` of a variable's largest value.  netCDF4
-    is imported here.
+    rule.  Given the `surfaces` the file was written with, that its
+    surfaces group holds exactly those names on exactly those
+    interfaces, NaN on the others, their values at its nodes and poles,
+    and that `read_surfaces` gives functions taking the stored values at
+    the nodes, for a local rule.  Tolerances are `rtol` of a variable's
+    largest value.  netCDF4 is imported here.
     """
     from .frames import cartesian_points, spherical_frame
-    from .modelfile import read_model, read_model_file, validate_structure
+    from .modelfile import (read_model, read_model_file, read_surfaces,
+                            validate_structure)
 
     rng = np.random.default_rng(0) if rng is None else rng
     validate_structure(path)
@@ -1071,6 +1078,46 @@ def check_model_file(path: str | os.PathLike[str], model: Model, *,
             want = np.broadcast_to(h(np.full(theta.shape, radius), theta, phi),
                                    g.values[j].shape)
             stored_against(g.values[j], want, f"geometry/boundary_displacement[{j}]")
+    if surfaces is None:
+        return
+    held = data.surfaces
+    assert held is not None, "the file has no surfaces group"
+    given = {name: {model.geometry.interface(w).index: fn for w, fn in on.items()}
+             for name, on in surfaces.items()}
+    names = {name for name in held.variables if not name.endswith("_poles")}
+    assert names == set(given), (
+        f"the surfaces group holds {sorted(names)}, written with {sorted(given)}")
+    faces = sorted({k for on in given.values() for k in on})
+    assert list(held.interfaces) == faces, (
+        f"the surfaces are interfaces {list(held.interfaces)}, the functions are on "
+        f"{faces}")
+    read = read_surfaces(path)
+    theta, phi = held.grid.colatitudes[:, None], held.grid.longitudes[None, :]
+    ends = (np.array([0.0, np.pi]), np.zeros(2))
+    for name, on in given.items():
+        var, poles = held.variables[name], held.variables.get(f"{name}_poles")
+        listed = {int(k) for k in np.atleast_1d(var.attributes["interfaces"])}
+        assert listed == set(on), (
+            f"surfaces/{name} names interfaces {sorted(listed)}, held on {sorted(on)}")
+        for row, k in enumerate(held.interfaces):
+            where = f"surfaces/{name} on interface {k}"
+            if k not in on:
+                assert np.all(np.isnan(var.values[row])) and (
+                    poles is None or np.all(np.isnan(poles.values[row]))), (
+                    f"{where} is not NaN, and the interface lacks it")
+                continue
+            values = var.values[row]
+            want = np.broadcast_to(np.asarray(on[k](theta, phi), dtype=float),
+                                   values.shape)
+            stored_against(values, want, where)
+            if poles is not None:
+                stored_against(poles.values[row],
+                               np.broadcast_to(np.asarray(on[k](*ends), dtype=float),
+                                               (2,)), f"{where}, its poles")
+            if var.attributes["lateral_interpolation"] != "harmonic":
+                key = data.interface_names[k]
+                fn = read[name][k if key is None else key]
+                stored_against(values, fn(theta, phi), f"{where} read back")
 
 
 def check_dataset(dataset: Dataset, *,

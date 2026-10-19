@@ -1,7 +1,7 @@
 // The writer: the shipped grids and the vocabulary as the Python's; every
 // fixture written back unchanged; files built from known fields, on every
-// grid kind, read back to those fields and left for the Python to read;
-// and the refusals, before anything is written.
+// grid kind, and fields on interfaces, read back to those fields and left
+// for the Python to read; and the refusals, before anything is written.
 #include "planetmodel/modelfile.hpp"
 
 #include <gtest/gtest.h>
@@ -105,8 +105,9 @@ void ExpectReadsBack(const pm::ModelFile& file, const std::vector<Known>& known)
 
 /// The expectations the Python is held to for a file the C++ wrote, from
 /// the C++'s own reading of it: `value` lines for every field on every
-/// layer at points between the nodes, in both frames, and `displacement`
-/// lines for the mapping, as `make_fixtures.py` writes them for its own.
+/// layer at points between the nodes, in both frames, `displacement`
+/// lines for the mapping, and `surface` lines for every field on every
+/// interface, as `make_fixtures.py` writes them for its own.
 void WriteExpect(const std::filesystem::path& path) {
   const auto file = pm::ReadModelFile(path);
   auto out = std::ofstream(path.parent_path() / (path.stem().string() + ".expect"));
@@ -136,6 +137,15 @@ void WriteExpect(const std::filesystem::path& path) {
       const auto X = pm::CartesianPoint(b.front() + f * (b.back() - b.front()), theta, phi);
       const auto u = mapping.Displacement(X);
       out << std::format("displacement {} {} {} {} {} {}\n", X[0], X[1], X[2], u[0], u[1], u[2]);
+    }
+  }
+  for (auto k = 0; k < static_cast<int>(file.InterfaceRadii().size()); ++k) {
+    for (const auto& name : file.SurfaceNames(k)) {
+      const auto f = file.SurfaceFieldOn(k, name);
+      for (const auto& [theta, phi] : {std::pair{0.0, -1.0}, std::pair{0.7, 0.3},
+                                       std::pair{pi, 4.0}, std::pair{2.2, 9.5}}) {
+        out << std::format("surface {} {} {} {} {}\n", k, name, theta, phi, f.Value(theta, phi));
+      }
     }
   }
 }
@@ -537,6 +547,32 @@ TEST(Writer, WritesBackWhatItReads) {
       EXPECT_EQ(after.Geometry()->poles, before.Geometry()->poles);
       EXPECT_EQ(after.Geometry()->lateral, before.Geometry()->lateral);
     }
+    EXPECT_EQ(after.Surfaces().has_value(), before.Surfaces().has_value());
+    if (before.Surfaces()) {
+      const auto& a = *after.Surfaces();
+      const auto& b = *before.Surfaces();
+      EXPECT_EQ(a.interfaces, b.interfaces);
+      EXPECT_EQ(a.grid->Kind(), b.grid->Kind());
+      ASSERT_EQ(a.variables.size(), b.variables.size());
+      for (const auto& [vname, v] : b.variables) {
+        SCOPED_TRACE(vname);
+        const auto& w = a.variables.at(vname);
+        EXPECT_EQ(w.dimensions, v.dimensions);
+        ASSERT_EQ(w.values.size(), v.values.size());
+        for (auto i = std::size_t{0}; i < v.values.size(); ++i) {
+          if (std::isnan(v.values[i])) {
+            ASSERT_TRUE(std::isnan(w.values[i])) << i;
+          } else {
+            ASSERT_EQ(w.values[i], v.values[i]) << i;
+          }
+        }
+        for (const auto& [key, value] : v.attributes) {
+          if (!key.starts_with('_')) {
+            EXPECT_EQ(w.attributes.at(key), value) << key;
+          }
+        }
+      }
+    }
     ++files;
   }
   EXPECT_GE(files, 9);
@@ -636,6 +672,74 @@ TEST(Writer, WritesTensorsInEitherFrameOnEquiangularMidpoints) {
                                                           "voigt_row", "voigt_column"}));
   EXPECT_EQ(elastic.Text("lateral_interpolation"), "cubic");
   EXPECT_EQ(elastic.Text("long_name"), pm::VocabularySpec("elastic_moduli")->meaning);
+}
+
+TEST(Writer, WritesFieldsOnInterfacesThatReadBackToThemselves) {
+  auto file = pm::ModelFile(pm::Skeleton({0.0, 0.4, 1.0}));
+  file.AddPart(0, 1, pm::ElementEdges(file.GetSkeleton(), 0, 1, 0.2), 3, pm::GaussLegendre(4));
+  file.AddField("rho", {{0, LayerSource::Radial([](double r) { return 5.0 - r; })},
+                        {1, LayerSource::Radial([](double r) { return 3.0 - r; })}});
+  const auto kernel = pm::FieldSpec{.character = pm::SCALAR,
+                                    .dimensions = pm::Dimensions{.length = -2},
+                                    .meaning = "a shape kernel"};
+  const auto shift = pm::FieldSpec{.character = pm::SCALAR, .dimensions = pm::units::LENGTH,
+                                   .meaning = "the shift of the interface"};
+  auto k = [](double, double t, double p) {
+    return std::sin(t) * std::sin(t) * std::cos(2.0 * p) + 0.3 * std::cos(t);
+  };
+  auto h = [](double t, double p) {
+    return 0.01 * std::cos(t) * std::cos(t) + 0.002 * std::sin(t) * std::sin(p);
+  };
+  EXPECT_THROW(file.AddSurfaceField("K_shape", kernel, {{1, LayerSource::Lateral(k)}}), Error);
+  EXPECT_THROW(static_cast<void>(file.SurfacePointsOf(0)), Error);
+  file.SetSurfaceGrid(pm::Equiangular(9, 16, true));
+  file.AddSurfaceField("K_shape", kernel, {{1, LayerSource::Lateral(k)}}, pm::LateralRule::Cubic);
+  // values at the points the writer gives, on an interface new to the group
+  const auto points = file.SurfacePointsOf(0);
+  EXPECT_EQ(points.radii, (std::vector<double>{0.4}));
+  auto values = std::vector<double>{};
+  for (auto i = std::size_t{0}; i < points.Size(); ++i) {
+    const auto at = points.At(i);
+    values.push_back(h(at.theta, at.phi));
+  }
+  file.AddSurfaceField("shift", shift,
+                       {{0, LayerSource::LateralValues(values, Frame::Spherical)},
+                        {1, LayerSource::Lateral([&h](double, double t, double p) {
+                           return 2.0 * h(t, p);
+                         })}});
+  EXPECT_EQ(file.Surfaces()->interfaces, (std::vector<int>{0, 1}));
+  EXPECT_EQ(file.SurfaceNames(0), (std::vector<std::string>{"shift"}));
+  // the refusals
+  EXPECT_THROW(file.SetSurfaceGrid(pm::GaussLegendre(8)), Error);
+  EXPECT_THROW(file.AddSurfaceField("rho", kernel, {{0, LayerSource::Lateral(k)}}), Error);
+  EXPECT_THROW(file.AddSurfaceField("shift", kernel, {{0, LayerSource::Lateral(k)}}), Error);
+  EXPECT_THROW(file.AddField("K_shape", kernel, {{0, LayerSource::Lateral(k)}}), Error);
+  EXPECT_THROW(file.AddSurfaceField("K_other", kernel, {{2, LayerSource::Lateral(k)}}), Error);
+  EXPECT_THROW(file.AddSurfaceField("K_other", kernel, {}), Error);
+  EXPECT_THROW(file.AddSurfaceField("surface_interface", kernel, {{0, LayerSource::Lateral(k)}}),
+               Error);
+  EXPECT_THROW(file.AddSurfaceField("wind", {.character = pm::VECTOR},
+                                    {{0, LayerSource::Lateral(k)}}),
+               Error);
+  const auto path = Written("written_surfaces.nc", file);
+  const auto read = pm::ReadModelFile(path);
+  EXPECT_EQ(read.SurfaceNames(1), (std::vector<std::string>{"K_shape", "shift"}));
+  EXPECT_EQ(read.Surfaces()->variables.at("shift").Numbers("interfaces"),
+            (std::vector<double>{0.0, 1.0}));
+  EXPECT_EQ(read.Surfaces()->variables.at("K_shape").Numbers("interfaces"),
+            (std::vector<double>{1.0}));
+  const auto& grid = *read.Surfaces()->grid;
+  const auto kernel_read = read.SurfaceFieldOn(1, "K_shape");
+  const auto inner = read.SurfaceFieldOn(0, "shift");
+  const auto outer = read.SurfaceFieldOn(1, "shift");
+  // the grid read back is the written one through degrees
+  for (const auto t : grid.Colatitudes()) {
+    for (const auto p : grid.Longitudes()) {
+      EXPECT_NEAR(kernel_read.Value(t, p), k(1.0, t, p), 1e-13);
+      EXPECT_NEAR(inner.Value(t, p), h(t, p), 1e-13);
+      EXPECT_NEAR(outer.Value(t, p), 2.0 * h(t, p), 1e-13);
+    }
+  }
 }
 
 TEST(Writer, PointsComeInTheOrderTheValuesFollow) {

@@ -53,6 +53,19 @@ lacks a pole and the attributes `lateral_interpolation` and `between`
 - X in the spherical frame at X, as a sample holds it, read back as a
 `GriddedDisplacement`.  The identity is neither.
 
+**Fields on interfaces**, functions of the angles on the skeleton's own
+interfaces (a shape kernel, the shift of a boundary), are the optional
+group `surfaces`: dimension `surface` over the interfaces that hold any,
+`surface_interface(surface)` their indices in the root's `interface`,
+increasing; a grid of its own, as a part's is; and one variable per
+name, `name(surface, latitude, longitude)`, NaN on an interface that
+lacks it, with the attributes `long_name`, `units`, `dimensions` (where
+declared), `lateral_interpolation` and `interfaces` (those holding it),
+and `name_poles(surface, pole)` where the grid lacks a pole.  A name is
+a layer field's or a surface field's, never both, and a surface field
+is a number at each point, its spec's dimensions its own.  A file
+without the group reads as one with none.
+
 **The radial layout** is exact where it can be: the writer builds, per
 part, a radial mesh whose element edges are the layer boundaries, every
 breakpoint a field declares (`radial_pieces`) and every knot of the
@@ -70,8 +83,10 @@ laterally) unless `interpolation=` names others; a reader uses the
 stated rules unless its caller overrides them.
 
 `read_model_file` gives the numbers and the metadata as a `ModelFile`,
-the way `read_deck` gives a deck; `file_layers` and `file_geometry` turn
-them into fields and a geometry; `read_model` is the plain model.
+the way `read_deck` gives a deck; `file_layers`, `file_geometry` and
+`file_surfaces` turn them into fields, a geometry and the functions on
+interfaces; `read_model` is the plain model, and `read_surfaces` the
+functions beside it.
 netCDF4 (the `netcdf` extra) is imported where a file is opened.  Real
 fields only; a model is never converted on writing, and is read back in
 the file's scales unless `scales=` asks for others.
@@ -90,7 +105,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import numpy as np
 from numpy.typing import ArrayLike
 
-from .character import VECTOR, Character
+from .character import SCALAR, VECTOR, Character
 from .fields import Field, RadialField, stored_shape
 from .frames import from_geographic, geographic, spherical_frame
 from .layerfunction import PolynomialLayer
@@ -104,15 +119,17 @@ from .units import BASE, Dimensions, Scales, scaled_unit
 from .vocabulary import VOCABULARY, Constant, FieldSpec
 
 if TYPE_CHECKING:
+    from .displacement import Relief
     from .geometry import Geometry
+    from .gridded import GriddedFunction
     from .model import Model
     from .sampling import AngularGrid
 
 __all__ = ["SCHEMA", "CONVENTIONS", "DEFAULT_INTERPOLATION", "Grids",
-           "Interpolation", "FileVariable",
-           "FilePart", "FileGeometry", "ModelFile", "write_model",
-           "read_model_file", "file_layers", "file_geometry", "read_model",
-           "validate_structure"]
+           "Interpolation", "Surfaces", "FileVariable",
+           "FilePart", "FileGeometry", "FileSurfaces", "ModelFile", "write_model",
+           "read_model_file", "file_layers", "file_geometry", "file_surfaces",
+           "read_model", "read_surfaces", "validate_structure"]
 
 #: The schema string every reader checks; bumped only for an incompatible change.
 SCHEMA = "planetmodel.model/1"
@@ -131,7 +148,8 @@ _DISPLACEMENT_INTERPOLATION = ("polynomial", "cubic")
 _RESERVED = ("radius", "element_layer", "element_bounds", "latitude",
              "longitude", "colatitude_weights", "displacement",
              "displacement_poles", "layer_bounds", "layer_name",
-             "interface_radius", "interface_name", "layer_part")
+             "interface_radius", "interface_name", "layer_part",
+             "surface_interface")
 
 #: The names of the trailing axes of a stored shape.
 _AXES = {(): (), (3,): ("component",), (6,): ("voigt",),
@@ -146,6 +164,10 @@ type Interpolation = Mapping[str, tuple[str, str]]
 
 #: The angular grid of a whole model, or one per layer by index or name.
 type Grids = AngularGrid | Mapping[int | str, AngularGrid]
+
+#: Functions of (theta, phi) on interfaces: name -> {interface, by index
+#: or name -> function}.
+type Surfaces = Mapping[str, Mapping[int | str, Relief]]
 
 
 def _netcdf() -> ModuleType:
@@ -196,6 +218,17 @@ class FileGeometry:
 
 
 @dataclass(frozen=True)
+class FileSurfaces:
+    """The fields on interfaces: the interfaces holding any (indices,
+    increasing), their grid, and the variables by name, each's values
+    (surface, ntheta, nphi) and, as `name_poles`, (surface, 2)."""
+
+    interfaces: tuple[int, ...]
+    grid: AngularGrid
+    variables: Mapping[str, FileVariable]
+
+
+@dataclass(frozen=True)
 class ModelFile:
     """A model file's numbers and metadata, as `read_model_file` gives
     them: nothing is interpolated or converted."""
@@ -216,6 +249,8 @@ class ModelFile:
     #: The tolerance of the geometry the file was written from, relative
     #: to the skeleton's span; the default where the file states none.
     rtol: float = DEFAULT_RTOL
+    #: The group `surfaces`, where the file has it.
+    surfaces: FileSurfaces | None = None
 
     def part_of(self, layer: int) -> FilePart:
         """The part holding `layer`."""
@@ -678,11 +713,132 @@ def _write_stack(root: Any, model: Model, parts: list[tuple[list[int], AngularGr
               "units": length})
 
 
+def _surface_holders(model: Model, surfaces: Surfaces, written: Sequence[str]
+                     ) -> dict[str, dict[int, Relief]]:
+    """Each surface field's functions by interface index, increasing: a
+    name the format keeps or one written as a layer field, an interface
+    given twice, and a name on no interface are refused."""
+    if isinstance(surfaces, str) or not isinstance(surfaces, Mapping):
+        raise TypeError("surfaces maps names to {interface: function of (theta, phi)}")
+    out: dict[str, dict[int, Relief]] = {}
+    for name, on in surfaces.items():
+        if not isinstance(name, str) or not name:
+            raise TypeError(f"a surface field's name is a string, got {name!r}")
+        if name in _RESERVED or name.endswith(("_perturbation", "_poles")):
+            raise ValueError(f"{name!r} is a name the model file keeps for itself")
+        if name in written:
+            raise ValueError(f"{name!r} is written as a field of the layers; a name "
+                             "is a layer field's or a surface field's, never both")
+        spec = model.spec(name)
+        if spec is not None and spec.character.rank != 0:
+            raise ValueError(f"{name!r} is of rank {spec.character.rank} by its spec, "
+                             "and a surface field is a number at each point")
+        held: dict[int, Relief] = {}
+        for which, fn in on.items():
+            face = model.geometry.interface(which)
+            if face.index in held:
+                raise ValueError(f"{name!r} is given twice on interface {face.index}")
+            if not callable(fn):
+                raise TypeError(f"{name!r} on interface {which!r} is not a function "
+                                "of (theta, phi)")
+            held[face.index] = fn
+        if not held:
+            raise ValueError(f"{name!r} is held on no interface")
+        out[name] = dict(sorted(held.items()))
+    return out
+
+
+def _surface_grid(held: Mapping[str, Mapping[int, Relief]],
+                  parts: list[tuple[list[int], AngularGrid]]) -> AngularGrid:
+    """The grid the functions share, else the outermost part's."""
+    grids = [getattr(fn, "grid", None) for on in held.values() for fn in on.values()]
+    if all(g is not None for g in grids) and all(grids[0] == g for g in grids):
+        return grids[0]
+    return parts[-1][1]
+
+
+def _on_angles(values: ArrayLike, shape: tuple[int, ...], name: str,
+               interface: int) -> np.ndarray:
+    """A surface function's values, real, finite and of `shape`."""
+    v = np.asarray(values)
+    if np.iscomplexobj(v):
+        raise TypeError(f"{name!r} on interface {interface} is complex; a model file "
+                        "holds real values")
+    v = np.broadcast_to(v.astype(float, copy=False), shape)
+    if not np.all(np.isfinite(v)):
+        raise ValueError(f"{name!r} on interface {interface} is not finite at every "
+                         "node; NaN is the file's mark of an interface that lacks it")
+    return v
+
+
+def _write_surfaces(root: Any, model: Model, held: Mapping[str, Mapping[int, Relief]],
+                    grid: AngularGrid, interpolation: Interpolation) -> None:
+    """The group `surfaces`: each name's functions on its interfaces."""
+    faces = sorted({k for on in held.values() for k in on})
+    g = root.createGroup("surfaces")
+    g.createDimension("surface", len(faces))
+    g.createDimension("latitude", grid.ntheta)
+    g.createDimension("longitude", grid.nphi)
+    g.setncattr("grid_kind", grid.kind)
+    if grid.lmax is not None:
+        g.setncattr("grid_lmax", np.int32(grid.lmax))
+    var = g.createVariable("surface_interface", "i4", ("surface",))
+    var[...] = np.asarray(faces, dtype=np.int32)
+    var.long_name = "the interface the surface is, by its index at the root"
+    lat, lon = _degrees(grid)
+    var = g.createVariable("latitude", "f8", ("latitude",))
+    var[...] = lat
+    var.units, var.standard_name = "degrees_north", "latitude"
+    var.long_name = "latitude"
+    var = g.createVariable("longitude", "f8", ("longitude",))
+    var[...] = lon
+    var.units, var.standard_name = "degrees_east", "longitude"
+    var.long_name = "longitude"
+    if grid.weights is not None:
+        _put(g, "colatitude_weights", ("latitude",), grid.weights,
+             {"long_name": "colatitude quadrature weights against sin(theta) dtheta",
+              "units": "1"})
+    lacks_pole = not all(grid.pole_nodes)
+    if lacks_pole:
+        g.createDimension("pole", 2)
+        g.setncattr("poles", "north south")
+    row = {k: i for i, k in enumerate(faces)}
+    theta, phi = grid.colatitudes[:, None], grid.longitudes[None, :]
+    for name, on in held.items():
+        values = np.full((len(faces), grid.ntheta, grid.nphi), np.nan)
+        poles = np.full((len(faces), 2), np.nan)
+        for k, fn in on.items():
+            values[row[k]] = _on_angles(fn(theta, phi), (grid.ntheta, grid.nphi),
+                                        name, k)
+            poles[row[k]] = _on_angles(fn(np.array([0.0, np.pi]), np.zeros(2)), (2,),
+                                       name, k)
+        rules = _stated(list(on.values()), name, interpolation, DEFAULT_INTERPOLATION,
+                        grid)
+        spec = model.spec(name)
+        dims = None if spec is None else spec.dimensions
+        attrs: dict[str, Any] = {
+            "long_name": spec.meaning if spec is not None and spec.meaning else name,
+            "units": scaled_unit(dims, model.scales),
+            "lateral_interpolation": rules[1],
+            "interfaces": np.asarray(list(on), dtype=np.int32),
+        }
+        if dims is not None:
+            attrs["dimensions"] = np.asarray([getattr(dims, b) for b in BASE],
+                                             dtype=np.int32)
+        _put(g, name, ("surface", "latitude", "longitude"), values, attrs)
+        if lacks_pole:
+            _put(g, f"{name}_poles", ("surface", "pole"), poles,
+                 {"long_name": f"{name} at the north and south poles",
+                  "units": attrs["units"]})
+
+
 def write_model(path: str | os.PathLike[str], model: Model, *, grid: Grids,
                 radial: RadialMesh | None = None,
                 fields: Iterable[str] | None = None,
                 interpolation: Interpolation | None = None,
-                meta: Mapping[str, Any] | None = None) -> Path:
+                meta: Mapping[str, Any] | None = None,
+                surfaces: Surfaces | None = None,
+                surface_grid: AngularGrid | None = None) -> Path:
     """Write `model` to a model file at `path`, which is returned.
 
     `grid` is one `AngularGrid` for every layer, or a mapping from layers
@@ -694,7 +850,13 @@ def write_model(path: str | os.PathLike[str], model: Model, *, grid: Grids,
     model holds by default; `interpolation` maps names (and
     `displacement`, `boundary_displacement`) to the (radial, lateral)
     rules to state in place of the fields' own; `meta` becomes
-    `meta_<key>` attributes.  The model is written in its own units.
+    `meta_<key>` attributes.  `surfaces` maps names to functions of
+    (theta, phi) on interfaces (by index or name), written to the group
+    `surfaces` on `surface_grid`: by default the grid the functions are
+    held on where they share one, else the outermost part's.  A surface
+    field's dimensions and meaning are the model's spec of its name, and
+    `interpolation` names its lateral rule as for a field.  The model is
+    written in its own units.
     """
     from .model import Model
     if not isinstance(model, Model):
@@ -725,12 +887,18 @@ def write_model(path: str | os.PathLike[str], model: Model, *, grid: Grids,
         if isinstance(value, bool) or not isinstance(value, (str, numbers.Real)):
             raise TypeError(f"meta[{key!r}] is {value!r}; a netCDF attribute is "
                             "a string or a number")
+    if surfaces is None and surface_grid is not None:
+        raise ValueError("surface_grid is given with no surfaces to hold on it")
+    held = {} if surfaces is None else _surface_holders(model, surfaces, names)
+    on = None
+    if held:
+        on = _surface_grid(held, parts) if surface_grid is None else surface_grid
     path = Path(path)
     fd, partial = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent or None)
     os.close(fd)
     try:
         _write_file(nc, Path(partial), model, parts, form, names, radial,
-                    interpolation, meta)
+                    interpolation, meta, held, on)
         os.replace(partial, path)
     finally:
         if os.path.exists(partial):
@@ -741,7 +909,9 @@ def write_model(path: str | os.PathLike[str], model: Model, *, grid: Grids,
 def _write_file(nc: ModuleType, path: Path, model: Model,
                 parts: list[tuple[list[int], AngularGrid]], form: str,
                 names: Sequence[str], radial: RadialMesh | None,
-                interpolation: Interpolation, meta: Mapping[str, Any]) -> None:
+                interpolation: Interpolation, meta: Mapping[str, Any],
+                held: Mapping[str, Mapping[int, Relief]],
+                surface_grid: AngularGrid | None) -> None:
     """The file of `write_model`, at a path of its own until it is whole."""
     with nc.Dataset(path, "w", format="NETCDF4") as root:
         root.setncattr("schema", SCHEMA)
@@ -792,6 +962,8 @@ def _write_file(nc: ModuleType, path: Path, model: Model,
                         names, interpolation, form)
         if form == "stack":
             _write_stack(root, model, parts, interpolation)
+        if held:
+            _write_surfaces(root, model, held, surface_grid, interpolation)
 
 
 # -- reading --------------------------------------------------------------------
@@ -900,6 +1072,11 @@ def _validate(ds: Any, path: object) -> None:
                     "displacement field")
     if has_stack:
         _validate_stack(ds.groups["geometry"], path)
+    if "surfaces" in ds.groups:
+        taken = {name for k in np.unique(layer_part)
+                 for name in ds.groups[f"part_{k}"].variables}
+        _validate_surfaces(ds.groups["surfaces"], path, len(ds.dimensions["interface"]),
+                           taken)
 
 
 def _validate_part(g: Any, where: str, layers: np.ndarray, bounds: np.ndarray,
@@ -1006,6 +1183,51 @@ def _validate_stack(g: Any, path: object) -> None:
                     "surfaces")
 
 
+#: The variables of the surfaces group that are not fields.
+_SURFACE_OWN = ("surface_interface", "latitude", "longitude", "colatitude_weights")
+
+
+def _validate_surfaces(g: Any, path: object, ninterface: int, taken: set[str]) -> None:
+    """The checks on the surfaces group; `taken` holds the parts' names."""
+    for dim in ("surface", "latitude", "longitude"):
+        if dim not in g.dimensions:
+            _fail(path, f"surfaces has no dimension {dim!r}")
+    for name in ("surface_interface", "latitude", "longitude"):
+        if name not in g.variables:
+            _fail(path, f"surfaces has no variable {name!r}")
+    if "grid_kind" not in g.ncattrs() or g.getncattr("grid_kind") not in GRID_KINDS:
+        _fail(path, f"surfaces.grid_kind is missing or not a kind of grid, one of "
+                    f"{GRID_KINDS}")
+    var = g.variables["surface_interface"]
+    faces = np.asarray(var[:], dtype=float)
+    if (tuple(var.dimensions) != ("surface",) or np.any(faces != np.round(faces))
+            or np.any(faces < 0) or np.any(faces >= ninterface)
+            or np.any(np.diff(faces) <= 0)):
+        _fail(path, "surfaces/surface_interface is not interfaces of the file, "
+                    "increasing")
+    lacks_pole = "pole" in g.dimensions
+    for name, v in g.variables.items():
+        if name in _SURFACE_OWN or name.endswith("_poles"):
+            continue
+        where = f"surfaces/{name}"
+        if tuple(v.dimensions) != ("surface", "latitude", "longitude"):
+            _fail(path, f"{where} does not run over the surfaces and the grid")
+        if name in taken:
+            _fail(path, f"{where} is a layer field's name too; a name is a layer "
+                        "field's or a surface field's, never both")
+        a = set(v.ncattrs())
+        if "lateral_interpolation" not in a or v.getncattr(
+                "lateral_interpolation") not in LATERAL_METHODS:
+            _fail(path, f"{where} states no known lateral rule")
+        if "interfaces" in a and not {float(k) for k in np.atleast_1d(
+                v.getncattr("interfaces"))} <= set(faces.tolist()):
+            _fail(path, f"{where} names interfaces that are not surfaces of the group")
+        if lacks_pole and (f"{name}_poles" not in g.variables or tuple(
+                g.variables[f"{name}_poles"].dimensions) != ("surface", "pole")):
+            _fail(path, f"{where} is on a grid without its poles, and {name}_poles "
+                        "is missing")
+
+
 def read_model_file(path: str | os.PathLike[str]) -> ModelFile:
     """A model file's numbers and metadata, its structure validated first."""
     nc = _netcdf()
@@ -1065,13 +1287,22 @@ def read_model_file(path: str | os.PathLike[str]) -> ModelFile:
                 _grid_of(g), np.asarray(var[:], dtype=float), poles,
                 str(var.getncattr("lateral_interpolation")),
                 str(var.getncattr("between")))
+        surfaces = None
+        if "surfaces" in ds.groups:
+            g = ds.groups["surfaces"]
+            faces = tuple(int(k) for k in
+                          np.asarray(g.variables["surface_interface"][:]))
+            variables = {name: FileVariable(_values(var), _attrs(var))
+                         for name, var in g.variables.items()
+                         if name not in _SURFACE_OWN}
+            surfaces = FileSurfaces(faces, _grid_of(g), MappingProxyType(variables))
     return ModelFile(schema=str(attrs["schema"]), name=attrs.get("name"),
                      scales=scales, constants=MappingProxyType(constants),
                      meta=MappingProxyType(meta), skeleton=skeleton,
                      layer_names=layer_names, interface_names=interface_names,
                      parts=tuple(parts), geometry=geometry,
                      declared=MappingProxyType(declared),
-                     rtol=float(attrs.get("rtol", DEFAULT_RTOL)))
+                     rtol=float(attrs.get("rtol", DEFAULT_RTOL)), surfaces=surfaces)
 
 
 def _character(attrs: Mapping[str, Any]) -> Character:
@@ -1218,29 +1449,76 @@ def file_geometry(data: ModelFile, *, interpolation: Interpolation | None = None
                     interface_names=list(data.interface_names), rtol=data.rtol)
 
 
+def file_surfaces(data: ModelFile, *, interpolation: Interpolation | None = None
+                  ) -> dict[str, dict[int | str, GriddedFunction]]:
+    """The functions on interfaces a file holds, name -> {interface ->
+    `GriddedFunction`}, an interface keyed by its name, or by its index
+    where it has none; each read by its stated lateral rule unless
+    `interpolation` names another, and empty for a file without them."""
+    from .gridded import GriddedFunction
+    interpolation = dict(interpolation or {})
+    held = data.surfaces
+    if held is None:
+        return {}
+    out: dict[str, dict[int | str, GriddedFunction]] = {}
+    for name, var in held.variables.items():
+        if name.endswith("_poles"):
+            continue
+        lateral = (interpolation[name][1] if name in interpolation
+                   else str(var.attributes["lateral_interpolation"]))
+        poles = held.variables.get(f"{name}_poles")
+        on: dict[int | str, GriddedFunction] = {}
+        for row, k in enumerate(held.interfaces):
+            if np.all(np.isnan(var.values[row])):
+                continue
+            key = data.interface_names[k]
+            on[k if key is None else key] = GriddedFunction(
+                held.grid, var.values[row], lateral=lateral,
+                poles=None if poles is None else poles.values[row])
+        out[name] = on
+    return out
+
+
+def _dimensions(attributes: Mapping[str, Any]) -> Dimensions | None:
+    """The dimensions a variable states, or None where it states none."""
+    if "dimensions" not in attributes:
+        return None
+    return Dimensions(**dict(zip(BASE, (int(x) for x in np.atleast_1d(
+        attributes["dimensions"])))))
+
+
 def _specs(data: ModelFile) -> dict[str, FieldSpec]:
     """The specs the file states for names outside the vocabulary, its
-    statements for vocabulary names checked against the vocabulary."""
-    out: dict[str, FieldSpec] = {}
+    statements for vocabulary names checked against the vocabulary; a
+    surface field's character is a number's."""
+    stated: list[tuple[str, FieldSpec]] = []
     for part in data.parts:
         for name, var in part.variables.items():
             if name.endswith(("_poles", "_perturbation")) or name == "displacement":
                 continue
             a = var.attributes
-            dims = (None if "dimensions" not in a else
-                    Dimensions(**dict(zip(BASE, (int(x) for x in np.atleast_1d(
-                        a["dimensions"]))))))
-            spec = FieldSpec(_character(a), dims, meaning=str(a.get("long_name", "")))
-            known = VOCABULARY.get(name)
-            if known is not None:
-                if known.character != spec.character or (
-                        dims is not None and known.dimensions != dims):
-                    raise ValueError(
-                        f"the file states {name!r} as {spec.character}, {dims}, "
-                        f"where the vocabulary has {known.character}, "
-                        f"{known.dimensions}")
-                continue
+            stated.append((name, FieldSpec(_character(a), _dimensions(a),
+                                           meaning=str(a.get("long_name", "")))))
+    if data.surfaces is not None:
+        for name, var in data.surfaces.variables.items():
+            if not name.endswith("_poles"):
+                a = var.attributes
+                stated.append((name, FieldSpec(SCALAR, _dimensions(a),
+                                               meaning=str(a.get("long_name", "")))))
+    out: dict[str, FieldSpec] = {}
+    for name, spec in stated:
+        known = VOCABULARY.get(name)
+        if known is None:
             out[name] = spec
+            continue
+        surface = data.surfaces is not None and name in data.surfaces.variables
+        same = (known.character.rank == 0 if surface
+                else known.character == spec.character)
+        if not same or (spec.dimensions is not None
+                        and known.dimensions != spec.dimensions):
+            raise ValueError(
+                f"the file states {name!r} as {spec.character}, {spec.dimensions}, "
+                f"where the vocabulary has {known.character}, {known.dimensions}")
     return out
 
 
@@ -1256,3 +1534,12 @@ def read_model(path: str | os.PathLike[str], *,
                   scales=data.scales, specs=_specs(data), name=data.name,
                   constants=data.declared)
     return model if scales is None else model.converted(scales)
+
+
+def read_surfaces(path: str | os.PathLike[str], *,
+                  interpolation: Interpolation | None = None
+                  ) -> dict[str, dict[int | str, GriddedFunction]]:
+    """The functions on interfaces a file holds, as `file_surfaces` gives
+    them, in the file's scales (the model's specs, from `read_model`,
+    give their dimensions); empty for a file without them."""
+    return file_surfaces(read_model_file(path), interpolation=interpolation)

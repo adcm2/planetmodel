@@ -209,6 +209,38 @@ neither.
   boundaries.  Every part is then on one grid, so that the parts'
   displacements agree where they meet.
 
+Fields on interfaces
+--------------------
+
+A function of the angles on one of the skeleton's interfaces (a shape
+kernel, the derivative of an objective along a shift of a boundary; or
+the shift itself) is held in the optional group ``surfaces``, beside
+the parts, and read by ``read_surfaces`` as one gridded function per
+interface.  A file without the group holds no such fields.
+
+- Dimension ``surface``, over the interfaces that hold any field, and
+  ``surface_interface(surface)``, the index of each in the root's
+  ``interface`` dimension, increasing.  Only the skeleton's interfaces
+  hold fields, never a radius inside a layer.
+- The group's own grid, as a part's: ``latitude``, ``longitude``,
+  ``colatitude_weights`` where it has them, the attributes
+  ``grid_kind`` and ``grid_lmax``, and dimension ``pole`` with the
+  attribute ``poles = "north south"`` where the grid lacks a pole.
+- One variable per field, ``name(surface, latitude, longitude)``, NaN on
+  an interface that lacks it, with the attributes ``long_name``,
+  ``units`` (for CF tools), ``dimensions`` (where declared),
+  ``lateral_interpolation`` and ``interfaces`` (the interfaces holding
+  it); and ``name_poles(surface, pole)``, its values at the north and
+  south poles, where the grid lacks a pole.
+
+A field on an interface is a number at each point: it has no
+components and no law under the mapping, and is read at an interface's
+reference radius.  A name is a field of the layers or a field on
+interfaces, never both, so that its ``dimensions`` and ``long_name``
+say one thing in the file.  The C++ writer adds one with
+``ModelFile::AddSurfaceField`` and the reader gives it with
+``ModelFile::SurfaceFieldOn``.
+
 Interpolation between nodes
 ---------------------------
 
@@ -258,7 +290,8 @@ An example
 ----------
 
 The structure of a two-layer model with one field varying laterally,
-on one Gauss-Legendre grid of band 4, placed by boundary reliefs:
+on one Gauss-Legendre grid of band 4, placed by boundary reliefs, with
+a shape kernel on both its interfaces:
 
 .. code-block:: text
 
@@ -304,5 +337,21 @@ on one Gauss-Legendre grid of band 4, placed by boundary reliefs:
        double boundary_displacement(boundary, latitude, longitude) ;
            :lateral_interpolation = "cubic" ; :between = "linear" ;
        double boundary_displacement_poles(boundary, pole) ;
+     }
+
+   group: surfaces {
+     dimensions: surface = 2 ; latitude = 9 ; longitude = 17 ; pole = 2 ;
+     variables:
+       int surface_interface(surface) ;
+       double latitude(latitude) ;     :units = "degrees_north" ;
+       double longitude(longitude) ;   :units = "degrees_east" ;
+       double colatitude_weights(latitude) ;
+       double K_shape(surface, latitude, longitude) ;
+           :long_name = "a shape kernel" ; :units = "m-2" ;
+           :dimensions = 0, -2, 0, 0 ; :lateral_interpolation = "linear" ;
+           :interfaces = 0, 1 ;
+       double K_shape_poles(surface, pole) ;
+     // group attributes:
+       :grid_kind = "gauss_legendre" ; :grid_lmax = 8 ; :poles = "north south" ;
      }
    }
