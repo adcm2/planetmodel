@@ -157,7 +157,7 @@ def test_filtering_a_harmonic_field_by_degree():
     assert cut.lmax == 6
     c, c0 = cut.coefficients.c, f.coefficients.c[..., :7, :7]
     assert np.array_equal(c, c0)
-    rolled = filtered(f, lmax=6, lmin=1, taper=3)
+    rolled = filtered(f, lmax=6, lmin=1, roll_off=3)
     by_degree = rolled.coefficients.c[0, 0, 0, :, 0] / c0[0, 0, 0, :, 0]
     assert by_degree[0] == 0.0 and np.allclose(by_degree[1:4], 1.0)
     l = np.arange(7)
@@ -187,7 +187,7 @@ def test_filtering_a_gridded_field_by_degree():
                                      ngll=2, radial="linear")
     with pytest.raises(ValueError, match="shipped kind"):
         filtered(custom, lmax=3)
-    with pytest.raises(TypeError, match="harmonic or a gridded"):
+    with pytest.raises(TypeError, match="harmonic or a gridded field"):
         filtered(pm.AnalyticField((CMB, MOHO), lambda r, t, p: 0 * r), lmax=3)
 
 

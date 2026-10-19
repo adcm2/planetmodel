@@ -30,10 +30,15 @@ harmonic field harmonic.
 
 `filtered(field, lmax=)` weights a field by degree: coefficients cut
 above `lmax` and below `lmin`, or rolled off by the raised cosine over
-`taper` degrees below `lmax`.  A harmonic field gives a harmonic field;
-a gridded field on a grid of a shipped kind is analysed at each node,
-weighted and synthesised back onto its own grid or `grid=` (the
-`harmonics` extra); a perturbed field is filtered in its perturbation.
+`roll_off` degrees below `lmax`.  A harmonic field gives a harmonic
+field; a gridded field on a grid of a shipped kind is analysed at each
+node, weighted and synthesised back onto its own grid or `grid=` (the
+`harmonics` extra); a perturbed field is filtered in its perturbation;
+a field composed from a gridded one (a data set of values made relative
+to a reference) is first sampled onto that field's grid and radial
+nodes (`resampled`).  `demeaned` is a field less its spherical mean at
+each radius, exact for a harmonic field (its degree 0 gone) and for a
+gridded one (the mean of its lateral rule taken at every node).
 
 `merged(model, regional, name=)` blends a `RegionalGrid` into the
 field `name` of a model, both expressed relative to the model's own
@@ -73,7 +78,7 @@ from .grids import RegionalGrid
 from .models import reference_field
 
 __all__ = ["raised_cosine", "Perturbation", "MODES", "rereferenced", "spread",
-           "filtered", "merged"]
+           "filtered", "resampled", "demeaned", "merged"]
 
 #: What re-referencing keeps: the source's perturbation, or its values.
 MODES = ("relative", "absolute")
@@ -249,6 +254,9 @@ def spread(perturbation: Perturbation, onto: Model, *,
         rs = to_source(r)
         if extend:
             rs = np.clip(rs, lo, hi)
+        else:                                   # the ends, to the model's tolerance
+            near = (r >= t_lo - tol) & (r <= t_hi + tol)
+            rs = np.where(near, np.clip(rs, lo, hi), rs)
         out = np.zeros(r.shape + tuple(segs[0].stored_shape))
         for k, seg in enumerate(segs):
             a, b = (float(x) for x in seg.interval)
@@ -288,32 +296,81 @@ def spread(perturbation: Perturbation, onto: Model, *,
     return result
 
 
-def _degree_weights(lmax: int, lmin: int, taper: int | None) -> np.ndarray:
-    """w_l for l = 0 ... lmax: zero below lmin, one up to lmax - taper, the
-    raised cosine down to lmax."""
+def _degree_weights(lmax: int, lmin: int, roll_off: int | None) -> np.ndarray:
+    """w_l for l = 0 ... lmax: zero below lmin, one up to lmax - roll_off,
+    the raised cosine down to lmax."""
     l = np.arange(lmax + 1)
     w = np.where(l >= lmin, 1.0, 0.0)
-    if taper:
-        k = int(taper)
+    if roll_off:
+        k = int(roll_off)
         fall = l > lmax - k
         w = np.where(fall, w * raised_cosine((lmax + 1 - l) / (k + 1)), w)
     return w
 
 
-def filtered(field: Field, *, lmax: int, lmin: int = 0, taper: int | None = None,
+def _gridded_source(field: Field) -> GriddedField | None:
+    """The gridded field a field is composed from, if any."""
+    if isinstance(field, GriddedField):
+        return field
+    for source in getattr(field, "sources", ()):
+        found = _gridded_source(source)
+        if found is not None:
+            return found
+    return None
+
+
+def resampled(field: Field, *, grid: AngularGrid | None = None) -> GriddedField:
+    """A field composed from a gridded one, sampled onto that field's grid
+    (or `grid`) at the nodes of its radial elements within the field's
+    interval, with its rules: a gridded field equal to the field at every
+    node and pole."""
+    source = _gridded_source(field)
+    if source is None:
+        raise TypeError(f"{field!r} is composed from no gridded field, so it has no "
+                        "grid or radial nodes of its own to be sampled on")
+    lo, hi = (float(x) for x in field.interval)
+    inner = source.breaks[(source.breaks > lo) & (source.breaks < hi)]
+    return GriddedField.sampled(field, source.grid if grid is None else grid,
+                                breaks=np.concatenate([[lo], inner, [hi]]),
+                                ngll=source.ngll, radial=source.radial,
+                                lateral=source.lateral)
+
+
+def demeaned(field: Field) -> Field:
+    """The field less its spherical mean at each radius, by the rule of the
+    module docstring; a field composed from a gridded one is resampled
+    first."""
+    pert = getattr(field, "perturbation", None)
+    if pert is not None:
+        return PerturbedField(field.reference, demeaned(pert), kind=field.kind,
+                              name=field.name)
+    if isinstance(field, HarmonicField):
+        return filtered(field, lmax=field.lmax, lmin=1)
+    if not isinstance(field, GriddedField):
+        field = resampled(field)
+    mean = np.asarray(field.spherical_mean()(field.radii))
+    shape = mean.shape + (1,) * (field.values.ndim - mean.ndim)
+    poles = None if field.poles is None else field.poles - mean[..., None]
+    return GriddedField(field.interval, field.breaks, field.grid,
+                        field.values - mean.reshape(shape), character=field.character,
+                        name=field.name, radial=field.radial, lateral=field.lateral,
+                        poles=poles)
+
+
+def filtered(field: Field, *, lmax: int, lmin: int = 0, roll_off: int | None = None,
              grid: AngularGrid | None = None) -> Field:
     """The field weighted by degree, by the rule of the module docstring."""
     lmax, lmin = int(lmax), int(lmin)
     if not 0 <= lmin <= lmax:
         raise ValueError(f"the band must have 0 <= lmin <= lmax, got {lmin}, {lmax}")
-    if taper is not None and not 0 < int(taper) <= lmax:
-        raise ValueError(f"taper must be a number of degrees in 1 ... lmax, got "
-                         f"{taper}")
-    w = _degree_weights(lmax, lmin, taper)
+    if roll_off is not None and not 0 < int(roll_off) <= lmax:
+        raise ValueError(f"roll_off must be a number of degrees in 1 ... lmax, got "
+                         f"{roll_off}")
+    w = _degree_weights(lmax, lmin, roll_off)
     pert = getattr(field, "perturbation", None)
     if pert is not None:
         return PerturbedField(field.reference,
-                              filtered(pert, lmax=lmax, lmin=lmin, taper=taper,
+                              filtered(pert, lmax=lmax, lmin=lmin, roll_off=roll_off,
                                        grid=grid),
                               kind=field.kind, name=field.name)
     if isinstance(field, HarmonicField):
@@ -339,9 +396,12 @@ def filtered(field: Field, *, lmax: int, lmin: int = 0, taper: int | None = None
         return GriddedField(field.interval, field.breaks, target, values,
                             character=field.character, name=field.name,
                             radial=field.radial, lateral=field.lateral)
+    if _gridded_source(field) is not None:
+        return filtered(resampled(field), lmax=lmax, lmin=lmin, roll_off=roll_off,
+                        grid=grid)
     raise TypeError(f"filtering by degree takes a harmonic or a gridded field (or one "
-                    f"perturbed by one); {field!r} is neither: sample it onto a grid "
-                    "first (GriddedField.sampled)")
+                    f"perturbed by one, or composed from one); {field!r} is none: "
+                    "sample it onto a grid first (GriddedField.sampled)")
 
 
 def _edge_weight(regional: RegionalGrid, theta: np.ndarray, phi: np.ndarray,

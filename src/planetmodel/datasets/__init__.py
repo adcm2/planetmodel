@@ -29,7 +29,10 @@ longitude, EMC's among them, normalised by `read_grid` into a model of a
 global grid (`grid_model`, `GridReader`) or a `RegionalGrid`.  The
 processing that fits them to a model of one's own (`rereferenced`,
 `spread`, `filtered`, `merged`, one taper `raised_cosine`) is in
-`planetmodel.datasets.processing`.
+`planetmodel.datasets.processing`, and `transplanted` takes them in their
+order to put a data set's perturbations on a model of one's own:
+
+    transplanted(PREM(), "S40RTS", lmax=20)    # vsv, vsh perturbed; L, N with them
 
 `fetch` downloads into `cache_directory()` (`PLANETMODEL_DATA`, or the
 platform's per-user cache), checks each file's sha256 every time it is
@@ -40,6 +43,7 @@ to the entry's reader.  Everything here is the standard library, numpy
 and scipy; a reader needing an extra imports it where it is used.  The
 sub-package is reached by module, off the top-level surface.
 """
+from .building import PAIRS, transplanted
 from .decks import DeckReader, Names
 from .entries import REGISTRY, DatasetLike, as_dataset, cite, describe
 from .grids import (EARTH_RADIUS, SAME_RTOL, VERTICAL_RTOL, GridData, GridReader,
@@ -48,8 +52,8 @@ from .fetch import (CACHE_VARIABLE, OFFLINE_VARIABLE, TIMEOUT, cache_directory, 
                     load, sha256_of)
 from .models import (REFERENCES, Segments, over_reference, reference_field,
                      reference_of, standalone)
-from .processing import (MODES, Perturbation, filtered, merged, raised_cosine,
-                         rereferenced, spread)
+from .processing import (MODES, Perturbation, demeaned, filtered, merged,
+                         raised_cosine, rereferenced, resampled, spread)
 from .registry import ARCHIVES, Dataset, Reader, Source, archive_stem
 from .sph import (MANTLE_SLOTS, SLOTS, SPH_RADII, SPLINE_KNOTS, SphFile, SphReader,
                   read_sph, sph_field, sph_splines)
@@ -63,4 +67,5 @@ __all__ = ["Source", "Dataset", "Reader", "DatasetLike", "REGISTRY", "ARCHIVES",
            "DeckReader", "Names", "Segments", "standalone", "GridData", "GridReader",
            "RegionalGrid", "Variables", "grid_model", "read_grid", "EARTH_RADIUS",
            "SAME_RTOL", "VERTICAL_RTOL", "MODES", "Perturbation", "filtered",
-           "merged", "raised_cosine", "rereferenced", "spread"]
+           "merged", "raised_cosine", "rereferenced", "spread", "resampled",
+           "demeaned", "transplanted", "PAIRS"]
