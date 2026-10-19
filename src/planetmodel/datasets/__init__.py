@@ -26,7 +26,11 @@ radial splines (`read_sph`, `sph_field`, `SphReader`); radial references
 published as decks (STW105, ak135-F, iasp91, the Moon's models) read
 through `planetmodel.deck` by `DeckReader`; netCDF grids of latitude and
 longitude, EMC's among them, normalised by `read_grid` into a model of a
-global grid (`grid_model`, `GridReader`) or a `RegionalGrid`.  The
+global grid (`grid_model`, `GridReader`) or a `RegionalGrid`.  A
+surface (a planet's shape, its topography, the radius of an interface
+within it, an ice sheet's thickness) is a `Surface`, a function of the
+angles with what it measures and from what datum, read from a table of
+harmonic coefficients by `read_coefficients` (`CoefficientReader`).  The
 processing that fits them to a model of one's own (`rereferenced`,
 `spread`, `filtered`, `merged`, one taper `raised_cosine`) is in
 `planetmodel.datasets.processing`, and `transplanted` takes them in their
@@ -57,6 +61,8 @@ from .processing import (MODES, Perturbation, demeaned, filtered, merged,
 from .registry import ARCHIVES, Dataset, Reader, Source, archive_stem
 from .sph import (MANTLE_SLOTS, SLOTS, SPH_RADII, SPLINE_KNOTS, SphFile, SphReader,
                   read_sph, sph_field, sph_splines)
+from .coefficients import FORMATS, read_coefficients
+from .surfaces import MEASURES, CoefficientReader, Datum, Surface
 
 __all__ = ["Source", "Dataset", "Reader", "DatasetLike", "REGISTRY", "ARCHIVES",
            "as_dataset", "archive_stem", "describe", "cite", "cache_directory",
@@ -68,4 +74,5 @@ __all__ = ["Source", "Dataset", "Reader", "DatasetLike", "REGISTRY", "ARCHIVES",
            "RegionalGrid", "Variables", "grid_model", "read_grid", "EARTH_RADIUS",
            "SAME_RTOL", "VERTICAL_RTOL", "MODES", "Perturbation", "filtered",
            "merged", "raised_cosine", "rereferenced", "spread", "resampled",
-           "demeaned", "transplanted", "PAIRS"]
+           "demeaned", "transplanted", "PAIRS", "FORMATS", "read_coefficients",
+           "MEASURES", "Datum", "Surface", "CoefficientReader"]

@@ -16,7 +16,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 if TYPE_CHECKING:
-    from .datasets import Dataset
+    from .datasets import Dataset, Surface
     from .displacement import RadialDisplacement
     from .fields import Field
     from .geometry import Geometry
@@ -32,7 +32,8 @@ if TYPE_CHECKING:
 __all__ = ["check_displacement", "check_mapping", "check_geometry",
            "check_layer_function", "check_field", "check_model",
            "check_refinement", "check_sample", "check_spectral_basis",
-           "check_spherical_basis", "check_model_file", "check_dataset"]
+           "check_spherical_basis", "check_model_file", "check_dataset",
+           "check_surface"]
 
 
 def _rel(a: ArrayLike, b: ArrayLike, *, rtol: float, floor: float = 1.0) -> bool:
@@ -1133,12 +1134,12 @@ def check_dataset(dataset: Dataset, *,
     with the entry's sha256, and that the reader reads them, with
     `options`, into an object that holds to its own protocol: a `Model`
     to `check_model`, a `RegionalGrid` to values of the right shape at its
-    own corners and NaN outside its box.  Nothing here touches the
-    network.
+    own corners and NaN outside its box, a `Surface` to `check_surface`.
+    Nothing here touches the network.
     """
     from pathlib import Path
 
-    from .datasets import RegionalGrid, cite, describe, sha256_of
+    from .datasets import RegionalGrid, Surface, cite, describe, sha256_of
     from .model import Model
 
     names = [s.name for s in dataset.sources]
@@ -1170,6 +1171,8 @@ def check_dataset(dataset: Dataset, *,
     assert product is not None, f"{dataset.name}: the reader gave nothing"
     if isinstance(product, Model):
         check_model(product)
+    if isinstance(product, Surface):
+        check_surface(product)
     if isinstance(product, RegionalGrid):
         (r0, r1), (t0, t1), (p0, p1) = product.extent
         r = np.array([r0, 0.5 * (r0 + r1), r1])[:, None]
@@ -1181,3 +1184,55 @@ def check_dataset(dataset: Dataset, *,
                 away = product(name, 0.5 * (r0 + r1), 0.5 * (t0 + t1),
                                0.5 * (p0 + p1) + np.pi)
                 assert np.isnan(away), f"{dataset.name}: {name} reads outside its box"
+
+
+def check_surface(surface: Surface, *, rng: np.random.Generator | None = None,
+                  n: int = 64) -> None:
+    """Hold a `datasets.Surface` to its protocol at `n` random points: its
+    values finite and of the points' shape; its radius its values, or its
+    datum's radius plus an elevation or less a depth or a thickness, and
+    positive, or refused by name where it has no datum; held on a grid,
+    the same values at the grid's nodes; and its mean, where its function
+    has one of its own and a band, the mean of its values by quadrature
+    on a grid of that band (at most 512)."""
+    from .datasets import Surface
+    from .sampling import gauss_legendre
+
+    rng = np.random.default_rng(0) if rng is None else rng
+    theta = np.arccos(rng.uniform(-1.0, 1.0, n))
+    phi = rng.uniform(0.0, 2.0 * np.pi, n)
+    values = surface(theta, phi)
+    assert values.shape == theta.shape and np.all(np.isfinite(values)), (
+        f"{surface!r}: its values are not finite numbers of the points' shape")
+    if surface.measures != "radius" and surface.datum is None:
+        try:
+            surface.radius(theta, phi)
+        except ValueError as error:
+            assert "with_datum" in str(error), f"{surface!r}: {error}"
+        else:
+            raise AssertionError(f"{surface!r} gives a radius without its datum")
+    else:
+        radius = surface.radius(theta, phi)
+        if surface.measures == "radius":
+            want = values
+        else:
+            base = (surface.datum.radius(theta, phi)
+                    if isinstance(surface.datum, Surface) else surface.datum)
+            want = base + values if surface.measures == "elevation" else base - values
+        assert np.allclose(radius, want, rtol=1e-12, atol=0), (
+            f"{surface!r}: its radius is not its datum and values by its measure")
+        assert np.all(radius > 0.0), f"{surface!r}: a radius that is not positive"
+    band = getattr(surface.function, "lmax", None)
+    grid = gauss_legendre(32 if band is None else min(int(band), 512))
+    held = surface.sampled(grid, lateral="linear")
+    t, p = grid.colatitudes[:, None], grid.longitudes[None, :]
+    on = surface(t, p)
+    scale = max(float(np.max(np.abs(on))), 1e-300)
+    assert np.allclose(held(t, p), on, rtol=0, atol=1e-9 * scale), (
+        f"{surface!r}: held on a grid, it does not keep its values at the nodes")
+    if (getattr(surface.function, "mean", None) is not None and band is not None
+            and int(band) <= 512):
+        quadrature = float(grid.mean(on))
+        assert np.isclose(surface.mean(), quadrature, rtol=0, atol=1e-9 * scale), (
+            f"{surface!r}: its mean {surface.mean()} is not its values' "
+            f"{quadrature}")

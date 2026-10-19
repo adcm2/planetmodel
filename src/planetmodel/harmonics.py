@@ -23,7 +23,9 @@ out as a vector: by degree, then the cosine harmonics of orders
 
 Two routes.  `real_harmonics` and `synthesise` evaluate the basis at
 arbitrary points through scipy, vectorised over the points: the
-definition, and the oracle everything else is held to.  `synthesise_grid`
+definition, and the oracle everything else is held to, to degree
+`SCIPY_LMAX`, above which scipy's harmonics overflow and the route is
+refused.  `synthesise_grid`
 and `analyse_grid` go between coefficients and values on a grid of a
 shipped kind -- Gauss-Legendre, Driscoll-Healy, or equiangular with or
 without the poles, from `planetmodel.sampling` -- through ducc0's
@@ -81,10 +83,14 @@ __all__ = ["real_harmonics", "real_harmonics_gradient", "synthesise",
            "synthesise_gradient", "synthesise_grid", "analyse_grid",
            "synthesise_points", "synthesise_points_gradient", "packing",
            "from_convention", "to_convention", "NORMALIZATIONS",
-           "POINT_EPSILON"]
+           "POINT_EPSILON", "SCIPY_LMAX"]
 
 #: The relative accuracy asked of ducc0's synthesis at arbitrary points.
 POINT_EPSILON = 1e-13
+
+#: The highest degree to which scipy's harmonics are finite: from degree
+#: 646 they overflow at every colatitude and order.
+SCIPY_LMAX = 645
 
 #: The normalisations `from_convention` and `to_convention` take.
 NORMALIZATIONS = ("ortho", "4pi", "schmidt", "unnorm", "woodhouse")
@@ -98,6 +104,12 @@ def _complex_basis(lmax: int, theta: np.ndarray, phi: np.ndarray, *,
     """scipy's complex harmonics of orders 0 ... lmax, the Condon-Shortley
     phase removed: (L + 1, L + 1) + points, with their (d/dtheta, d/dphi)
     when `gradient` asks."""
+    if lmax > SCIPY_LMAX:
+        raise ValueError(
+            f"scipy's harmonics overflow above degree {SCIPY_LMAX}, and degree "
+            f"{lmax} is asked for: synthesise through ducc0 (synthesise_points, "
+            "synthesise_grid), the harmonics extra: pip install "
+            "'planetmodel[harmonics]'")
     m = np.arange(lmax + 1).reshape((1, -1) + (1,) * theta.ndim)
     sign = (-1.0) ** m
     if not gradient:

@@ -19,12 +19,15 @@ Both evaluate through scipy's harmonics (`harmonics.synthesise`), a
 block of points at a time, at a cost of order (lmax + 1)^2 a point and
 with the coefficients held once for each distinct radius; the points of
 a radius shared by `FAST_POINTS` or more (a sphere, a grid at a node of
-radius) go through ducc0's synthesis at points where the `harmonics`
-extra is installed, to `harmonics.POINT_EPSILON` of the field's largest
-value and some thousand times faster, scipy remaining the definition
-the tests hold it to.  On the nodes of a grid, `on_grid` takes ducc0's
-grid transforms (a shipped kind of band at least lmax) or its synthesis
-at points (any other grid).  Entries of a coefficient array
+radius), and a harmonic function's `FAST_POINTS` or more, go through
+ducc0's synthesis at points where the `harmonics` extra is installed,
+to `harmonics.POINT_EPSILON` of the field's largest value and some
+thousand times faster, scipy remaining the definition the tests hold it
+to.  Above `harmonics.SCIPY_LMAX`, where scipy's harmonics overflow,
+every point goes through ducc0, and without it the evaluation is
+refused by name.  On the nodes of a grid, `on_grid` takes ducc0's grid
+transforms (a shipped kind of band at least lmax) or its synthesis at
+points (any other grid).  Entries of a coefficient array
 that belong to no harmonic (the sine slot of order zero, orders above
 the degree) must be zero.  Everything is numbers.
 """
@@ -40,7 +43,7 @@ from scipy.interpolate import BSpline, PPoly
 
 from .character import SCALAR, Character
 from .fields import FieldBase, RadialField, radial_pieces_of
-from .harmonics import synthesise, synthesise_gradient
+from .harmonics import SCIPY_LMAX, synthesise, synthesise_gradient
 from .layerfunction import PolynomialLayer, as_interval
 
 if TYPE_CHECKING:
@@ -181,7 +184,7 @@ class HarmonicField(FieldBase):
         index = index.reshape(r.shape)
         c = self.coefficients_at(radii)
         counts = np.bincount(index.ravel(), minlength=radii.size)
-        many = np.flatnonzero(counts >= FAST_POINTS)
+        many = np.flatnonzero((counts >= FAST_POINTS) | (self._lmax > SCIPY_LMAX))
         if many.size:
             from .harmonics import synthesise_points
 
@@ -247,7 +250,8 @@ class HarmonicFunction:
     `coefficients` has shape (2, lmax + 1, lmax + 1), in the layout of
     `planetmodel.harmonics`.  Calling it gives the values at points;
     `angular_gradient` gives (d/dtheta, d/dphi), so that it is a relief
-    for `layer_linear`.  Values are real.
+    for `layer_linear`; `on_grid` the values on a grid's nodes, and
+    `mean` the spherical mean.  Values are real.
     """
 
     def __init__(self, coefficients: ArrayLike) -> None:
@@ -272,13 +276,48 @@ class HarmonicFunction:
         return self._lmax
 
     def __call__(self, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
-        """The values at (theta, phi), broadcast together."""
-        return synthesise(self._c, theta, phi)
+        """The values at (theta, phi), broadcast together, by the route of
+        the module docstring."""
+        t, p = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                   np.asarray(phi, dtype=float))
+        if t.size >= FAST_POINTS or self._lmax > SCIPY_LMAX:
+            try:
+                from .harmonics import synthesise_points
+                return synthesise_points(self._c, t, p)
+            except ImportError:                       # without the harmonics extra
+                pass
+        return synthesise(self._c, t, p)
 
     def angular_gradient(self, theta: ArrayLike, phi: ArrayLike
                          ) -> tuple[np.ndarray, np.ndarray]:
-        """(d/dtheta, d/dphi) at (theta, phi), broadcast together."""
-        return synthesise_gradient(self._c, theta, phi)
+        """(d/dtheta, d/dphi) at (theta, phi), broadcast together, by the
+        route of the module docstring."""
+        t, p = np.broadcast_arrays(np.asarray(theta, dtype=float),
+                                   np.asarray(phi, dtype=float))
+        if t.size >= FAST_POINTS or self._lmax > SCIPY_LMAX:
+            try:
+                from .harmonics import synthesise_points_gradient
+                return synthesise_points_gradient(self._c, t, p)
+            except ImportError:                       # without the harmonics extra
+                pass
+        return synthesise_gradient(self._c, t, p)
+
+    def on_grid(self, grid: AngularGrid) -> np.ndarray:
+        """The values on the nodes of `grid`, (ntheta, nphi), through
+        ducc0 where it is installed (its grid transforms on a shipped kind
+        of band at least `lmax`, its synthesis at points otherwise)."""
+        try:
+            from .harmonics import synthesise_grid
+            if (grid.kind != "custom" and grid.lmax is not None
+                    and grid.lmax >= self._lmax):
+                return synthesise_grid(self._c, grid)
+        except ImportError:                           # without the harmonics extra
+            pass
+        return self(grid.colatitudes[:, None], grid.longitudes[None, :])
+
+    def mean(self) -> float:
+        """The mean over the sphere, c_00 / sqrt(4 pi)."""
+        return float(self._c[0, 0, 0] / np.sqrt(4.0 * np.pi))
 
     def __repr__(self) -> str:
         return f"HarmonicFunction(lmax={self._lmax})"

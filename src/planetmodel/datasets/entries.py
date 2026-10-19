@@ -18,6 +18,7 @@ from .decks import DeckReader
 from .grids import GridReader
 from .registry import Dataset, Source
 from .sph import SphReader
+from .surfaces import CoefficientReader
 
 __all__ = ["DatasetLike", "REGISTRY", "as_dataset", "describe", "cite"]
 
@@ -85,6 +86,50 @@ def _emc_cites(doi: str) -> tuple[str, str]:
             "(2012).  Data products at the IRIS DMC: stepping stones for research "
             "and other applications.  Seismol. Res. Lett. 83, 846-854, "
             "doi:10.1785/0220120032")
+
+
+#: Earth2014's tables to degree 2160, at their host.
+_EARTH2014 = "https://ddfe.curtin.edu.au/models/Earth2014/data_5min/shcs_to2160"
+
+#: Earth2014, as its readme asks it cited.
+_EARTH2014_CITE = ("Hirt, C. and M. Rexer (2015).  Earth2014: 1 arc-min shape, "
+                   "topography, bedrock and ice-sheet models - available as gridded "
+                   "data and degree-10,800 spherical harmonics.  Int. J. Appl. Earth "
+                   "Obs. Geoinf. 39, 103-112, doi:10.1016/j.jag.2015.03.001")
+
+#: What every Earth2014 entry says of its table.
+_EARTH2014_NOTES = ("4 pi normalised, in metres, the degree-10,800 analysis cut at "
+                    "degree 2160; its grids are in geodetic latitude, which the "
+                    "table's colatitude is, so that read as the library's geocentric "
+                    "colatitude a feature lies up to 0.19 degrees (21 km) from where "
+                    "it is.  Mean sea level is taken as the sphere of the Earth's "
+                    "mean radius, 6371 km.")
+
+#: The licence of Earth2014, whose readme states none.
+_EARTH2014_LICENCE = "none stated; the readme asks that the paper be cited"
+
+#: The Mars and Moon shapes and their convention.
+_SHAPES = "https://zenodo.org/records"
+_SHAPE_NOTES = ("4 pi normalised without the Condon-Shortley phase, in metres, of "
+                "the radius; to degree 719 (the record holds 1439, 2879 and 5759 "
+                "too, for a caller's own entry).")
+
+#: GRAIL's crustal thickness archive, and the directory of its members.
+_GRAIL = "https://zenodo.org/records/997347/files/GRAILCrustalThicknessArchive.zip"
+_GRAIL_DIR = "GRAILCrustalThicknessArchive/Data/"
+
+
+def _earth2014(layer: str, measures: str, title: str, *, datum: float | None,
+               sha256: str, notes: str) -> Dataset:
+    """An entry of one of Earth2014's tables to degree 2160."""
+    return Dataset(f"Earth2014-{layer}",
+                   (Source(f"{_EARTH2014}/Earth2014.{layer}2014.degree2160.bshc",
+                           sha256),),
+                   CoefficientReader(format="bshc", measures=measures, datum=datum,
+                                     name=f"Earth2014 {layer}"),
+                   title=title, citation=(_EARTH2014_CITE,),
+                   licence=_EARTH2014_LICENCE,
+                   notes=" ".join((notes, _EARTH2014_NOTES)))
 
 
 def _moon(name: str, member: str, title: str, cite: str, *,
@@ -337,6 +382,72 @@ _ENTRIES: tuple[Dataset, ...] = (
           "Garcia et al. (2019), as below: the ISSI lunar team's models",
           notes="Its crust-mantle boundary is marked for the codes that need one; "
                 "it varies across the ensemble."),
+    _earth2014("SUR", "elevation", "The Earth's surface: land, lakes, ice and the "
+               "sea surface", datum=6371e3,
+               sha256="5694260d135c17427270ed18d48af23f4788e5fbc1dfb9dcb19f1cf9b401c9ce",
+               notes="The physical surface: the topography of land, the surface of "
+                     "major lakes and ice sheets, and zero over the oceans."),
+    _earth2014("BED", "elevation", "The Earth's bedrock, without water and ice",
+               datum=6371e3,
+               sha256="146dcc80f17d201352d391aa90f487f5ed16006a6a3966add2d023b998727af7",
+               notes="The bedrock: the topography of land and the floors of oceans, "
+                     "lakes and ice sheets."),
+    _earth2014("ICE", "thickness", "The thickness of the Earth's major ice sheets",
+               datum=None,
+               sha256="04cd185cc668eba6f9bd1db527c4985703cce8d1a9fb993509e625e2bbecc78e",
+               notes="The thickness of the major ice sheets, zero elsewhere, below "
+                     "the ice's top, which is Earth2014-SUR there: give it that "
+                     "datum (with_datum) to place its base."),
+    Dataset(
+        "Mars-MOLA-shape",
+        (Source(f"{_SHAPES}/10820719/files/Mars_MOLA_shape_719.bshc.gz",
+                "d24497a57476bb24c9905886637a9ab53518c4b970c5325858007d72d3e2e79e"),),
+        CoefficientReader(format="bshc", measures="radius", name="Mars MOLA shape"),
+        title="The shape of Mars from the Mars Orbiter Laser Altimeter",
+        citation=("Wieczorek, M. A. (2024).  Spherical harmonic models of the shape "
+                  "of Mars [MOLA], version 1.0.1.  Zenodo, "
+                  "doi:10.5281/zenodo.10820719",
+                  "Smith, D. E., M. T. Zuber, H. V. Frey, J. B. Garvin and others "
+                  "(2001).  Mars Orbiter Laser Altimeter: experiment summary after "
+                  "the first year of global mapping of Mars.  J. Geophys. Res. 106, "
+                  "23689-23722, doi:10.1029/2000JE001364"),
+        licence="CC BY 4.0", body="Mars", notes=_SHAPE_NOTES),
+    Dataset(
+        "Moon-LOLA-shape",
+        (Source(f"{_SHAPES}/10820774/files/Moon_LOLA_shape_719.bshc.gz",
+                "20cafa143fda3e5ba5af6868c9e95054fabf68d0050c4be64a83d44df1333b4c"),),
+        CoefficientReader(format="bshc", measures="radius", name="Moon LOLA shape"),
+        title="The shape of the Moon from the Lunar Orbiter Laser Altimeter",
+        citation=("Wieczorek, M. A. (2024).  Spherical harmonic models of the shape "
+                  "of the Moon [LOLA], version 1.0.1.  Zenodo, "
+                  "doi:10.5281/zenodo.10820774",
+                  "Smith, D. E., M. T. Zuber, G. A. Neumann, F. G. Lemoine and others "
+                  "(2010).  Initial observations from the Lunar Orbiter Laser "
+                  "Altimeter (LOLA).  Geophys. Res. Lett. 37, L18204, "
+                  "doi:10.1029/2010GL043751"),
+        licence="CC BY 4.0", body="Moon",
+        notes=_SHAPE_NOTES + "  In the DE421 mean Earth/polar axis frame."),
+    Dataset(
+        "GRAIL-crust",
+        (Source(_GRAIL,
+                "4ea89cac2564f666c0eed5300c6d4852b43c284d46f80631d0bdd5710353ad2c",
+                members=tuple(f"{_GRAIL_DIR}Model{k}_cmi.sh" for k in range(1, 5))),),
+        CoefficientReader(format="shtools", measures="radius",
+                          name="GRAIL crust-mantle interface"),
+        title="The radius of the Moon's crust-mantle interface from GRAIL",
+        citation=("Wieczorek, M. A., G. A. Neumann, F. Nimmo, W. S. Kiefer and "
+                  "others (2013).  The crust of the Moon as seen by GRAIL.  Science "
+                  "339, 671-675, doi:10.1126/science.1231530",
+                  "Wieczorek, M. A. (2012).  GRAIL crustal thickness archive.  "
+                  "Zenodo, doi:10.5281/zenodo.997347"),
+        licence="BSD-3-Clause", body="Moon",
+        notes="The radius of the crust-mantle interface of models 1 to 4 of the "
+              "archive (which=0 to 3, or the file's name, Model1_cmi.sh ...; "
+              "average crustal thicknesses 34, 35, 43 and 43 km), to degree 310, "
+              "SHTOOLS text in metres, 4 pi normalised without the Condon-Shortley "
+              "phase, in the principal-axis frame.  The crustal thickness is the "
+              "archive's LOLA surface (in the same frame) less this radius; the "
+              "archive's thickness files are not read."),
 )
 
 
