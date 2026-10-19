@@ -225,5 +225,6 @@ class SphReader:
         fields = {name: sph_field(read_sph(p), name=name)
                   for name, p in zip(self.parameters, paths)}
         model = over_reference(reference_of(dataset, reference=reference), fields,
-                               kind="relative", name=dataset.name)
+                               kind="relative", name=dataset.name,
+                               citation=dataset.citation)
         return model if scales is None else model.converted(scales)

@@ -19,6 +19,7 @@ int main(int argc, char** argv) {
     std::cout << std::format("{}: {}, schema {}, length scale {} m\n", file.Source(),
                              file.Name().value_or("unnamed"), file.Schema(),
                              file.GetScales().Length());
+    for (const auto& work : file.Citation()) std::cout << std::format("  cite: {}\n", work);
     const auto mapping = file.Mapping();
     const auto& skeleton = file.GetSkeleton();
     for (auto layer = 0; layer < static_cast<int>(skeleton.NLayers()); ++layer) {

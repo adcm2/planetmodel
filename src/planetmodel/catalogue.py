@@ -56,6 +56,10 @@ __all__ = ["PREM", "LayeredIsotropicElastic", "MineosModel", "PREM_RADIUS"]
 #: The normalisation radius a of PREM's polynomials, metres.
 PREM_RADIUS = 6371e3
 
+_PREM_CITATION = ("Dziewonski, A. M. and D. L. Anderson (1981).  Preliminary "
+                  "reference Earth model.  Phys. Earth Planet. Inter. 25, 297-356, "
+                  "doi:10.1016/0031-9201(81)90046-7")
+
 #: Table I of Dziewonski and Anderson (1981), centre outward: the radii
 #: of each region in metres and the polynomial coefficients of each
 #: column in the paper's units, ascending in x = r / a.
@@ -196,7 +200,8 @@ class PREM(Elastic, ConstantQ, SelfGravitating, Viscoelastic, Model):
                     name=name)
             layers.append(fields)
         super().__init__(geometry, layers, scales=Scales.SI,
-                         name="PREM" if ocean else "PREM (no ocean)")
+                         name="PREM" if ocean else "PREM (no ocean)",
+                         citation=(_PREM_CITATION,))
 
 
 class LayeredIsotropicElastic(Elastic, SelfGravitating, Model):

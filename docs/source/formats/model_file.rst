@@ -61,6 +61,9 @@ Global attributes
        temperature, so that a reader can convert it
    * - ``constant_<name>_meaning``
      - what it is, where the model says
+   * - ``citation``
+     - the works the model cites, one a line, where it cites any: the
+       papers of the models and data sets it was built from
    * - ``meta_<key>``
      - whatever the writer was given as ``meta``
 

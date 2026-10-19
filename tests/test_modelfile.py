@@ -70,6 +70,21 @@ def test_prem_comes_back_as_the_same_polynomials(prem, tmp_path):
     assert data.constants["G"] == pytest.approx(prem.constant("G"))
 
 
+def test_a_model_s_citation_is_written_and_read_back(prem, tmp_path):
+    cites = prem.with_citation("A. Author (2026).  Something on top.")
+    path = write_model(tmp_path / "cites.nc", cites, grid=gauss_legendre(2))
+    check_model_file(path, cites)
+    with netCDF4.Dataset(path) as ds:
+        assert ds.getncattr("citation") == cites.cite()
+    assert read_model_file(path).citation == cites.citation
+    assert read_model(path).citation == cites.citation
+    bare = prem.replaced(citation=())
+    path = write_model(tmp_path / "bare.nc", bare, grid=gauss_legendre(2))
+    with netCDF4.Dataset(path) as ds:
+        assert "citation" not in ds.ncattrs()
+    assert read_model(path).citation == ()
+
+
 def test_a_model_in_other_scales_is_read_back_in_them(prem, tmp_path):
     nd = prem.nondimensionalised()
     path = write_model(tmp_path / "nd.nc", nd, grid=gauss_legendre(2))

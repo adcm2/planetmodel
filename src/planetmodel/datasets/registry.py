@@ -101,7 +101,9 @@ class Source:
 
 
 class Reader(Protocol):
-    """What reads a data set's fetched files into the object it is."""
+    """What reads a data set's fetched files into the object it is, which
+    cites the entry's works (`citation`, `cite`) and whatever else it
+    rests on, such as the reference a model of perturbations is over."""
 
     def read(self, paths: tuple[Path, ...], dataset: Dataset, **options: Any
              ) -> object:

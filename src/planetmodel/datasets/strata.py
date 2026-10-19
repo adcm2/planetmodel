@@ -35,13 +35,14 @@ mixing in the zeros or blanks a source gives for what is not there.
 The surfaces are `GriddedFunction`s on the source's grid, read
 bilinearly between its cell centres, with the mean of the nearest ring
 at each pole (`grids.ring_poles`).  `Crust1Reader`, `Litho1Reader` and
-`TableStrataReader` are the registry's readers.
+`TableStrataReader` are the registry's readers, whose strata and every
+surface of them cite the entry's works.
 """
 from __future__ import annotations
 
 import os
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import KW_ONLY, dataclass, field
+from dataclasses import KW_ONLY, dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING
@@ -50,6 +51,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from ..gridded import GriddedFunction
+from ..model import cited
 from ..sampling import AngularGrid, equiangular
 from ..units import parse_unit
 from .grids import EARTH_RADIUS, GridData, read_grid, read_table, ring_poles
@@ -127,12 +129,13 @@ class Stratum:
 class Strata:
     """Strata from the top down, each one's bottom the next one's top, and
     `below`, the properties beneath the last, by the rules of the module
-    docstring; `name` what they are."""
+    docstring; `name` what they are, `citation` the works they rest on."""
 
     strata: tuple[Stratum, ...]
     _: KW_ONLY
     below: Mapping[str, Relief] = field(default_factory=dict)
     name: str | None = None
+    citation: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         strata = tuple(self.strata)
@@ -146,6 +149,7 @@ class Strata:
                 raise ValueError(f"{upper.name}'s bottom is not {lower.name}'s top")
         object.__setattr__(self, "strata", strata)
         object.__setattr__(self, "below", MappingProxyType(dict(self.below)))
+        object.__setattr__(self, "citation", cited((), self.citation))
 
     @classmethod
     def from_surfaces(cls, surfaces: Sequence[Surface], names: Sequence[str],
@@ -181,6 +185,20 @@ class Strata:
                     return s
             raise KeyError(f"no stratum {which!r}; the strata are {list(self.names)}")
         return self.strata[which]
+
+    def cite(self) -> str:
+        """The works the strata rest on, one a line."""
+        return "\n".join(self.citation)
+
+    def with_citation(self, *works: str) -> Strata:
+        """The same strata citing `works` too, after their own, and every
+        surface of them too."""
+        surfaces = tuple(s.with_citation(*works) for s in self.surfaces)
+        strata = tuple(Stratum(s.name, surfaces[k], surfaces[k + 1],
+                               properties=s.properties)
+                       for k, s in enumerate(self.strata))
+        return replace(self, strata=strata, below=dict(self.below),
+                       citation=cited(self.citation, works))
 
     def __len__(self) -> int:
         return len(self.strata)
@@ -286,7 +304,7 @@ class Crust1Reader:
 
     def read(self, paths: tuple[Path, ...], dataset: Dataset) -> Strata:
         """CRUST1.0's strata."""
-        return read_crust1(paths, name=dataset.name)
+        return read_crust1(paths, name=dataset.name).with_citation(*dataset.citation)
 
     def __repr__(self) -> str:
         return "Crust1Reader()"
@@ -339,7 +357,8 @@ class Litho1Reader:
 
     def read(self, paths: tuple[Path, ...], dataset: Dataset) -> Strata:
         """LITHO1.0's strata."""
-        return litho1_strata(read_grid(paths[0], regular=True), name=dataset.name)
+        strata = litho1_strata(read_grid(paths[0], regular=True), name=dataset.name)
+        return strata.with_citation(*dataset.citation)
 
     def __repr__(self) -> str:
         return "Litho1Reader()"
@@ -401,9 +420,10 @@ class TableStrataReader:
                                self.properties.get(n, {}) else
                                np.zeros(levels.shape[1:]) for n in self.names])
             props[prop] = (values, values)
-        return _strata_on_grid(data.grid, levels, self.measures, self.names, props,
-                               {p: si(c) for p, c in self.below.items()},
-                               name=dataset.name)
+        strata = _strata_on_grid(data.grid, levels, self.measures, self.names, props,
+                                 {p: si(c) for p, c in self.below.items()},
+                                 name=dataset.name)
+        return strata.with_citation(*dataset.citation)
 
     def __repr__(self) -> str:
         return f"TableStrataReader({', '.join(self.names)})"

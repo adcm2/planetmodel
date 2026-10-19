@@ -11,7 +11,8 @@ which places it as a depth does.  The datum is a radius, or another
 a surface measuring a radius has none, and a surface whose datum is not
 yet known (a thickness published alone) is given one with
 `with_datum`.  `radius` gives where the surface is; calling it gives
-its values as published.  The function is a `GriddedFunction`, a
+its values as published; `citation` holds the works it rests on, which
+`cite` gives a line each.  The function is a `GriddedFunction`, a
 `HarmonicFunction` or any function of the angles; `sampled` holds a
 surface on a grid, the internal form, which a harmonic function reaches
 through ducc0's transforms, and `mean` gives the spherical mean of its
@@ -35,6 +36,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy.typing import ArrayLike
 
+from ..model import cited
 from ..units import LENGTH, parse_unit
 from .coefficients import FORMATS, read_coefficients
 from .grids import read_grid, ring_poles
@@ -59,13 +61,14 @@ class Surface:
     """A surface as a function of the angles, by the rules of the module
     docstring: `function` its values in metres, `measures` one of
     `MEASURES`, `datum` a radius or a `Surface` (none for a radius),
-    `name` what it is."""
+    `name` what it is, `citation` the works it rests on."""
 
     function: Relief
     measures: str
     _: KW_ONLY
     datum: Datum | None = None
     name: str | None = None
+    citation: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.measures not in MEASURES:
@@ -77,6 +80,7 @@ class Surface:
             raise ValueError("a surface measuring its radius has no datum")
         if self.datum is not None and not isinstance(self.datum, Surface):
             object.__setattr__(self, "datum", float(self.datum))
+        object.__setattr__(self, "citation", cited((), self.citation))
 
     def __call__(self, theta: ArrayLike, phi: ArrayLike) -> np.ndarray:
         """The values at (theta, phi), broadcast together, as published."""
@@ -102,6 +106,14 @@ class Surface:
     def with_datum(self, datum: Datum) -> Surface:
         """The same surface measured from `datum`."""
         return replace(self, datum=datum)
+
+    def cite(self) -> str:
+        """The works the surface rests on, one a line."""
+        return "\n".join(self.citation)
+
+    def with_citation(self, *works: str) -> Surface:
+        """The same surface citing `works` too, after its own."""
+        return replace(self, citation=cited(self.citation, works))
 
     def mean(self, *, grid: AngularGrid | None = None) -> float:
         """The spherical mean of the values: the function's own where it
@@ -177,7 +189,8 @@ class CoefficientReader:
         name = self.name or dataset.name
         if len(paths) > 1:
             name = f"{name}, {names[int(which)]}"
-        return Surface(function, self.measures, datum=self.datum, name=name)
+        return Surface(function, self.measures, datum=self.datum, name=name,
+                       citation=dataset.citation)
 
     def __repr__(self) -> str:
         return (f"CoefficientReader({self.format}, {self.measures}, "
@@ -219,7 +232,7 @@ class GridSurfaceReader:
         function = GriddedFunction(data.grid, v, lateral="linear",
                                    poles=ring_poles(v, data.grid))
         return Surface(function, self.measures, datum=self.datum,
-                       name=self.name or dataset.name)
+                       name=self.name or dataset.name, citation=dataset.citation)
 
     def __repr__(self) -> str:
         return f"GridSurfaceReader({self.variable}, {self.measures})"

@@ -95,6 +95,10 @@ void ExpectAsThePython(const std::filesystem::path& expect) {
       EXPECT_EQ(s.Temperature(), ToDouble(rest[3]));
     } else if (key == "rtol") {
       EXPECT_EQ(file.Rtol(), ToDouble(rest[0]));
+    } else if (key == "citation") {
+      auto joined = std::string{};
+      for (const auto& work : file.Citation()) joined += (joined.empty() ? "" : "\n") + work;
+      EXPECT_EQ(joined.empty() ? "-" : joined, rest[0] == "-" ? "-" : Unhex(rest[0]));
     } else if (key == "name") {
       EXPECT_EQ(file.Name().value_or("-"), rest[0] == "-" ? "-" : Unhex(rest[0]));
     } else if (key == "layer_name" || key == "interface_name") {

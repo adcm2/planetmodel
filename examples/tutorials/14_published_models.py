@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from planetmodel import PREM, gauss_legendre, equiangular, from_geographic, slices
+from planetmodel.frames import cartesian_points
 from planetmodel import datasets
 from planetmodel.modelfile import read_model, write_model
 from planetmodel.plotting import correlation, profile, section, spectrum, sphere_map
@@ -278,6 +279,101 @@ fig.savefig(out, dpi=100)
 print("figure written to", out)
 
 # %% [markdown]
+# ## The crust as geometry
+#
+# CRUST1.0 describes the crust as eight layers, called *strata* here
+# (water, ice, three of sediments and three of crystalline crust), between
+# nine surfaces, on cells one degree across. `with_strata` puts strata on
+# a model. Its first route treats them as *geometry*: chosen interfaces of
+# the model move to chosen surfaces of the strata, and the one layer of
+# the model between two moved interfaces holds the strata between their
+# surfaces, each property averaged over them by thickness. The model's
+# mapping stretches each point along its radius, so the Moho of the model
+# lies where CRUST1.0 puts it, and a mesh of the model follows it.
+#
+# PREM's crust has two layers. Merging them first (`coarsened`) leaves
+# one layer between the Moho and the surface; the Moho then moves to the
+# bottom of CRUST1.0's crust (its last surface, index -1) and the surface
+# to the top of its sediments, the solid surface beneath any water or
+# ice. The shift of each moved interface is its *relief*, which
+# `reliefs` gives on its own, for a method that works with the shifts of
+# boundaries rather than a deformed model. The map shows the Moho's
+# shift, downward (red) under the continents and most of all under Tibet
+# and the Andes; the section, drawn at physical points so that the body
+# is shown as it is, crosses the Andes from the Pacific, the depth
+# stretched for clarity.
+
+# %%
+crust1 = datasets.load("CRUST1.0")
+print(crust1)
+one_crust, _ = PREM(ocean=False).coarsened(drop=["d15"])
+crusted = datasets.with_strata(one_crust, crust1,
+                               interfaces={"moho": -1, "surface": "upper_sediments"})
+moho = datasets.reliefs(crust1, one_crust, interfaces={"moho": -1})["moho"]
+
+fig = plt.figure(figsize=(13, 5.0))
+panels = fig.add_gridspec(1, 2, width_ratios=[1.0, 1.15])
+ax = fig.add_subplot(panels[0], projection=ccrs.Robinson())
+mesh = sphere_map(ax, slices.surface(one_crust, moho, "moho"), coastlines=True,
+                  diverging=True)
+fig.colorbar(mesh, ax=ax, orientation="horizontal", shrink=0.8,
+             label="the Moho's shift from PREM's, m")
+ax.set_title("the Moho moved to CRUST1.0's")
+ax = fig.add_subplot(panels[1], projection="polar")
+andes = slices.section(crusted, "vsv", from_geographic(-22.0, -80.0),
+                       end=from_geographic(-22.0, -55.0), radii=(6301e3, 6377e3),
+                       n=77, m=241, at="physical")
+section(ax, andes, colorbar=True, scale=1e-3)
+ax.set_rorigin(6301.0 - 100.0)                      # the depth stretched
+ax.set_title("vsv across the Andes at 22 S, as the body is (km)")
+fig.tight_layout()
+out = FIGURES / "tutorial_14_crust.png"
+fig.savefig(out, dpi=100)
+print("figure written to", out)
+
+# %% [markdown]
+# ## A lithosphere's base
+#
+# A code that models the lithosphere as one layer can move its base to a
+# published one in the same way. LITHO1.0 gives the base of the
+# lithosphere (the bottom of its last stratum, `lid`), between 9 and 320
+# km deep. Here PREM's layers from 400 km to its surface are merged, an
+# interface is placed at 100 km depth, and that interface moves to
+# LITHO1.0's base. LITHO1.0's base changes sharply from one cell to the
+# next, so its relief is read bilinearly (`lateral="linear"`): a bicubic
+# reading, the default, overshoots between nodes here, which `reliefs`
+# finds and refuses, naming where.
+
+# %%
+litho1 = datasets.load("LITHO1.0")
+lithosphere, _ = PREM(ocean=False).coarsened(drop=["d220", "d80", "moho", "d15"])
+lithosphere = lithosphere.refined([6271e3], names=["lab"])
+base = datasets.reliefs(litho1, lithosphere, interfaces={"lab": litho1["lid"].bottom},
+                        lateral="linear")["lab"]
+print(f"the lithosphere's base moves by {base.values.min() / 1e3:.0f} to "
+      f"{base.values.max() / 1e3:.0f} km from 100 km deep")
+with_base = datasets.with_strata(lithosphere, litho1,
+                                 interfaces={"lab": litho1["lid"].bottom},
+                                 lateral="linear")
+craton = from_geographic(-25.0, 125.0)                   # Western Australia
+lab = with_base.geometry.interface("lab").radius
+moved = with_base.geometry.mapping(cartesian_points(lab, *craton))
+print(f"under Western Australia the base lies "
+      f"{(6371e3 - np.linalg.norm(moved)) / 1e3:.0f} km deep")
+
+# %% [markdown]
+# ## What to cite
+#
+# A model records the works it rests on, and `cite()` gives them one to a
+# line. PREM cites its paper, a model loaded from the registry cites what
+# its source asks to be cited, and a model built from others cites theirs
+# as well, in the order they were added. The model above was built from
+# PREM, S40RTS and ANT-20, so it cites all three.
+
+# %%
+print(polar.cite())
+
+# %% [markdown]
 # ## Writing the result
 #
 # A model built this way is written to a model file like any other, and
@@ -294,6 +390,7 @@ with tempfile.TemporaryDirectory() as tmp:
     written = float(smooth.layer("lower_mantle")["vsv"](r, theta, phi))
     read = float(back.layer("lower_mantle")["vsv"](r, theta, phi))
     print(f"vsv at one point: written {written:.3f}, read back {read:.3f} m/s")
+    print("the file cites what the model does:", back.citation == smooth.citation)
 
 # %% [markdown]
 # ## Another body

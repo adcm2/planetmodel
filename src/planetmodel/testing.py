@@ -165,7 +165,11 @@ def check_mapping(m: Mapping, points: ArrayLike, *, rtol: float = 1e-6,
     det F; and, when present, `displacement` against m(X) - X,
     `inverse` as a round trip, and `scaled(k)` against k m(X / k) with
     the same F and J.  The difference step is 1e-6 of each
-    point's radius unless `step` gives one step for every point.
+    point's radius unless `step` gives one step for every point; with the
+    default, a point that disagrees is differenced again at a hundredth
+    of its step, since a mapping once but not twice differentiable there
+    (a bicubic relief at a pole) has a difference converging only
+    linearly in the step.
     """
     X = np.asarray(points, dtype=float)
     assert X.shape[-1] == 3, "points must have shape (..., 3)"
@@ -184,12 +188,23 @@ def check_mapping(m: Mapping, points: ArrayLike, *, rtol: float = 1e-6,
         # depends on direction at the origin is smooth on every ray, and a
         # step much smaller than the radius stays on that ray
         hs = 1e-6 * np.maximum(np.linalg.norm(X, axis=-1), 1e-12 * scale)
-    Fd = np.empty_like(F)
-    for j in range(3):
-        e = np.zeros_like(X)
-        e[..., j] = hs
-        Fd[..., :, j] = (np.asarray(m(X + e), dtype=float)
-                         - np.asarray(m(X - e), dtype=float)) / (2.0 * hs[..., None])
+
+    def central(X: np.ndarray, hs: np.ndarray) -> np.ndarray:
+        Fd = np.empty(X.shape + (3,))
+        for j in range(3):
+            e = np.zeros_like(X)
+            e[..., j] = hs
+            Fd[..., :, j] = ((np.asarray(m(X + e), dtype=float)
+                              - np.asarray(m(X - e), dtype=float))
+                             / (2.0 * hs[..., None]))
+        return Fd
+
+    Fd = central(X, hs)
+    off = ~np.all(np.abs(F - Fd) <= rtol * np.maximum(1.0, np.abs(Fd)), axis=(-2, -1))
+    if step is None and np.any(off):
+        # once but not twice differentiable at a point (a bicubic relief at
+        # a pole): the difference converges there only linearly in the step
+        Fd[off] = central(X[off], hs[off] / 100.0)
     assert _rel(F, Fd, rtol=rtol), (
         "deformation_gradient disagrees with a central difference of m")
 
@@ -499,8 +514,8 @@ def check_refinement(refinement: Refinement, points: ArrayLike) -> None:
 def check_model(model: Model, *, rng: np.random.Generator | None = None) -> None:
     """Hold a Model to its invariants.
 
-    Checks that `replaced` with checks on accepts it and keeps its class
-    and fields; that every
+    Checks that `replaced` with checks on accepts it and keeps its class,
+    fields and citation, which `cite` gives a work a line; that every
     layer's fields pass `check_field`, sit on the layer's interval, and
     have their spec's character; that `layer(name)` and `layer(i)`
     agree; that every constant is its SI value over the scales' factor;
@@ -515,6 +530,11 @@ def check_model(model: Model, *, rng: np.random.Generator | None = None) -> None
     cls = type(model)
     again = model.replaced(check=True)
     assert type(again) is cls, "replaced does not keep the class"
+    assert again.citation == model.citation, "replaced does not keep the citation"
+    assert all(isinstance(w, str) and w and "\n" not in w for w in model.citation), (
+        "a work cited is not one line of text")
+    assert model.cite().splitlines() == list(model.citation), (
+        "cite does not give the citation a work a line")
     for a, b in zip(again.layers, model.layers):
         assert a.fields == b.fields, "replaced changes the fields"
     rtol = model.geometry.rtol
@@ -943,7 +963,7 @@ def check_model_file(path: str | os.PathLike[str], model: Model, *,
     """Hold a model file to the model it was written from.
 
     Checks the structure (`validate_structure`); the skeleton, the layer
-    and interface names and the scales; that every variable is held on
+    and interface names, the scales and the citation; that every variable is held on
     the layers its `layers` attribute names, NaN elsewhere, by fields of
     the model of the stated character; that a lateral variable names in
     `radial_layers` exactly the layers where the model's field is radial,
@@ -976,6 +996,7 @@ def check_model_file(path: str | os.PathLike[str], model: Model, *,
         "the file's interface names are not the model's")
     assert data.scales == model.scales, (
         f"the file is in {data.scales!r}, the model in {model.scales!r}")
+    assert data.citation == model.citation, "the file does not cite what the model does"
     assert data.rtol == model.geometry.rtol, (
         f"the file states rtol {data.rtol!r}, the model's geometry has "
         f"{model.geometry.rtol!r}")
@@ -1170,6 +1191,11 @@ def check_dataset(dataset: Dataset, *,
     product = dataset.reader.read(tuple(Path(p) for p in paths), dataset,
                                   **dict(options or {}))
     assert product is not None, f"{dataset.name}: the reader gave nothing"
+    held = getattr(product, "citation", None)
+    assert held is not None and set(dataset.citation) <= set(held), (
+        f"{dataset.name}: what the reader gives does not cite the entry")
+    assert product.cite().splitlines() == list(held), (
+        f"{dataset.name}: what the reader gives does not cite a work a line")
     if isinstance(product, Model):
         check_model(product)
     if isinstance(product, Surface):

@@ -105,6 +105,14 @@ def test_a_fixture_written_back_reads_as_the_fixture(path):
 
 
 @needs_written
+def test_a_file_the_cpp_wrote_cites_what_it_was_given():
+    assert read_model(Path(WRITTEN) / "written_si.nc").citation == (
+        "A. Author (2026).  A written model.", "B. Author (2026).  Its source.")
+    prem = read_model(Path(WRITTEN) / "roundtrip_model_prem.nc")
+    assert prem.citation == read_model(FIXTURES / "model_prem.nc").citation != ()
+
+
+@needs_written
 def test_the_kernel_example_reads_as_a_kernel():
     from planetmodel import Dimensions, slices
     path = Path(WRITTEN) / "kernel.nc"

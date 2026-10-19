@@ -241,6 +241,7 @@ pm::ModelFile SiModel() {
   auto file = pm::ModelFile(pm::Skeleton({0.0, 0.3, 0.6, 1.0}));
   const auto& sk = file.GetSkeleton();
   file.SetName("written si");
+  file.SetCitation({"A. Author (2026).  A written model.", "B. Author (2026).  Its source."});
   file.AddPart(0, 0, pm::ElementEdges(sk, 0, 0, 0.1), 5, pm::DriscollHealy(6));
   file.AddPart(1, 1, pm::ElementEdges(sk, 1, 1, 0.15), 4, pm::GaussLegendre(5));
   file.AddPart(2, 2, pm::ElementEdges(sk, 2, 2, 0.2), 3, pm::Equiangular(9, 16, true));
@@ -487,6 +488,7 @@ TEST(Writer, WritesBackWhatItReads) {
     const auto after = pm::ReadModelFile(path);
     EXPECT_EQ(after.Schema(), before.Schema());
     EXPECT_EQ(after.Name(), before.Name());
+    EXPECT_EQ(after.Citation(), before.Citation());
     EXPECT_EQ(after.GetScales(), before.GetScales());
     EXPECT_EQ(after.Rtol(), before.Rtol());
     EXPECT_EQ(after.Meta(), before.Meta());
@@ -586,6 +588,8 @@ TEST(Writer, WritesFieldsOnEveryShippedGridThatReadBackToThemselves) {
   const auto read = pm::ReadModelFile(path);
   ExpectReadsBack(read, SiKnown());
   EXPECT_EQ(read.Name(), "written si");
+  EXPECT_EQ(read.Citation(), (std::vector<std::string>{"A. Author (2026).  A written model.",
+                                                        "B. Author (2026).  Its source."}));
   EXPECT_EQ(read.Parts()[0].grid->Kind(), "driscoll_healy");
   EXPECT_EQ(read.Parts()[1].grid->Kind(), "gauss_legendre");
   EXPECT_EQ(read.Parts()[2].grid->Kind(), "equiangular");
@@ -792,6 +796,17 @@ TEST(Writer, RefusesNamesTheFormatKeepsAndSpecsTheVocabularyStatesOtherwise) {
   file.AddField("vs", one);
   EXPECT_THROW(file.AddField("vs", one), Error);
   EXPECT_EQ(file.Parts()[0].variables.at("vs").Text("units"), "m s-1");
+}
+
+TEST(Writer, CitesEachWorkOnceOnALineOfItsOwn) {
+  auto file = pm::ModelFile(pm::Skeleton({0.0, 1.0}));
+  EXPECT_TRUE(file.Citation().empty());
+  file.SetCitation({" A. ", "", "B.", "A.", "\tC.\n"});
+  EXPECT_EQ(file.Citation(), (std::vector<std::string>{"A.", "B.", "C."}));
+  EXPECT_THROW(file.SetCitation({"A.\nB."}), Error);
+  EXPECT_EQ(file.Citation(), (std::vector<std::string>{"A.", "B.", "C."}));
+  file.SetCitation({});
+  EXPECT_TRUE(file.Citation().empty());
 }
 
 TEST(Writer, RefusesSourcesThatDoNotFitTheirLayers) {

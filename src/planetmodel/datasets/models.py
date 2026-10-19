@@ -26,7 +26,7 @@ another shipped data set, loaded.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
@@ -38,7 +38,7 @@ from ..fields import ComposedField, Field
 from ..geometry import Geometry
 from ..layerfunction import same_interval
 from ..materials import voigt_vp, voigt_vs
-from ..model import Layer, Model
+from ..model import Layer, Model, cited
 from ..perturbation import PerturbedField
 from ..skeleton import Skeleton
 from ..units import Scales
@@ -134,7 +134,7 @@ def _segment_at(segs: tuple[Field, ...], a: float, b: float) -> Field:
 
 
 def standalone(fields: Mapping[str, Segments], *, surface: float,
-               name: str | None = None) -> Model:
+               name: str | None = None, citation: Iterable[str] = ()) -> Model:
     """The model of a data set of values (not perturbations): a skeleton
     from the inner end of its support to `surface` (or to the support's top
     where that is higher), a boundary at every segment's end, each name on
@@ -151,16 +151,17 @@ def standalone(fields: Mapping[str, Segments], *, surface: float,
             layers.append({})
         else:
             layers.append({key: _segment_at(segs, a, b) for key, segs in tiled.items()})
-    return Model(geometry, layers, name=name)
+    return Model(geometry, layers, name=name, citation=citation)
 
 
 def over_reference(reference: Model, perturbations: Mapping[str, Segments], *,
-                   kind: str, name: str | None = None) -> Model:
+                   kind: str, name: str | None = None,
+                   citation: Iterable[str] = ()) -> Model:
     """The model of perturbations of `kind` (one of `perturbation.KINDS`)
     over the reference's fields of their names, as the module docstring
     states it: each a field on the support, or fields tiling it between
     the source's own discontinuities (each then a boundary too); in
-    metres."""
+    metres; citing `citation`, then what the reference cites."""
     tiled, breaks = _segments(perturbations)
     ref = reference if reference.scales.is_si else reference.converted(Scales.SI)
     lo, hi = breaks[0], breaks[-1]
@@ -191,4 +192,5 @@ def over_reference(reference: Model, perturbations: Mapping[str, Segments], *,
             fields[key] = PerturbedField(base, _segment_at(segs, a, b), kind=kind,
                                          name=key)
         layers.append(fields)
-    return Model(geometry, layers, name=name)
+    return Model(geometry, layers, name=name,
+                 citation=cited(citation, reference.citation))

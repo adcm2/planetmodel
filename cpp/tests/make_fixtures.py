@@ -21,8 +21,9 @@ on one layer and gridded on the other, and a rank-4 `elastic`) and
 `model_harmonic.nc` (a copy of the lateral one stating the harmonic
 rule, which the C++ refuses); and for every model file but that one
 `<model>.expect`, from the Python's own reading of the file, one fact
-per line: `scales`, `rtol`, `name` and the `layer_name` and
-`interface_name`s (UTF-8 in hexadecimal, `-` for none), each `constant`
+per line: `scales`, `rtol`, `name`, `citation` (its works a line each)
+and the `layer_name` and `interface_name`s (UTF-8 in hexadecimal, `-`
+for none), each `constant`
 with its dimensions, `value <layer> <name> <s|c> r theta phi` and the
 stored components in the spherical or Cartesian frame, `gradient
 <layer> <name> r theta phi` and the derivatives in r, theta and phi of
@@ -755,7 +756,8 @@ def _expect_model(path: Path) -> Path:
     hexed = (lambda x: "-" if not x else x.encode("utf-8").hex())
     s = data.scales
     lines = [f"scales {s.length!r} {s.mass!r} {s.time!r} {s.temperature!r}",
-             f"rtol {data.rtol!r}", f"name {hexed(data.name)}"]
+             f"rtol {data.rtol!r}", f"name {hexed(data.name)}",
+             f"citation {hexed(chr(10).join(data.citation))}"]
     lines += [f"layer_name {i} {hexed(n)}" for i, n in enumerate(data.layer_names)]
     lines += [f"interface_name {i} {hexed(n)}"
               for i, n in enumerate(data.interface_names)]

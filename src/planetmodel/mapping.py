@@ -466,9 +466,12 @@ class RadialStretch(MappingBase):
         Where the mapping is valid the residual increases with s and the
         root is unique.  Each point keeps a bracket, [0, max(rmax, 1.5
         times its radius)] widened until it holds the root, and takes the
-        Newton step when it stays inside the bracket and the bisection
-        when it does not; a point whose residual is already positive at
-        the centre goes to the centre.  `tol` is relative to `rmax`.
+        Newton step when it lands strictly inside the bracket and the
+        bisection when it does not, so that Newton cycling between two
+        layers, where the residual is linear in s on each and every step
+        lands on an end of the bracket, gives way to the bisection; a
+        point whose residual is already positive at the centre goes to
+        the centre.  `tol` is relative to `rmax`.
         """
         x = np.asarray(x, dtype=float)
         rho, theta, phi, _ = spherical_coordinates(x)
@@ -501,7 +504,7 @@ class RadialStretch(MappingBase):
             hi[k] = np.where(f < 0.0, hi[k], sk)
             with np.errstate(divide="ignore", invalid="ignore"):
                 step = sk - f / df
-            inside = (df > 0.0) & (step >= lo[k]) & (step <= hi[k])
+            inside = (df > 0.0) & (step > lo[k]) & (step < hi[k])
             new = np.where(inside, step, 0.5 * (lo[k] + hi[k]))
             new = np.where(f == 0.0, sk, new)
             s[k] = new

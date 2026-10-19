@@ -78,7 +78,7 @@ from __future__ import annotations
 
 import os
 import warnings
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import KW_ONLY, dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -90,7 +90,7 @@ from scipy.interpolate import RegularGridInterpolator
 
 from ..character import SCALAR
 from ..gridded import GriddedField
-from ..model import Model
+from ..model import Model, cited
 from ..perturbation import KINDS
 from ..sampling import AngularGrid, equiangular
 from ..units import DIMENSIONLESS, LENGTH, Scales, parse_unit
@@ -610,11 +610,12 @@ def ring_poles(v: np.ndarray, grid: AngularGrid) -> np.ndarray:
 
 def grid_model(data: GridData, variables: Variables, *, reference: Model | None = None,
                units: Mapping[str, str] | None = None, lateral: str = "linear",
-               fill: float | None = None, name: str | None = None) -> Model:
+               fill: float | None = None, name: str | None = None,
+               citation: Iterable[str] = ()) -> Model:
     """The model of a global grid with a vertical axis, by the rules of
     the module docstring: `variables` maps the file's names to (name,
     kind); values make a model of their own, perturbations need
-    `reference`."""
+    `reference`; citing `citation` (and what the reference cites)."""
     if not data.is_global or data.radius is None:
         raise ValueError("a model is made of a global grid with a vertical axis; "
                          "this grid is " + ("regional" if not data.is_global
@@ -662,10 +663,10 @@ def grid_model(data: GridData, variables: Variables, *, reference: Model | None 
                                      radial="linear", lateral=lateral, poles=pls))
         fields[vocab] = segs
     if kind is None:
-        return standalone(fields, surface=data.surface, name=name)
+        return standalone(fields, surface=data.surface, name=name, citation=citation)
     if reference is None:
         raise ValueError(f"perturbations of kind {kind!r} need reference=")
-    return over_reference(reference, fields, kind=kind, name=name)
+    return over_reference(reference, fields, kind=kind, name=name, citation=citation)
 
 
 class RegionalGrid:
@@ -681,11 +682,12 @@ class RegionalGrid:
     measures it along great circles to its sides, a projected grid on its
     plane to the edge of the nodes holding a value at some radius, divided
     by the projection's scale there.  `reference` names what a
-    perturbation is relative to."""
+    perturbation is relative to, and `citation` holds the works it rests
+    on."""
 
     def __init__(self, data: Gridded, variables: Variables, *,
                  units: Mapping[str, str] | None = None,
-                 reference: str | None = None) -> None:
+                 reference: str | None = None, citation: Iterable[str] = ()) -> None:
         if data.is_global or data.radius is None:
             raise ValueError("a RegionalGrid holds a regional grid with a vertical "
                              "axis")
@@ -696,6 +698,7 @@ class RegionalGrid:
                         for f, (vocab, kind) in variables.items()}
         self._segments = _segments(data.radius)
         self.reference = reference
+        self._citation = cited((), citation)
         self._interp: dict[tuple[str, int], RegularGridInterpolator] = {}
         self._edge: RegularGridInterpolator | None = None
 
@@ -703,6 +706,15 @@ class RegionalGrid:
     def names(self) -> tuple[str, ...]:
         """The vocabulary names held."""
         return tuple(self._values)
+
+    @property
+    def citation(self) -> tuple[str, ...]:
+        """The works it rests on, one a string."""
+        return self._citation
+
+    def cite(self) -> str:
+        """The works it rests on, one a line."""
+        return "\n".join(self._citation)
 
     @property
     def radii(self) -> np.ndarray:
@@ -869,9 +881,10 @@ class GridReader:
                          vertical=self.vertical, projection=self.projection)
         if not data.is_global:
             return RegionalGrid(data, self.variables, units=self.units,
-                                reference=dataset.reference)
+                                reference=dataset.reference, citation=dataset.citation)
         kinds = {k for _, k in self.variables.values()}
         ref = None if kinds == {None} else reference_of(dataset, reference=reference)
         model = grid_model(data, self.variables, reference=ref, units=self.units,
-                           lateral=self.lateral, fill=self.fill, name=dataset.name)
+                           lateral=self.lateral, fill=self.fill, name=dataset.name,
+                           citation=dataset.citation)
         return model if scales is None else model.converted(scales)

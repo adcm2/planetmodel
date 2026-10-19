@@ -938,6 +938,8 @@ class ModelFile {
   [[nodiscard]] const std::string& Schema() const noexcept { return schema_; }
   /** @brief The model's name, where it has one. */
   [[nodiscard]] const std::optional<std::string>& Name() const noexcept { return name_; }
+  /** @brief The works the model cites, one a string, in the order stated; empty for none. */
+  [[nodiscard]] const std::vector<std::string>& Citation() const noexcept { return citation_; }
   /** @brief The scales the numbers are in. */
   [[nodiscard]] const ::planetmodel::Scales& GetScales() const noexcept { return scales_; }
   /** @brief The geometry's tolerance, relative to the skeleton's span. */
@@ -1159,6 +1161,27 @@ class ModelFile {
    */
   void SetName(std::string name) {
     name_ = name.empty() ? std::nullopt : std::optional<std::string>{std::move(name)};
+  }
+
+  /**
+   * @brief State the works the model cites, in place of any stated before.
+   * @param works The works, one a string, each trimmed of white space at its ends, an
+   *              empty one or a repeat dropped.
+   * @throws planetmodel::Error if a work is more than one line.
+   */
+  void SetCitation(const std::vector<std::string>& works) {
+    constexpr auto space = std::string_view{" \t\n\r\f\v"};
+    auto out = std::vector<std::string>{};
+    for (const auto& work : works) {
+      const auto first = work.find_first_not_of(space);
+      if (first == std::string::npos) continue;
+      auto w = work.substr(first, work.find_last_not_of(space) - first + 1);
+      if (w.find_first_of("\r\n") != std::string::npos) {
+        Fail("citation", "holds a work of more than one line");
+      }
+      if (std::ranges::find(out, w) == out.end()) out.push_back(std::move(w));
+    }
+    citation_ = std::move(out);
   }
 
   /**
@@ -2120,6 +2143,7 @@ class ModelFile {
   std::string source_{};
   std::string schema_{};
   std::optional<std::string> name_{};
+  std::vector<std::string> citation_{};
   ::planetmodel::Scales scales_{};
   double rtol_ = DEFAULT_RTOL;
   std::map<std::string, FileConstant> constants_{};
@@ -2479,6 +2503,13 @@ inline void ValidateModelFile(const ModelFile& file, const std::string& source) 
   if (!schema) fail("schema", "is missing: not a planetmodel model file");
   out.schema_ = *schema;
   out.name_ = text("name");
+  if (const auto citation = text("citation")) {
+    for (auto start = std::size_t{0}; start < citation->size();) {
+      const auto end = std::min(citation->find('\n', start), citation->size());
+      out.citation_.push_back(citation->substr(start, end - start));
+      start = end + 1;
+    }
+  }
   auto scales = std::array<double, 4>{};
   constexpr auto bases = std::array<std::string_view, 4>{"length", "mass", "time", "temperature"};
   for (auto b = std::size_t{0}; b < 4; ++b) {
@@ -2707,6 +2738,11 @@ inline void ModelFile::WriteTo(int root, const std::string& source) const {
   put(root, global, "Conventions", std::string{MODEL_CONVENTIONS});
   put(root, global, "title", name_ ? "planetmodel model " + *name_ : "planetmodel model");
   if (name_) put(root, global, "name", *name_);
+  if (!citation_.empty()) {
+    auto joined = citation_.front();
+    for (auto k = std::size_t{1}; k < citation_.size(); ++k) joined += "\n" + citation_[k];
+    put(root, global, "citation", joined);
+  }
   put(root, global, "scale_length", std::vector<double>{scales_.Length()});
   put(root, global, "scale_mass", std::vector<double>{scales_.Mass()});
   put(root, global, "scale_time", std::vector<double>{scales_.Time()});

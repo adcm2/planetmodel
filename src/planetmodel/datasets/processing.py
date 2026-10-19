@@ -430,7 +430,7 @@ def merged(model: Model, regional: RegionalGrid, *, name: str, width: float,
     (r0, r1), _, _ = regional.extent
     w_lo, w_hi = _widths(radial_width)
     tol = model.geometry.rtol * model.skeleton.span
-    out = model
+    out = model.with_citation(*regional.citation)
     reached = False
     for layer in model.layers:
         a, b = (float(x) for x in layer.interval)

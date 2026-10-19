@@ -20,11 +20,20 @@ from planetmodel.datasets import Dataset, Source, cache_directory, fetch, load
 from planetmodel.testing import check_dataset
 
 
+class Echoed(dict):
+    """What `Echo` gives: what it was handed, citing the entry."""
+
+    def cite(self):
+        return "\n".join(self.citation)
+
+
 class Echo:
     """A reader that gives back what it was handed."""
 
     def read(self, paths, dataset, **options):
-        return {"paths": paths, "name": dataset.name, **options}
+        out = Echoed(paths=paths, name=dataset.name, **options)
+        out.citation = dataset.citation
+        return out
 
 
 def sha(data):

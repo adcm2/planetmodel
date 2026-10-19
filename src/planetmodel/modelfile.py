@@ -11,7 +11,8 @@ definition of the format and the reference the C++ readers are held to;
 `Conventions`, the model's `name`, `scale_length`, `scale_mass`,
 `scale_time` and `scale_temperature` (what one stored unit is in SI),
 `rtol` (the geometry's tolerance, the default where a file has none),
-`constant_<name>` for every constant in the model's units, and
+`constant_<name>` for every constant in the model's units, `citation`
+(the works the model cites, one a line, where it cites any), and
 `meta_<key>` for the writer's `meta`.  **The skeleton**, at the root:
 dimensions `layer`, `interface` and `bound` (two), `layer_bounds(layer,
 bound)`, `layer_name(layer)`, `interface_radius(interface)`,
@@ -251,6 +252,8 @@ class ModelFile:
     rtol: float = DEFAULT_RTOL
     #: The group `surfaces`, where the file has it.
     surfaces: FileSurfaces | None = None
+    #: The works the model cites, one a line of the attribute `citation`.
+    citation: tuple[str, ...] = ()
 
     def part_of(self, layer: int) -> FilePart:
         """The part holding `layer`."""
@@ -929,6 +932,8 @@ def _write_file(nc: ModuleType, path: Path, model: Model,
                                       dtype=np.int32))
             if c.meaning:
                 root.setncattr(f"constant_{cname}_meaning", c.meaning)
+        if model.citation:
+            root.setncattr("citation", "\n".join(model.citation))
         for key, value in meta.items():
             root.setncattr(f"meta_{key}", value)
         root.createDimension("layer", model.nlayers)
@@ -1302,7 +1307,8 @@ def read_model_file(path: str | os.PathLike[str]) -> ModelFile:
                      layer_names=layer_names, interface_names=interface_names,
                      parts=tuple(parts), geometry=geometry,
                      declared=MappingProxyType(declared),
-                     rtol=float(attrs.get("rtol", DEFAULT_RTOL)), surfaces=surfaces)
+                     rtol=float(attrs.get("rtol", DEFAULT_RTOL)), surfaces=surfaces,
+                     citation=tuple(str(attrs.get("citation", "")).splitlines()))
 
 
 def _character(attrs: Mapping[str, Any]) -> Character:
@@ -1532,7 +1538,7 @@ def read_model(path: str | os.PathLike[str], *,
     model = Model(file_geometry(data, interpolation=interpolation),
                   file_layers(data, interpolation=interpolation),
                   scales=data.scales, specs=_specs(data), name=data.name,
-                  constants=data.declared)
+                  constants=data.declared, citation=data.citation)
     return model if scales is None else model.converted(scales)
 
 

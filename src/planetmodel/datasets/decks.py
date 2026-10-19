@@ -62,4 +62,5 @@ class DeckReader:
             geometry = Geometry(skeleton, layer_names=layer_names,
                                 interface_names=interface_names)
             model = Model(geometry, layers, name=dataset.name)
+        model = model.with_citation(*dataset.citation)
         return model if scales is None else model.converted(scales)

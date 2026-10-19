@@ -26,6 +26,12 @@ remainder, and appended shells hold the fields they are given.  Every
 change is a copy, and every change that can break the model's
 invariants (its fields, its layering) validates the copy again.
 
+A model cites the works it rests on (`citation`, one work a string;
+`cite` gives them a line each): PREM its paper, a published model what
+its source asks to be cited.  Every copy keeps them, and a model built
+from others adds theirs (`with_citation`), so that a model of PREM with
+S40RTS on it, written to a file and read back, still says what to cite.
+
 A model type is a class derived from `Model` alone, plus the stateless
 behaviour mixins of `planetmodel.behaviours` that wrap the free
 functions as methods; there is no hierarchy of model types.  Every copy
@@ -57,7 +63,26 @@ from .skeleton import CoarseningMap, Skeleton
 from .units import EARTH_MEAN_DENSITY, LENGTH, Scales
 from .vocabulary import CONSTANTS, VOCABULARY, Constant, FieldSpec
 
-__all__ = ["Layer", "Model", "CoarseningFit"]
+__all__ = ["Layer", "Model", "CoarseningFit", "cited"]
+
+
+def cited(works: Iterable[str], more: Iterable[str]) -> tuple[str, ...]:
+    """`works` followed by those of `more` they lack, each stripped, the
+    empty ones dropped, a work one line: how a model, a data set's surface,
+    strata or grid, and whatever is built from several of them, gather
+    what they cite."""
+    if isinstance(more, str) or isinstance(works, str):
+        raise TypeError("a citation is a sequence of works, not one string")
+    out: list[str] = []
+    for w in (*works, *more):
+        if not isinstance(w, str):
+            raise TypeError(f"a work cited is a string, got {w!r}")
+        w = w.strip()
+        if "\n" in w or "\r" in w:
+            raise ValueError(f"a work cited is one line, got {w!r}")
+        if w and w not in out:
+            out.append(w)
+    return tuple(out)
 
 
 class Layer:
@@ -181,15 +206,17 @@ class Model:
     names outside the vocabulary (or overriding it) and `constants` a
     `Constant` beyond the shipped ones.  `name` is what the model is
     called, in its repr and in the files that write it; it survives
-    every copy.  `check=False` skips validation for fields already
-    known to fit.
+    every copy.  `citation` holds the works the model rests on, as the
+    module docstring says.  `check=False` skips validation for fields
+    already known to fit.
     """
 
     def __init__(self, geometry: Geometry, layers: Iterable[abc.Mapping[str, Field]],
                  *, scales: Scales = Scales.SI,
                  specs: abc.Mapping[str, FieldSpec] | None = None,
                  constants: abc.Mapping[str, Constant] | None = None,
-                 name: str | None = None, check: bool = True) -> None:
+                 name: str | None = None, citation: Iterable[str] = (),
+                 check: bool = True) -> None:
         if not isinstance(geometry, Geometry):
             raise TypeError(f"expected a Geometry, got {type(geometry).__name__}")
         layers = [dict(m) for m in layers]
@@ -202,6 +229,7 @@ class Model:
         self._geometry = geometry
         self._scales = scales
         self._name = None if name is None else str(name)
+        self._citation = cited((), citation)
         self._specs = MappingProxyType({**VOCABULARY, **dict(specs or {})})
         self._constants = MappingProxyType({**CONSTANTS, **dict(constants or {})})
         self._layers = tuple(Layer(info, fields)
@@ -257,6 +285,22 @@ class Model:
     def name(self) -> str | None:
         """What the model is called, or None."""
         return self._name
+
+    @property
+    def citation(self) -> tuple[str, ...]:
+        """The works the model rests on, one a string, in the order added."""
+        return self._citation
+
+    def cite(self) -> str:
+        """The works the model rests on, one a line: `print(model.cite())`.
+        Empty for a model that records none."""
+        return "\n".join(self._citation)
+
+    def with_citation(self, *works: str) -> "Model":
+        """A copy citing `works` too, after its own, each work once."""
+        out = self.replaced(check=False)
+        out._citation = cited(self._citation, works)
+        return out
 
     @property
     def nlayers(self) -> int:
@@ -325,15 +369,17 @@ class Model:
                  scales: Scales | None = None,
                  specs: abc.Mapping[str, FieldSpec] | None = None,
                  constants: abc.Mapping[str, Constant] | None = None,
-                 name: str | None = None, check: bool = True) -> "Model":
+                 name: str | None = None, citation: Iterable[str] | None = None,
+                 check: bool = True) -> "Model":
         """A shallow copy with the given parts replaced, validated unless
         `check=False`: the one path every copy of a model takes.
 
         `layers` is one mapping of name to field per layer of the (new)
         geometry; `specs` and `constants` replace the model's own
         tables, the vocabulary and the shipped constants being merged in
-        again.  The class and every other instance attribute are kept,
-        the name included unless `name` gives another.
+        again; `citation` replaces the works it cites.  The class and
+        every other instance attribute are kept, the name and the
+        citation included unless given others.
         """
         out = copy.copy(self)
         if geometry is not None:
@@ -359,6 +405,8 @@ class Model:
             out._constants = MappingProxyType({**CONSTANTS, **dict(constants)})
         if name is not None:
             out._name = str(name)
+        if citation is not None:
+            out._citation = cited((), citation)
         if check:
             out.validate()
         return out
