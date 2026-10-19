@@ -12,7 +12,9 @@ and writes what it makes as lazy fields: a viscosity as a log
 perturbation of the layer's radial one, a density as a relative
 perturbation of its reference.  A viscosity becomes Prony branches
 (`prony`): a Maxwell, Burgers or fitted Andrade body put on a model as
-the strengths and times `rheology` reads.  Nothing here is particular to
+the strengths and times `rheology` reads.  A table of properties against
+temperature and pressure, written by an offline generator, gives a
+temperature anomaly by inversion (`tables`).  Nothing here is particular to
 the Earth.
 
 Reached through its modules, off the top-level surface, with numpy and
@@ -24,14 +26,15 @@ scipy alone:
                                    .scaling(r)),
         expansivity=parameters.SL3D_EXPANSIVITY.expansivity(r))
 """
-from . import building, laws, parameters, profiles, prony
+from . import building, laws, parameters, profiles, prony, tables
 from .laws import (GAS_CONSTANT, anelastic_sensitivity, beta_viscosity,
                    density_from_temperature, density_from_velocity,
                    exponential_viscosity, temperature_from_density,
                    temperature_from_velocity)
-from .building import (ANOMALIES, Anomaly, attached, sl3d_viscosity,
+from .building import (ANOMALIES, Anomaly, attached, sl3d_viscosity, table_anomaly,
                        temperature_anomaly, velocity_anomaly, with_density,
                        with_power_law, with_viscosity)
+from .tables import PropertyTable
 from .parameters import (BetaViscosity, DensityLaw, DensityScaling, Expansivity,
                          ExponentialViscosity, ParameterSet, Sensitivity,
                          ViscosityLaw)
@@ -40,7 +43,8 @@ from .profiles import (Profile, ProfileLike, as_profile, constant, polynomial, s
 from .prony import (PronySeries, andrade_series, burgers_series, fitted_series,
                     maxwell_series, with_branches)
 
-__all__ = ["building", "laws", "parameters", "profiles", "prony", "PronySeries",
+__all__ = ["building", "laws", "parameters", "profiles", "prony", "tables",
+           "PropertyTable", "table_anomaly", "PronySeries",
            "andrade_series", "burgers_series", "fitted_series", "maxwell_series",
            "with_branches", "ANOMALIES", "Anomaly",
            "attached", "sl3d_viscosity", "temperature_anomaly", "velocity_anomaly",

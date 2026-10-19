@@ -21,6 +21,14 @@ It carries the citations of the parameter sets that made it.
 - `temperature_anomaly(velocity, ...)` turns it into dT, by a
   `Sensitivity`, or through density by a `DensityScaling` and an
   `Expansivity` (dT = -R dlnVs / alpha), as sl3d's chain does.
+- `table_anomaly(model, table)` gives dT from a `tables.PropertyTable`
+  of Vs (or `quantity`) against temperature and pressure: the
+  temperature at which the table gives the point's shear speed less the
+  one at which it gives the reference's, both at the reference body's
+  hydrostatic pressure (the layer's `pressure` field where it holds one,
+  else `mesh1d.gravity.pressure_fields`), so that a table's own offset
+  cancels and its reference geotherm is the radial model's; a speed
+  outside the table is refused by name where the field is evaluated.
 - `with_viscosity(model, anomaly, law)` writes the viscosity of each
   layer of the anomaly as a log perturbation of the layer's own radial
   viscosity (or of the reference of a perturbed one): eta = eta_0
@@ -64,9 +72,10 @@ from ..layerfunction import NumericLayer, polynomial_layer
 from ..means import spherical_mean
 from ..model import Model, cited
 from ..perturbation import PerturbedField
-from ..units import Scales
+from ..units import MODULUS, VELOCITY, Scales
 from ..vocabulary import FieldSpec
 from .profiles import ProfileLike, as_profile
+from .tables import PropertyTable
 from .parameters import (SL3D_DENSITY_SCALING, SL3D_EXPANSIVITY, SL3D_VISCOSITY,
                          DensityLaw, DensityScaling, Expansivity, ParameterSet,
                          Sensitivity, ViscosityLaw)
@@ -74,7 +83,8 @@ from .parameters import (SL3D_DENSITY_SCALING, SL3D_EXPANSIVITY, SL3D_VISCOSITY,
 if TYPE_CHECKING:
     from ..sampling import AngularGrid
 
-__all__ = ["ANOMALIES", "Anomaly", "velocity_anomaly", "temperature_anomaly",
+__all__ = ["ANOMALIES", "Anomaly", "velocity_anomaly", "table_anomaly",
+           "temperature_anomaly",
            "with_viscosity", "with_density", "attached", "sl3d_viscosity",
            "with_power_law"]
 
@@ -142,48 +152,96 @@ def _zero(ref: Field) -> bool:
     return bool(np.all(v == 0.0))
 
 
+def _shear(layer: object, name: str | None, grid: AngularGrid | None,
+           required: bool) -> tuple[Field, Field] | None:
+    """(dlnVs, the radial reference Vs_0) of a layer by the module
+    docstring's rule, None where its speed does not vary or is a fluid's."""
+    if name is not None or "vs" in layer:
+        key = "vs" if name is None else name
+        if key not in layer:
+            raise KeyError(f"layer {layer.index} ({layer.name}) holds no {key!r}")
+        got = _relative(layer[key], grid)
+        return None if got is None or _zero(got[1]) else got
+    if "vsv" in layer and "vsh" in layer:
+        v, h = _relative(layer["vsv"], grid), _relative(layer["vsh"], grid)
+        if v is None and h is None:
+            return None
+        v = v or (_composed(np.zeros_like, [layer["vsv"]]), layer["vsv"])
+        h = h or (_composed(np.zeros_like, [layer["vsh"]]), layer["vsh"])
+        if _zero(v[1]) and _zero(h[1]):
+            return None
+
+        def voigt(dv: np.ndarray, dh: np.ndarray, v0: np.ndarray,
+                  h0: np.ndarray) -> np.ndarray:
+            # sqrt(1 + x) - 1 as x / (1 + sqrt(1 + x)), no cancellation
+            a, b = v0 * v0, h0 * h0
+            x = (2.0 * a * dv * (2.0 + dv) + b * dh * (2.0 + dh)) / (2.0 * a + b)
+            return x / (1.0 + np.sqrt(1.0 + x))
+
+        def average(v0: np.ndarray, h0: np.ndarray) -> np.ndarray:
+            return np.sqrt((2.0 * v0 * v0 + h0 * h0) / 3.0)
+
+        return (_composed(voigt, [v[0], h[0], v[1], h[1]]),
+                _composed(average, [v[1], h[1]]))
+    if required:
+        raise KeyError(f"layer {layer.index} ({layer.name}) holds neither vs nor the "
+                       "pair vsv and vsh; name= says which speed to read")
+    return None
+
+
+def _which(model: Model, layers: Iterable[int | str] | None) -> list[int]:
+    return (list(range(model.nlayers)) if layers is None
+            else sorted({model.layer(k).index for k in layers}))
+
+
 def velocity_anomaly(model: Model, *, name: str | None = None,
                      layers: Iterable[int | str] | None = None,
                      grid: AngularGrid | None = None) -> Anomaly:
     """dlnVs on every layer whose shear speed varies (or on `layers`), by
     the rule of the module docstring; `name` the speed to read, `grid` the
     quadrature of a fully 3D field's mean."""
-    which = (range(model.nlayers) if layers is None
-             else sorted({model.layer(k).index for k in layers}))
     out: dict[int, Field] = {}
-    for i in which:
-        layer = model.layer(i)
-        if name is not None or "vs" in layer:
-            key = "vs" if name is None else name
-            if key not in layer:
-                raise KeyError(f"layer {i} ({layer.name}) holds no {key!r}")
-            got = _relative(layer[key], grid)
-            if got is None or _zero(got[1]):
-                continue
+    for i in _which(model, layers):
+        got = _shear(model.layer(i), name, grid, layers is not None)
+        if got is not None:
             out[i] = got[0]
-        elif "vsv" in layer and "vsh" in layer:
-            v, h = _relative(layer["vsv"], grid), _relative(layer["vsh"], grid)
-            if v is None and h is None:
-                continue
-            v = v or (_composed(np.zeros_like, [layer["vsv"]]), layer["vsv"])
-            h = h or (_composed(np.zeros_like, [layer["vsh"]]), layer["vsh"])
-            if _zero(v[1]) and _zero(h[1]):
-                continue
-
-            def voigt(dv: np.ndarray, dh: np.ndarray, v0: np.ndarray,
-                      h0: np.ndarray) -> np.ndarray:
-                # sqrt(1 + x) - 1 as x / (1 + sqrt(1 + x)), no cancellation
-                a, b = v0 * v0, h0 * h0
-                x = (2.0 * a * dv * (2.0 + dv) + b * dh * (2.0 + dh)) / (2.0 * a + b)
-                return x / (1.0 + np.sqrt(1.0 + x))
-
-            out[i] = _composed(voigt, [v[0], h[0], v[1], h[1]])
-        elif layers is not None:
-            raise KeyError(f"layer {i} ({layer.name}) holds neither vs nor the pair "
-                           "vsv and vsh; name= says which speed to read")
     if not out:
         raise ValueError("no layer's shear speed departs from its reference")
     return Anomaly("velocity", out, model.scales)
+
+
+def table_anomaly(model: Model, table: PropertyTable, *, quantity: str = "vs",
+                  name: str | None = None, layers: Iterable[int | str] | None = None,
+                  grid: AngularGrid | None = None) -> Anomaly:
+    """dT from a table, by the rule of the module docstring: the table's
+    `quantity` inverted for temperature at the shear speed and at its
+    reference's, both at the hydrostatic pressure of the reference body."""
+    from ..mesh1d.gravity import pressure_fields
+    computed: tuple[Field, ...] | None = None
+    kv = model.scales.factor(VELOCITY)
+    kp = model.scales.factor(MODULUS)
+
+    def dt(d: np.ndarray, v0: np.ndarray, p: np.ndarray) -> np.ndarray:
+        v0, pa = np.asarray(v0) * kv, np.asarray(p) * kp
+        v = v0 * (1.0 + np.asarray(d))
+        return (table.temperature_of(quantity, v, pa)
+                - table.temperature_of(quantity, v0, pa))
+
+    out: dict[int, Field] = {}
+    for i in _which(model, layers):
+        layer = model.layer(i)
+        got = _shear(layer, name, grid, layers is not None)
+        if got is None:
+            continue
+        if "pressure" in layer:
+            p = layer["pressure"]
+        else:
+            computed = computed or pressure_fields(model)
+            p = computed[i]
+        out[i] = _composed(dt, [got[0], got[1], p])
+    if not out:
+        raise ValueError("no layer's shear speed departs from its reference")
+    return Anomaly("temperature", out, model.scales, citation=table.citation)
 
 
 def _check(law: ParameterSet, anomaly: Anomaly, method: str, what: str) -> None:
