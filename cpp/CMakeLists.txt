@@ -109,6 +109,11 @@ else()
   message(STATUS "planetmodel: built without netCDF-C, so without the model file")
 endif()
 
+# The model files the writer's tests and the kernel example write, for the
+# Python to read back (tests/test_cpp_written.py, with
+# PLANETMODEL_CPP_WRITTEN naming it).
+set(PLANETMODEL_WRITTEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/tests/written")
+
 if(PLANETMODEL_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)

@@ -188,8 +188,10 @@ jobs:
           pip install poetry
           poetry config virtualenvs.create false
 
+      # plot, maps and harmonics for the kernel tutorial, run on the C++
+      # example's file below.
       - name: Install dependencies
-        run: poetry install --with dev --extras "netcdf meshing mfem"
+        run: poetry install --with dev --extras "netcdf meshing mfem plot maps harmonics"
 
       - name: Write the fixtures
         run: poetry run python cpp/tests/make_fixtures.py
@@ -217,6 +219,13 @@ jobs:
       # The example reader, on a file the Python wrote.
       - name: The example reads a Python model file
         run: build/cpp/examples/planetmodel_read_model cpp/tests/fixtures/model_stacked.nc
+
+      # The kernel the example wrote, drawn by tutorial 15, which checks it
+      # against the Python's own at every node.
+      - name: The kernel tutorial reads the C++ example's kernel
+        env:
+          MPLBACKEND: Agg
+        run: poetry run python examples/tutorials/15_kernels.py build/cpp/tests/written/kernel.nc
 
       # The library is fetched from the repository at a tag, never from
       # PyPI, so the Python package leaves it out.

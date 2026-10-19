@@ -1,7 +1,9 @@
 """The model files the C++ writer wrote, read by the Python: each
 validates, reads as a model with its fields on interfaces, and holds the
 values the C++ reader reads from it; a fixture the C++ read and wrote
-back reads as the fixture does.
+back reads as the fixture does; and the kernel the example
+`write_kernel` wrote reads as a kernel (tutorial 15, given its path,
+compares it with the Python's own at every node, in the C++ job of CI).
 
 The C++ tests leave the files in their build tree; PLANETMODEL_CPP_WRITTEN
 names that directory (`build/cpp/tests/written` for the build of
@@ -78,7 +80,7 @@ def _check_expect(model, expect: Path, *, rtol: float, surfaces=None) -> int:
 def test_the_cpp_wrote_its_files():
     names = {p.name for p in _written("*.nc")}
     assert {"written_si.nc", "written_custom.nc", "written_tensors.nc",
-            "written_surfaces.nc", "roundtrip_model_prem.nc",
+            "written_surfaces.nc", "kernel.nc", "roundtrip_model_prem.nc",
             "roundtrip_model_harmonic.nc", "roundtrip_model_surfaces.nc"} <= names
 
 
@@ -100,3 +102,24 @@ def test_a_fixture_written_back_reads_as_the_fixture(path):
         return                              # the harmonic copy: structure alone
     model = read_model(path)
     assert _check_expect(model, expect, rtol=1e-11, surfaces=read_surfaces(path)) > 10
+
+
+@needs_written
+def test_the_kernel_example_reads_as_a_kernel():
+    from planetmodel import Dimensions, slices
+    path = Path(WRITTEN) / "kernel.nc"
+    validate_structure(path)
+    model = read_model(path)
+    assert model.name == "synthetic kernel"
+    assert model.layers_with("K_vs") == (1, 2) and model.layers_with("rho") == (0, 1, 2)
+    assert model.spec("K_vs").dimensions == Dimensions(length=-4, time=1)
+    shape = read_surfaces(path)["K_d670"]
+    assert list(shape) == ["d670"]
+    assert model.spec("K_d670").dimensions == Dimensions(length=-3)
+    # both signs, and the peak beside the receiver at the surface
+    near = slices.sphere(model, "K_vs", depth=100e3)
+    assert near.values.min() < 0.0 < near.values.max()
+    i, j = np.unravel_index(np.argmax(near.values), near.values.shape)
+    assert np.isclose(near.grid.colatitudes[i], np.pi / 3, atol=0.02)
+    assert np.isclose(near.grid.longitudes[j], np.pi / 6, atol=0.02)
+    assert shape["d670"](np.pi / 3, np.pi / 6) > 0.0

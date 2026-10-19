@@ -62,6 +62,10 @@ const auto stress = file.FieldOn(3, "stress").Evaluate(r, theta, phi,
 
 // the mapping from the reference body to the physical one
 const auto u = file.Mapping().Displacement({x, y, z});
+
+// a field on an interface (a shape kernel, a boundary's shift), a
+// function of the angles
+const auto shift = file.SurfaceFieldOn(1, "K_d670").Value(theta, phi);
 ```
 
 The numbers are in the file's own units. `file.GetScales()` gives the
@@ -103,10 +107,25 @@ file.AddField("viscosity", {{0, pm::LayerSource::Radial(lower)},
 pm::WriteModelFile("viscosity.nc", file);
 ```
 
+A field that lives on an interface rather than in a layer goes on a grid
+set once for all of them, from a source per interface, evaluated at the
+interface's radius:
+
+```cpp
+file.SetSurfaceGrid(pm::GaussLegendre(64));
+file.AddSurfaceField("K_d670", spec, {{1, pm::LayerSource::Lateral(kernel)}});
+```
+
+A field the vocabulary does not name, a sensitivity kernel say, is given
+with a `FieldSpec` of its own: its character, its dimensions and what it
+means.
+
 The file is written under a temporary name of its own beside the target
 and renamed into place once it is complete. A failed write leaves no
 file, and an existing file at the path stays as it was. The programs in
-`examples/` write a file and read one back.
+`examples/` write a model file, write the file a code computing
+sensitivity kernels writes (`write_kernel.cpp`, which the Python's
+tutorial 15 draws), and read any model file back.
 
 ## Errors
 

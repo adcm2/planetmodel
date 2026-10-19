@@ -50,6 +50,18 @@ def test_the_pictures_tutorial():
     run("13_pictures.py")
 
 
+@pytest.mark.netcdf
+@pytest.mark.maps
+@pytest.mark.harmonics
+def test_the_kernels_tutorial():
+    """Writes its kernel with the Python and draws it; not strict, since
+    netCDF4 1.7.4 warns under numpy 2.5 when it writes."""
+    pytest.importorskip("netCDF4")
+    pytest.importorskip("cartopy")
+    pytest.importorskip("ducc0")
+    run("15_kernels.py", strict=False)
+
+
 @pytest.mark.network
 @pytest.mark.netcdf
 @pytest.mark.maps
