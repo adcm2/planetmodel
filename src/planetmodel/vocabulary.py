@@ -99,6 +99,9 @@ VOCABULARY: dict[str, FieldSpec] = {
     "viscosity": FieldSpec(SCALAR, units.VISCOSITY, meaning="dynamic viscosity"),
     "temperature": FieldSpec(SCALAR, units.TEMPERATURE,
                              meaning="absolute temperature"),
+    "pressure": FieldSpec(DENSITY, units.MODULUS,
+                          meaning="hydrostatic pressure of the spherically "
+                                  "symmetric reference"),
     "g": FieldSpec(SCALAR, units.GRAVITY,
                    meaning="gravitational acceleration of the spherically "
                            "symmetric reference, radially inward, by magnitude"),

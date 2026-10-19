@@ -28,6 +28,7 @@ Modules reached by name, one level down:
   plotting     profiles, sections, maps and spectra drawn (matplotlib and
                cartopy, optional), and VTK files for ParaView
   mesh1d       radial spectral-element meshes (GLL), nodal values, gravity
+               and hydrostatic pressure
   mesh3d       2D and 3D meshes via gmsh, and MFEM export
   randomfield  Matern random fields on balls, annuli and layers
   datasets     published models: their entries, fetched on demand into a
@@ -102,7 +103,7 @@ from .mapping import (
 from .materials import ElasticField, elastic_moduli, is_fluid, kappa_mu, moduli
 from .means import spherical_mean, spherically_averaged
 from .mesh1d import RadialMesh
-from .mesh1d.gravity import gravity, gravity_fields, mass
+from .mesh1d.gravity import gravity, gravity_fields, mass, pressure, pressure_fields
 from .model import CoarseningFit, Layer, Model
 from .perturbation import PerturbedField, perturbed, unperturbed
 from .pushforward import PulledBackField, PushedForwardField, pull_back, push_forward
@@ -239,6 +240,8 @@ __all__ = [
     "gravity",
     "mass",
     "gravity_fields",
+    "pressure",
+    "pressure_fields",
     "testing",
     "__version__",
 ]

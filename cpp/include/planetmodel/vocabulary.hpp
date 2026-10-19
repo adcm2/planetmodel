@@ -62,6 +62,8 @@ struct FieldSpec {
         "the second elasticity tensor, static, Voigt-reduced in the spherical frame"}},
       {"viscosity", {SCALAR, u::VISCOSITY, "dynamic viscosity"}},
       {"temperature", {SCALAR, u::TEMPERATURE, "absolute temperature"}},
+      {"pressure",
+       {DENSITY, u::MODULUS, "hydrostatic pressure of the spherically symmetric reference"}},
       {"g",
        {SCALAR, u::GRAVITY,
         "gravitational acceleration of the spherically symmetric reference, radially "

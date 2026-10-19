@@ -1,4 +1,5 @@
-"""Gravity and mass of a spherically symmetric model, through its fields.
+"""Gravity, mass and pressure of a spherically symmetric model, through
+its fields.
 
 For a spherically symmetric density the acceleration is
 g(r) = G M(r) / r^2 with M(r) = 4 pi int_0^r rho(s) s^2 ds, the mass
@@ -12,6 +13,15 @@ placed in the physical world by a non-trivial mapping is answered with
 the gravity of its spherical reference.  Nothing here is a number with
 a unit: `G` is the model's, the radii are in the model's length, and a
 hollow model has no mass inside its inner boundary.
+
+The hydrostatic pressure of the same body is P(r) = int_r^a rho(s) g(s)
+ds, zero at its outer radius a and continuous across every boundary.
+rho g is smooth on each layer (a polynomial times G M(s) / s^2, with
+M(s) a polynomial on the layer), so each layer's integral is taken by
+Gauss-Legendre quadrature of `PRESSURE_NODES` points on the span asked
+for, which is exact to rounding for a polynomial density; dP/dr = -rho g
+is stated exactly.  A pressure is a stress, so its field has a density's
+character, as the moduli and the equilibrium stress have.
 """
 from __future__ import annotations
 
@@ -21,13 +31,18 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy.typing import ArrayLike
 
+from ..character import DENSITY
 from ..fields import Field, RadialField
 from ..layerfunction import NumericLayer, polynomial_layer
 
 if TYPE_CHECKING:
     from ..model import Model
 
-__all__ = ["gravity", "mass", "gravity_fields"]
+__all__ = ["gravity", "mass", "gravity_fields", "pressure", "pressure_fields",
+           "PRESSURE_NODES"]
+
+#: The Gauss-Legendre points of each pressure integral.
+PRESSURE_NODES = 24
 
 
 def _shell_masses(model: Model) -> tuple[list[Field], np.ndarray]:
@@ -159,3 +174,58 @@ def gravity_fields(model: Model) -> tuple[RadialField, ...]:
         out.append(RadialField((lo, hi), NumericLayer((lo, hi), g_of, derivative=dg_dr),
                                name="g"))
     return tuple(out)
+
+
+def pressure_fields(model: Model) -> tuple[RadialField, ...]:
+    """P(r) = int_r^a rho g ds as one radial field per layer, named
+    `pressure`, by the rule of the module docstring: zero at the outer
+    boundary, continuous across every other, its derivative -rho g."""
+    gs = gravity_fields(model)
+    x, w = np.polynomial.legendre.leggauss(PRESSURE_NODES)
+    n = len(gs)
+
+    def integral(i: int, r: np.ndarray, hi: float) -> np.ndarray:
+        """int_r^hi rho g ds on layer i, for an array of radii."""
+        rho, g = model.layer(i)["rho"], gs[i]
+        half = 0.5 * (hi - r)[..., None]
+        s = r[..., None] + half * (x + 1.0)
+        return np.sum(w * np.asarray(rho(s), dtype=float)
+                      * np.asarray(g(s), dtype=float), axis=-1) * half[..., 0]
+
+    tops = np.zeros(n)
+    for i in range(n - 1, 0, -1):
+        lo, hi = model.layer(i).interval
+        tops[i - 1] = tops[i] + float(integral(i, np.array(lo), hi))
+    out = []
+    for i in range(n):
+        lo, hi = model.layer(i).interval
+        rho, g = model.layer(i)["rho"], gs[i]
+
+        def p_of(r: np.ndarray, *, i: int = i, hi: float = hi,
+                 top: float = float(tops[i])) -> np.ndarray:
+            r = np.asarray(r, dtype=float)
+            return top + integral(i, r, hi)
+
+        def dp_dr(r: np.ndarray, *, rho: Field = rho, g: Field = g) -> np.ndarray:
+            r = np.asarray(r, dtype=float)
+            return -np.asarray(rho(r), dtype=float) * np.asarray(g(r), dtype=float)
+
+        out.append(RadialField((lo, hi), NumericLayer((lo, hi), p_of, derivative=dp_dr),
+                               character=DENSITY, name="pressure"))
+    return tuple(out)
+
+
+def pressure(model: Model, radii: ArrayLike) -> np.ndarray:
+    """The hydrostatic pressure at `radii`, in the model's units, by the
+    rule of the module docstring; `radii` as `gravity` takes them, a
+    radius on a boundary read from the layer below, where it is the same."""
+    r = _within(model, np.asarray(radii, dtype=float))
+    b = model.skeleton.boundaries
+    fields = pressure_fields(model)
+    flat = r.reshape(-1)
+    idx = np.clip(np.searchsorted(b, flat, side="left") - 1, 0, len(fields) - 1)
+    out = np.empty(flat.shape)
+    for i in np.unique(idx):
+        m = idx == i
+        out[m] = fields[i](flat[m])
+    return out.reshape(r.shape)

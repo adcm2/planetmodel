@@ -80,8 +80,26 @@ void ExpectAsThePython(const std::filesystem::path& expect) {
   };
   const auto mapping = file.Mapping();
   auto in = std::ifstream(expect);
+  auto lines = std::vector<std::string>{};
+  for (auto line = std::string{}; std::getline(in, line);) lines.push_back(line);
+  // each variable's largest value, the scale of its tolerance, as the
+  // Python's check of a model file has it: a field zero somewhere (a
+  // pressure at the surface) is held to its size, not to that zero
+  auto largest = std::map<std::string, double>{};
+  for (const auto& line : lines) {
+    auto words = std::istringstream{line};
+    auto key = std::string{};
+    auto layer = std::string{};
+    auto name = std::string{};
+    auto tag = std::string{};
+    if (!(words >> key) || key != "value") continue;
+    words >> layer >> name >> tag;
+    auto skip = 0.0;
+    words >> skip >> skip >> skip;
+    for (auto v = 0.0; words >> v;) largest[name] = std::max(largest[name], std::abs(v));
+  }
   auto checked = 0;
-  for (auto line = std::string{}; std::getline(in, line);) {
+  for (const auto& line : lines) {
     auto words = std::istringstream{line};
     auto key = std::string{};
     words >> key;
@@ -129,7 +147,7 @@ void ExpectAsThePython(const std::filesystem::path& expect) {
       ASSERT_EQ(want.size(), f.Size()) << line;
       const auto got = f.Evaluate(r, theta, phi, frame);
       ASSERT_EQ(got.size(), want.size()) << line;
-      const auto scale = Largest(want) + 1e-300;
+      const auto scale = std::max(Largest(want), largest[rest[1]]) + 1e-300;
       for (auto c = std::size_t{0}; c < want.size(); ++c) {
         EXPECT_NEAR(got[c], want[c], 1e-11 * scale) << line << " [" << c << "]";
       }

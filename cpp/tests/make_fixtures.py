@@ -270,7 +270,8 @@ def model_files(directory: Path) -> list[Path]:
     on_faces = {"K_shape": {0: lambda t, p: smooth(t, p) - 0.4 * np.cos(t), 1: smooth},
                 "shift": {1: pm.GriddedFunction.sampled(bump, pm.gauss_legendre(8))}}
     return [
-        write_model(directory / "model_prem.nc", prem, grid=pm.gauss_legendre(2)),
+        write_model(directory / "model_prem.nc", prem.with_pressure(),
+                    grid=pm.gauss_legendre(2)),
         write_model(directory / "model_kinds.nc", kinds, grid=pm.gauss_legendre(6)),
         write_model(directory / "model_tensors.nc", tensors, grid=pm.gauss_legendre(4),
                     fields=["rho", "stress", "elastic"]),
