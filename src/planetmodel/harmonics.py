@@ -40,6 +40,27 @@ order, with the Condon-Shortley phase; the real ones here are
     a_l0 = c[0, l, 0],    a_lm = (-1)^m (c[0, l, m] - i c[1, l, m]) / sqrt 2,
 
 and that is the whole of the conversion.
+
+**Other conventions.**  Published coefficients come in other
+normalisations and with or without the Condon-Shortley phase;
+`from_convention` gives the library's coefficients from them and
+`to_convention` the reverse, in the layout above and in pyshtools'
+terms where they have one.  `normalization` is one of `NORMALIZATIONS`:
+
+    "ortho"      the library's own: int Y^2 dOmega = 1
+    "4pi"        geodesy's: int Y^2 dOmega = 4 pi, so c = sqrt(4 pi) C
+    "schmidt"    Schmidt's semi-normalised: int Y^2 dOmega = 4 pi / (2l + 1)
+    "unnorm"     the bare P_l^m(cos theta) cos(m phi) and sin(m phi)
+    "woodhouse"  N_lm P_l^m(cos theta) cos(m phi) and sin(m phi), N_lm as
+                 above with no sqrt 2: the real and imaginary parts of the
+                 complex orthonormal harmonics, int Y^2 dOmega = 1/2 for m > 0
+
+and `csphase` is 1 where the source's Legendre functions leave out the
+Condon-Shortley phase (-1)^m and -1 where they include it.  With
+`csphase=-1`, "woodhouse" is the form of the Woodhouse-Ritsema
+coefficient files.  Entries that belong to no harmonic are left as they
+are; the bare functions overflow at high degree, as the convention
+does.
 """
 from __future__ import annotations
 
@@ -49,7 +70,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike
-from scipy.special import sph_harm_y_all
+from scipy.special import gammaln, sph_harm_y_all
 
 from .frames import wrapped
 
@@ -59,10 +80,14 @@ if TYPE_CHECKING:
 __all__ = ["real_harmonics", "real_harmonics_gradient", "synthesise",
            "synthesise_gradient", "synthesise_grid", "analyse_grid",
            "synthesise_points", "synthesise_points_gradient", "packing",
+           "from_convention", "to_convention", "NORMALIZATIONS",
            "POINT_EPSILON"]
 
 #: The relative accuracy asked of ducc0's synthesis at arbitrary points.
 POINT_EPSILON = 1e-13
+
+#: The normalisations `from_convention` and `to_convention` take.
+NORMALIZATIONS = ("ortho", "4pi", "schmidt", "unnorm", "woodhouse")
 
 #: A basis of the real harmonics: (lmax, theta, phi) -> (2, L + 1, L + 1) + points.
 type Basis = Callable[[int, np.ndarray, np.ndarray], np.ndarray]
@@ -202,6 +227,59 @@ def synthesise(coeffs: ArrayLike, theta: ArrayLike, phi: ArrayLike, *,
                              f"of shape {shape}")
         c = c.reshape(c.shape[:3] + (-1,))
     return _contract(c, theta.ravel(), phi.ravel(), real_harmonics).reshape(shape)
+
+
+def _convention_factors(lmax: int, normalization: str, csphase: int
+                        ) -> np.ndarray:
+    """c / C for every entry of a (2, L + 1, L + 1) array: a coefficient C
+    of the convention times this is the library's; one where no harmonic
+    is."""
+    if normalization not in NORMALIZATIONS:
+        raise ValueError(f"normalization must be one of {NORMALIZATIONS}, got "
+                         f"{normalization!r}")
+    if csphase not in (1, -1):
+        raise ValueError(f"csphase must be 1 (without the Condon-Shortley phase) "
+                         f"or -1 (with it), got {csphase!r}")
+    l, m = np.meshgrid(np.arange(lmax + 1.0), np.arange(lmax + 1.0), indexing="ij")
+    held = m <= l
+    if normalization == "ortho":
+        f = np.ones_like(l)
+    elif normalization == "4pi":
+        f = np.full_like(l, np.sqrt(4.0 * np.pi))
+    elif normalization == "schmidt":
+        f = np.sqrt(4.0 * np.pi / (2.0 * l + 1.0))
+    elif normalization == "woodhouse":
+        f = np.where(m == 0, 1.0, 1.0 / np.sqrt(2.0))
+    else:                                           # "unnorm": 1 / (sqrt(2) N_lm)
+        d = np.where(held, l - m, 0.0)
+        log_n = 0.5 * (np.log((2.0 * l + 1.0) / (4.0 * np.pi))
+                       + gammaln(d + 1.0) - gammaln(np.where(held, l + m, 0.0) + 1.0))
+        f = np.exp(-log_n) / np.where(m == 0, 1.0, np.sqrt(2.0))
+    if csphase == -1:
+        f = f * (-1.0) ** m
+    return np.stack([np.where(held, f, 1.0), np.where(held & (m > 0), f, 1.0)])
+
+
+def from_convention(coefficients: ArrayLike, *, normalization: str,
+                    csphase: int) -> np.ndarray:
+    """The library's coefficients of the field whose coefficients in a
+    source's convention are `coefficients`, of shape (2, L + 1, L + 1)
+    followed by any extra axes: `normalization` one of `NORMALIZATIONS`,
+    `csphase` 1 without the Condon-Shortley phase and -1 with it, as the
+    module docstring states them."""
+    c = _coefficients(coefficients)
+    f = _convention_factors(c.shape[1] - 1, normalization, csphase)
+    return c * f.reshape(f.shape + (1,) * (c.ndim - 3))
+
+
+def to_convention(coefficients: ArrayLike, *, normalization: str,
+                  csphase: int) -> np.ndarray:
+    """The coefficients in a source's convention of the field whose
+    library coefficients are `coefficients`: the inverse of
+    `from_convention`."""
+    c = _coefficients(coefficients)
+    f = _convention_factors(c.shape[1] - 1, normalization, csphase)
+    return c / f.reshape(f.shape + (1,) * (c.ndim - 3))
 
 
 def packing(lmax: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

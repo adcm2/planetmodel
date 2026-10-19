@@ -20,17 +20,12 @@ def random_coefficients(L, rng, *extra):
     return c
 
 
-def shifted(g, phi0):
-    """The grid g with its longitudes starting at phi0 instead of zero."""
-    return AngularGrid(g.colatitudes, g.longitudes + phi0, kind=g.kind, lmax=g.lmax,
-                       weights=g.weights)
-
-
 EVERY_KIND = [gauss_legendre(7), gauss_legendre(6, nphi=18),
-              shifted(gauss_legendre(5), 0.4), driscoll_healy(6),
-              driscoll_healy(5, sampling=2), equiangular(9, 20),
-              equiangular(9, 20, poles=True), shifted(equiangular(12, 24), 0.1),
-              equiangular(30, 13)]
+              gauss_legendre(5, phi0=0.4), driscoll_healy(6),
+              driscoll_healy(5, sampling=2), driscoll_healy(4, phi0=-2.0),
+              equiangular(9, 20), equiangular(9, 20, poles=True),
+              equiangular(12, 24, phi0=0.1), equiangular(30, 13),
+              equiangular(18, 36, phi0=np.radians(-175.0))]
 
 
 @pytest.mark.parametrize("grid", EVERY_KIND, ids=repr)
