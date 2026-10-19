@@ -46,7 +46,8 @@ order to put a data set's perturbations on a model of one's own:
 `with_strata` puts strata on a model, as geometry (chosen interfaces
 moved to chosen surfaces, the layers between them filled) or as fields
 (sampled through the chosen layers), and `relief` and `reliefs` give the
-shifts of the interfaces alone.
+shifts of the interfaces alone; `moved` moves interfaces onto any
+surfaces (a lithosphere's base found in a model's fields, say).
 
 `fetch` downloads into `cache_directory()` (`PLANETMODEL_DATA`, or the
 platform's per-user cache), checks each file's sha256 every time it is
@@ -57,8 +58,8 @@ to the entry's reader.  Everything here is the standard library, numpy
 and scipy; a reader needing an extra imports it where it is used.  The
 sub-package is reached by module, off the top-level surface.
 """
-from .building import (PAIRS, ROUTES, SurfaceOf, relief, reliefs, transplanted,
-                       with_strata)
+from .building import (PAIRS, ROUTES, SurfaceOf, moved, relief, reliefs,
+                       transplanted, with_strata)
 from .decks import DeckReader, Names
 from .entries import REGISTRY, DatasetLike, as_dataset, cite, describe
 from .grids import (EARTH_RADIUS, SAME_RTOL, VERTICAL_RTOL, GridData, Gridded,
@@ -96,4 +97,4 @@ __all__ = ["Source", "Dataset", "Reader", "DatasetLike", "REGISTRY", "ARCHIVES",
            "LITHO1_PROPERTIES", "Property", "Stratum", "Strata", "read_crust1",
            "litho1_strata", "Crust1Reader", "Litho1Reader", "TableStrataReader",
            "ProjectedData", "Gridded", "PolarStereographic", "ELLIPSOIDS", "ROUTES",
-           "SurfaceOf", "relief", "reliefs", "with_strata"]
+           "SurfaceOf", "relief", "reliefs", "with_strata", "moved"]

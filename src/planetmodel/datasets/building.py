@@ -71,7 +71,7 @@ from .strata import Strata
 from .surfaces import Surface
 
 __all__ = ["transplanted", "PAIRS", "ROUTES", "SurfaceOf", "relief", "reliefs",
-           "with_strata"]
+           "with_strata", "moved"]
 
 #: The routes by which `with_strata` puts strata on a model.
 ROUTES = ("geometry", "fields")
@@ -522,3 +522,22 @@ def with_strata(model: Model, strata: Strata, *, route: str = "geometry",
                                  "route keeps the skeleton spherical")
         out = _as_fields(model, strata, properties, layers, grid, lateral, spacing)
     return out.with_citation(*strata.citation)
+
+
+def moved(model: Model, surfaces: Mapping[int | str, Surface], *,
+          grid: AngularGrid | None = None, lateral: str = "cubic") -> Model:
+    """The model with each interface named moved onto its surface: the
+    model stretched by `layer_linear` over their reliefs (`relief`), on
+    one grid (`grid`, or the surfaces' own) read by `lateral`, refused
+    where a layer would be taken to zero or negative thickness, as
+    `reliefs` refuses, and citing the surfaces after its own works."""
+    if not surfaces:
+        raise ValueError("surfaces names at least one interface and its surface")
+    grid = _gridded_on(list(surfaces.values()), grid)
+    shifts = {model.geometry.interface(k).index: relief(f, model, k, grid=grid,
+                                                        lateral=lateral)
+              for k, f in surfaces.items()}
+    stack = _stack(model, shifts)
+    _check_thickness(model, stack, grid)
+    out = model.stretched(layer_linear(model.skeleton, stack), name="moved")
+    return out.with_citation(*[w for f in surfaces.values() for w in f.citation])

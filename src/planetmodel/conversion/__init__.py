@@ -14,8 +14,11 @@ perturbation of its reference.  A viscosity becomes Prony branches
 (`prony`): a Maxwell, Burgers or fitted Andrade body put on a model as
 the strengths and times `rheology` reads.  A table of properties against
 temperature and pressure, written by an offline generator, gives a
-temperature anomaly by inversion (`tables`).  Nothing here is particular to
-the Earth.
+temperature anomaly by inversion (`tables`).  The base of the
+lithosphere is found in a model's fields, at an isotherm, a viscosity
+or a Maxwell time (`lithosphere`), and used as geometry
+(`datasets.building.moved`) or as a lid of high viscosity.  Nothing
+here is particular to the Earth.
 
 Reached through its modules, off the top-level surface, with numpy and
 scipy alone:
@@ -26,7 +29,8 @@ scipy alone:
                                    .scaling(r)),
         expansivity=parameters.SL3D_EXPANSIVITY.expansivity(r))
 """
-from . import building, laws, parameters, profiles, prony, tables
+from . import (building, laws, lithosphere, parameters, profiles, prony,
+               tables)
 from .laws import (GAS_CONSTANT, anelastic_sensitivity, beta_viscosity,
                    density_from_temperature, density_from_velocity,
                    exponential_viscosity, temperature_from_density,
@@ -34,6 +38,8 @@ from .laws import (GAS_CONSTANT, anelastic_sensitivity, beta_viscosity,
 from .building import (ANOMALIES, Anomaly, attached, sl3d_viscosity, table_anomaly,
                        temperature_anomaly, velocity_anomaly, with_density,
                        with_power_law, with_viscosity)
+from .lithosphere import (isotherm, maxwell_threshold, viscosity_threshold,
+                          with_lid)
 from .tables import PropertyTable
 from .parameters import (BetaViscosity, DensityLaw, DensityScaling, Expansivity,
                          ExponentialViscosity, ParameterSet, Sensitivity,
@@ -43,7 +49,8 @@ from .profiles import (Profile, ProfileLike, as_profile, constant, polynomial, s
 from .prony import (PronySeries, andrade_series, burgers_series, fitted_series,
                     maxwell_series, with_branches)
 
-__all__ = ["building", "laws", "parameters", "profiles", "prony", "tables",
+__all__ = ["building", "laws", "lithosphere", "parameters", "profiles", "prony",
+           "tables", "isotherm", "maxwell_threshold", "viscosity_threshold", "with_lid",
            "PropertyTable", "table_anomaly", "PronySeries",
            "andrade_series", "burgers_series", "fitted_series", "maxwell_series",
            "with_branches", "ANOMALIES", "Anomaly",
