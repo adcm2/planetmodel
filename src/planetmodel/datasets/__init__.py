@@ -11,8 +11,18 @@ holds the shipped entries by name; a caller's own `Dataset` is used
 exactly as a shipped one, passed where a name would go.
 
     fetch("S40RTS")              # paths of its files, cached and checked
-    load("S40RTS")               # the data set as the object it is
+    load("S40RTS")               # the data set as the object it is: a model
     describe("S40RTS"), cite("S40RTS")
+
+A data set of perturbations reads as the model it is (`over_reference`):
+the reference's geometry from the inner end of the perturbations'
+support to the surface, each perturbed name a `PerturbedField` over the
+reference's field on the layers the support covers, nothing beyond, so
+that slices, pictures and the model file take it as it stands.  The
+reference is the entry's (`REFERENCES` from the catalogue, or another
+data set) or the caller's.  The Woodhouse-Ritsema `.sph` files (S20RTS,
+S40RTS, S12RTS, SP12RTS) are read exactly, as harmonic fields on their
+radial splines (`read_sph`, `sph_field`, `SphReader`).
 
 `fetch` downloads into `cache_directory()` (`PLANETMODEL_DATA`, or the
 platform's per-user cache), checks each file's sha256 every time it is
@@ -23,12 +33,17 @@ to the entry's reader.  Everything here is the standard library, numpy
 and scipy; a reader needing an extra imports it where it is used.  The
 sub-package is reached by module, off the top-level surface.
 """
+from .entries import REGISTRY, DatasetLike, as_dataset, cite, describe
 from .fetch import (CACHE_VARIABLE, OFFLINE_VARIABLE, TIMEOUT, cache_directory, fetch,
                     load, sha256_of)
-from .registry import (ARCHIVES, REGISTRY, Dataset, DatasetLike, Reader, Source,
-                       archive_stem, as_dataset, cite, describe)
+from .models import REFERENCES, over_reference, reference_field, reference_of
+from .registry import ARCHIVES, Dataset, Reader, Source, archive_stem
+from .sph import (MANTLE_SLOTS, SLOTS, SPH_RADII, SPLINE_KNOTS, SphFile, SphReader,
+                  read_sph, sph_field, sph_splines)
 
 __all__ = ["Source", "Dataset", "Reader", "DatasetLike", "REGISTRY", "ARCHIVES",
            "as_dataset", "archive_stem", "describe", "cite", "cache_directory",
            "fetch", "load", "sha256_of", "CACHE_VARIABLE", "OFFLINE_VARIABLE",
-           "TIMEOUT"]
+           "TIMEOUT", "REFERENCES", "reference_of", "reference_field",
+           "over_reference", "SphFile", "SphReader", "read_sph", "sph_field",
+           "sph_splines", "SPLINE_KNOTS", "SPH_RADII", "SLOTS", "MANTLE_SLOTS"]

@@ -20,6 +20,13 @@ The Voigt average of a transversely isotropic medium is
     mu    = (A + C - 2 F + 5 N + 6 L) / 15
 
 and reduces to (kappa, mu) exactly where the medium is isotropic.
+Seismic models state an isotropic velocity relative to a transversely
+isotropic one by the Voigt average of the velocities instead,
+
+    vs^2 = (2 vsv^2 + vsh^2) / 3,      vp^2 = (vpv^2 + 4 vph^2) / 5,
+
+which `voigt_vs` and `voigt_vp` give on numbers; it differs from the
+moduli's average where eta is not one or the P and S anisotropies differ.
 
 The conversions are written on numbers and arrays with the arithmetic
 operators alone, so the same code runs on rank-0 fields through the
@@ -69,7 +76,7 @@ from .layerfunction import same_interval
 if TYPE_CHECKING:
     from .model import Layer
 
-__all__ = ["moduli_from_velocities", "velocities_from_moduli",
+__all__ = ["moduli_from_velocities", "velocities_from_moduli", "voigt_vs", "voigt_vp",
            "kappa_mu_from_moduli", "voigt_matrix", "ElasticField",
            "is_fluid", "moduli", "elastic_moduli", "kappa_mu", "named",
            "independent_moduli", "LayerLike", "Operand", "MODULI_NAMES",
@@ -141,6 +148,20 @@ def moduli_from_velocities(rho: Operand, vpv: Operand, vsv: Operand, *,
     N = rho * vsh ** 2
     F = eta * (A - 2.0 * L)
     return {"A": A, "C": C, "F": F, "L": L, "N": N}
+
+
+def voigt_vs(vsv: ArrayLike, vsh: ArrayLike) -> np.ndarray:
+    """The Voigt average of the shear velocities, sqrt((2 vsv^2 + vsh^2) / 3),
+    on numbers and arrays."""
+    vsv, vsh = np.asarray(vsv, dtype=float), np.asarray(vsh, dtype=float)
+    return np.sqrt((2.0 * vsv ** 2 + vsh ** 2) / 3.0)
+
+
+def voigt_vp(vpv: ArrayLike, vph: ArrayLike) -> np.ndarray:
+    """The Voigt average of the compressional velocities,
+    sqrt((vpv^2 + 4 vph^2) / 5), on numbers and arrays."""
+    vpv, vph = np.asarray(vpv, dtype=float), np.asarray(vph, dtype=float)
+    return np.sqrt((vpv ** 2 + 4.0 * vph ** 2) / 5.0)
 
 
 def velocities_from_moduli(rho: ArrayLike, A: ArrayLike, C: ArrayLike, F: ArrayLike,

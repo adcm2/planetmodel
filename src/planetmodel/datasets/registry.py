@@ -13,24 +13,19 @@ source (which variable is which name, a unit it mislabels, a coordinate
 it glitches), and `read(paths, dataset, **options)` gives the object the
 data set is.  Nothing dispatches on a data set's name.
 
-`REGISTRY` maps the shipped entries' names to them, read-only, each
-entry written once in this module; a caller's own `Dataset` is used
-exactly as a shipped one, by passing it where a name would go.  The
-library holds addresses and hashes, never data.
+The shipped entries are in `planetmodel.datasets.entries`.  The library
+holds addresses and hashes, never data.
 """
 from __future__ import annotations
 
 import posixpath
 import re
-from collections.abc import Mapping
 from dataclasses import KW_ONLY, dataclass
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any, Protocol
 from urllib.parse import unquote, urlsplit
 
-__all__ = ["Source", "Dataset", "Reader", "DatasetLike", "REGISTRY", "ARCHIVES",
-           "archive_stem", "as_dataset", "describe", "cite"]
+__all__ = ["Source", "Dataset", "Reader", "ARCHIVES", "archive_stem"]
 
 #: The suffixes of the archives a source may name members of.
 ARCHIVES = (".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".tar",
@@ -156,60 +151,3 @@ class Dataset:
         if not self.licence:
             raise ValueError(f"{self.name}: state the licence as the source does, "
                              "or 'none stated'")
-
-
-#: A data set, or the name of a shipped one.
-type DatasetLike = Dataset | str
-
-#: The shipped entries, each written once here.
-_ENTRIES: tuple[Dataset, ...] = ()
-
-
-def _registry(entries: tuple[Dataset, ...]) -> Mapping[str, Dataset]:
-    """The entries by name, read-only, a name used twice refused."""
-    by_name: dict[str, Dataset] = {}
-    for entry in entries:
-        if entry.name in by_name:
-            raise ValueError(f"two entries are named {entry.name!r}")
-        by_name[entry.name] = entry
-    return MappingProxyType(by_name)
-
-
-#: The shipped data sets by name.
-REGISTRY: Mapping[str, Dataset] = _registry(_ENTRIES)
-
-
-def as_dataset(dataset: DatasetLike) -> Dataset:
-    """The entry itself, or the shipped entry of that name."""
-    if isinstance(dataset, Dataset):
-        return dataset
-    try:
-        return REGISTRY[dataset]
-    except KeyError:
-        raise KeyError(f"no shipped data set is named {dataset!r}; the shipped "
-                       f"ones are {sorted(REGISTRY)}, and a Dataset of one's own "
-                       "is passed as it is") from None
-
-
-def cite(dataset: DatasetLike) -> str:
-    """The works a data set asks to be cited, one to a line."""
-    return "\n".join(as_dataset(dataset).citation)
-
-
-def describe(dataset: DatasetLike) -> str:
-    """What the entry says of a data set, as lines of text: its title and
-    body, its reference, its files, its licence, its citation and notes."""
-    d = as_dataset(dataset)
-    lines = [f"{d.name}: {d.title}", f"  body: {d.body}"]
-    if d.reference is not None:
-        lines.append(f"  relative to: {d.reference}")
-    for s in d.sources:
-        lines.append(f"  file: {s.name} from {s.url} (sha256 {s.sha256[:12]}...)")
-        lines += [f"        mirror {m}" for m in s.mirrors]
-        if s.members is not None:
-            lines.append(f"        members {', '.join(s.members)}")
-    lines.append(f"  licence: {d.licence}")
-    lines += [f"  cite: {c}" for c in d.citation]
-    if d.notes:
-        lines.append(f"  notes: {d.notes}")
-    return "\n".join(lines)

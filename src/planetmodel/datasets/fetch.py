@@ -45,7 +45,8 @@ from pathlib import Path
 from typing import IO, Any
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from .registry import DatasetLike, Source, archive_stem, as_dataset
+from .entries import DatasetLike, as_dataset
+from .registry import Source, archive_stem
 
 __all__ = ["cache_directory", "fetch", "load", "sha256_of", "CACHE_VARIABLE",
            "OFFLINE_VARIABLE", "TIMEOUT"]
