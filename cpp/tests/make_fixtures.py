@@ -15,7 +15,9 @@ fields on both its interfaces (the `surfaces` group, a shape kernel by
 the bilinear rule and a shift by the bicubic one, on a grid without its
 poles); and PREM given a viscosity and converted by sl3d's chain from a
 perturbation of its shear speeds (`model_converted.nc`, the viscosity a
-log perturbation and the model's citation the chain's).
+log perturbation and the model's citation the chain's), and the same
+with that viscosity made a Burgers body's two Prony branches
+(`model_prony.nc`).
 
 Beside them, `model_kinds.nc` (an absolute perturbation of `rho` and a
 log one of `viscosity`), `model_tensors.nc` (a rank-2 `stress`, radial
@@ -57,7 +59,8 @@ it (`gl:<lmax>[:<nphi>]`, `dh:<lmax>:<sampling>`,
 `eq:<ntheta>:<nphi>:<poles>`), its `band`, `colatitudes`, `longitudes`
 and `weights`, one line each.  **The vocabulary** (`vocabulary.txt`):
 each name, its rank, weight and Voigt form, its four exponents, and its
-meaning's UTF-8 in hexadecimal.
+meaning's UTF-8 in hexadecimal; then each family's stem the same way,
+after the word `family`.
 
 **Frames** (`frames.txt`): `frame <theta> <phi>` and the nine entries
 of the frame matrix by rows, and `wrapped <x> <start> <value>`, the
@@ -292,7 +295,16 @@ def model_files(directory: Path) -> list[Path]:
         write_model(directory / "model_converted.nc", converted(),
                     grid=pm.gauss_legendre(6),
                     fields=["rho", "vsv", "vsh", "viscosity"]),
+        write_model(directory / "model_prony.nc", with_burgers(converted()),
+                    grid=pm.gauss_legendre(6)),
     ]
+
+
+def with_burgers(model: pm.Model) -> pm.Model:
+    """The model with its viscosity made a Burgers body's two branches."""
+    from planetmodel.conversion import prony
+    return prony.with_branches(model, prony.burgers_series(strength=5.0,
+                                                           viscosity_ratio=5.0))
 
 
 def converted() -> pm.Model:
@@ -1053,13 +1065,14 @@ def grids(directory: Path) -> list[Path]:
 
 def vocabulary(directory: Path) -> list[Path]:
     """The vocabulary of the module docstring."""
-    from planetmodel.vocabulary import VOCABULARY
+    from planetmodel.vocabulary import FAMILIES, VOCABULARY
     lines = []
-    for name, spec in VOCABULARY.items():
-        c, d = spec.character, spec.dimensions
-        lines.append(f"{name} {c.rank} {c.weight} {int(bool(c.voigt))} {d.mass} "
-                     f"{d.length} {d.time} {d.temperature} "
-                     f"{spec.meaning.encode('utf-8').hex()}")
+    for prefix, table in (("", VOCABULARY), ("family ", FAMILIES)):
+        for name, spec in table.items():
+            c, d = spec.character, spec.dimensions
+            lines.append(f"{prefix}{name} {c.rank} {c.weight} {int(bool(c.voigt))} "
+                         f"{d.mass} {d.length} {d.time} {d.temperature} "
+                         f"{spec.meaning.encode('utf-8').hex()}")
     path = directory / "vocabulary.txt"
     path.write_text("\n".join(lines) + "\n")
     return [path]

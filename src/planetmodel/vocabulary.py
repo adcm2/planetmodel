@@ -17,18 +17,30 @@ quality factor, an anisotropy ratio and a viscosity are rank 0 weight 0.
 A velocity is the square root of a modulus over a density, the weights
 cancelling, which is why it has no law of its own.
 
+A family is a stem whose every member, the stem with a positive index
+(`relaxation_time_3`), means the same thing for its index (`FAMILIES`):
+the Prony branches of a generalised Maxwell body in shear, branch k the
+fraction `relaxation_strength_k` = mu_k / mu_U of the unrelaxed shear
+modulus that relaxes in it and its `relaxation_time_k`, the relaxed part
+being (1 - sum w_k) mu_U; a viscosity is the one-branch shorthand, w_1 =
+1 and tau_1 = eta / mu.  `member(name)` says whether a name is one and
+of which family, `family_spec` gives its spec, and `shipped(name)` the
+spec of any name the library speaks, of the table or of a family.
+
 `CONSTANTS` holds the named constants a model reads in its own units,
 each declared with its SI value and dimensions.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import KW_ONLY, dataclass
 
 from . import units
 from .character import DENSITY, ELASTIC, SCALAR, Character
 from .units import Dimensions
 
-__all__ = ["FieldSpec", "Constant", "VOCABULARY", "CONSTANTS", "spec"]
+__all__ = ["FieldSpec", "Constant", "VOCABULARY", "FAMILIES", "CONSTANTS", "spec",
+           "member", "family_spec", "shipped"]
 
 
 @dataclass(frozen=True)
@@ -111,6 +123,40 @@ VOCABULARY: dict[str, FieldSpec] = {
                 "d rho / d Phi_0 = rho'(r) / g(r)"),
 }
 
+#: The families of names, each stem mapped to the spec every member has.
+FAMILIES: dict[str, FieldSpec] = {
+    "relaxation_strength": FieldSpec(
+        SCALAR, units.DIMENSIONLESS,
+        meaning="fraction of the unrelaxed shear modulus that relaxes in Prony "
+                "branch k"),
+    "relaxation_time": FieldSpec(SCALAR, units.TIME,
+                                 meaning="relaxation time of Prony branch k"),
+}
+
+_MEMBER = re.compile(r"^(?P<stem>.+)_(?P<index>[1-9][0-9]*)$")
+
+
+def member(name: str) -> tuple[str, int] | None:
+    """(stem, index) of a member of a family, its index positive and
+    written without leading zeros; None for any other name."""
+    m = _MEMBER.match(name)
+    if m is None or m["stem"] not in FAMILIES:
+        return None
+    return m["stem"], int(m["index"])
+
+
+def family_spec(name: str) -> FieldSpec | None:
+    """The spec of a member of a family, or None."""
+    found = member(name)
+    return None if found is None else FAMILIES[found[0]]
+
+
+def shipped(name: str) -> FieldSpec | None:
+    """The spec of a name the library speaks, of the table or a family."""
+    known = VOCABULARY.get(name)
+    return known if known is not None else family_spec(name)
+
+
 #: The named constants, each with its SI value and dimensions.
 CONSTANTS: dict[str, Constant] = {
     "G": Constant(units.G_SI, units.GRAVITATIONAL_CONSTANT,
@@ -119,10 +165,12 @@ CONSTANTS: dict[str, Constant] = {
 
 
 def spec(name: str) -> FieldSpec:
-    """The spec of a shipped name; KeyError, naming it, for any other."""
-    try:
-        return VOCABULARY[name]
-    except KeyError:
+    """The spec of a shipped name, of the table or a family; KeyError,
+    naming it, for any other."""
+    known = shipped(name)
+    if known is None:
         raise KeyError(
             f"{name!r} is not a name the library speaks; the vocabulary is "
-            f"{list(VOCABULARY)}") from None
+            f"{list(VOCABULARY)}, and the families "
+            f"{[f'{stem}_<k>' for stem in FAMILIES]}")
+    return known

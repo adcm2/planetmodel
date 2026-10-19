@@ -54,7 +54,7 @@ from .fields import Field, RadialField
 from .layerfunction import PolynomialLayer, same_interval
 from .skeleton import Skeleton
 from .units import LENGTH, Scales
-from .vocabulary import VOCABULARY, FieldSpec
+from .vocabulary import VOCABULARY, FieldSpec, family_spec
 
 if TYPE_CHECKING:
     from .model import Model
@@ -564,7 +564,7 @@ def deck_layers(deck: Deck, *, kind: str = "cubic",
                 raise ValueError(f"column {name!r} is NaN on part of layer {i}; a "
                                  "column is absent from a layer only when NaN "
                                  "throughout it")
-            spec = known.get(name)
+            spec = known.get(name) or family_spec(name)
             character: Character = SCALAR if spec is None else spec.character
             fields[name] = RadialField(skeleton.interval(i), _interpolant(r, y, kind),
                                        character=character, name=name)

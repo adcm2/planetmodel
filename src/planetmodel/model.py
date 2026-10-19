@@ -61,7 +61,7 @@ from .mapping import Mapping
 from .materials import is_fluid
 from .skeleton import CoarseningMap, Skeleton
 from .units import EARTH_MEAN_DENSITY, LENGTH, Scales
-from .vocabulary import CONSTANTS, VOCABULARY, Constant, FieldSpec
+from .vocabulary import CONSTANTS, VOCABULARY, Constant, FieldSpec, family_spec
 
 __all__ = ["Layer", "Model", "CoarseningFit", "cited"]
 
@@ -258,7 +258,7 @@ class Model:
                     raise ValueError(
                         f"{name!r} on layer {layer._label()} lives on "
                         f"{field.interval}, not the layer's {layer.interval}")
-                spec = self._specs.get(name)
+                spec = self.spec(name)
                 if spec is not None and field.character != spec.character:
                     raise ValueError(
                         f"{name!r} on layer {layer._label()} has character "
@@ -345,8 +345,10 @@ class Model:
         return tuple(layer.index for layer in self._layers if name in layer)
 
     def spec(self, name: str) -> FieldSpec | None:
-        """The spec of a name, or None when it has none."""
-        return self._specs.get(name)
+        """The spec of a name, the model's own or the vocabulary's (a
+        family's for a member of one), or None when it has none."""
+        own = self._specs.get(name)
+        return own if own is not None else family_spec(name)
 
     def constant(self, name: str) -> float:
         """A declared constant in the model's units."""
@@ -682,7 +684,7 @@ class Model:
         for layer in self._layers:
             out = {}
             for name, f in layer.fields.items():
-                spec = self._specs.get(name)
+                spec = self.spec(name)
                 if spec is None or spec.dimensions is None:
                     raise ValueError(
                         f"{name!r} on layer {layer._label()} has no dimensions, "

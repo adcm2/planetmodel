@@ -240,7 +240,7 @@ class Elastic:
         from them.
         """
         from .model import Model
-        if name in _FROZEN_FROM:
+        if name in _FROZEN_FROM or rheology.is_rheology_name(name):
             _refuse_frozen(self, f"its moduli were derived from {name!r}")
         _refuse_other_symmetry(self.layer(which), name)
         out = Model.with_field(self, which, name, field, replace=replace)
@@ -442,9 +442,9 @@ class Viscoelastic:
     frozen = rheology.frozen
 
     def elastic(self: Model) -> Model:
-        """The model without its rheology fields (`RHEOLOGY_NAMES`), so
+        """The model without its rheology fields (`rheology.is_rheology_name`), so
         that every layer is elastic; a frozen model keeps its complex
         moduli, which are what its rheology became."""
         layers = [{k: f for k, f in layer.fields.items()
-                   if k not in rheology.RHEOLOGY_NAMES} for layer in self.layers]
+                   if not rheology.is_rheology_name(k)} for layer in self.layers]
         return self.replaced(layers=layers, check=False)

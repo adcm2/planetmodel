@@ -458,12 +458,27 @@ TEST(Writer, TheVocabularyIsThePythons) {
   PLANETMODEL_FIXTURE(path, "vocabulary.txt");
   auto in = std::ifstream(path);
   auto names = 0u;
-  for (auto line = std::string{}; std::getline(in, line); ++names) {
+  auto families = 0u;
+  for (auto line = std::string{}; std::getline(in, line);) {
     auto words = std::istringstream{line};
     auto name = std::string{};
     auto rank = 0, weight = 0, voigt = 0, mass = 0, length = 0, time = 0, temperature = 0;
     auto meaning = std::string{};
-    words >> name >> rank >> weight >> voigt >> mass >> length >> time >> temperature >> meaning;
+    words >> name;
+    const auto family = name == "family";
+    if (family) words >> name;
+    words >> rank >> weight >> voigt >> mass >> length >> time >> temperature >> meaning;
+    if (family) {
+      ++families;
+      ASSERT_TRUE(pm::Families().contains(name)) << name;
+      EXPECT_EQ(pm::Member(name + "_12"), (std::pair{name, 12})) << name;
+      EXPECT_FALSE(pm::Member(name + "_0").has_value()) << name;
+      EXPECT_FALSE(pm::Member(name + "_07").has_value()) << name;
+      EXPECT_FALSE(pm::Member(name).has_value()) << name;
+      name += "_3";
+    } else {
+      ++names;
+    }
     const auto spec = pm::VocabularySpec(name);
     ASSERT_TRUE(spec.has_value()) << name;
     EXPECT_EQ(spec->character, pm::Character(rank, weight, voigt != 0)) << name;
@@ -473,6 +488,9 @@ TEST(Writer, TheVocabularyIsThePythons) {
     EXPECT_EQ(spec->meaning, Unhex(meaning)) << name;
   }
   EXPECT_EQ(names, pm::Vocabulary().size());
+  EXPECT_EQ(families, pm::Families().size());
+  EXPECT_FALSE(pm::VocabularySpec("relaxation_time_").has_value());
+  EXPECT_FALSE(pm::VocabularySpec("viscosity_1").has_value());
 }
 
 TEST(Writer, WritesBackWhatItReads) {

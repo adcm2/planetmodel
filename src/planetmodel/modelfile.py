@@ -117,7 +117,7 @@ from .perturbation import KINDS as PERTURBATION_KINDS
 from .sampling import KINDS as GRID_KINDS
 from .skeleton import DEFAULT_RTOL, Skeleton
 from .units import BASE, Dimensions, Scales, scaled_unit
-from .vocabulary import VOCABULARY, Constant, FieldSpec
+from .vocabulary import Constant, FieldSpec, shipped
 
 if TYPE_CHECKING:
     from .displacement import Relief
@@ -1513,7 +1513,7 @@ def _specs(data: ModelFile) -> dict[str, FieldSpec]:
                                                meaning=str(a.get("long_name", "")))))
     out: dict[str, FieldSpec] = {}
     for name, spec in stated:
-        known = VOCABULARY.get(name)
+        known = shipped(name)
         if known is None:
             out[name] = spec
             continue
