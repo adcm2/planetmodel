@@ -93,6 +93,18 @@ def test_names_land_where_they_are_told(s40):
         transplanted(density, s40)
 
 
+def test_layers_take_their_own_span_of_a_perturbed_source(s40):
+    prem = pm.PREM()
+    m = transplanted(prem, s40, layers=["lower_mantle"], ends=("d2741", "d771"))
+    lay = m.layer("lower_mantle")
+    rng = np.random.default_rng(7)
+    r = rng.uniform(*lay.interval, 20)
+    t, p = rng.uniform(0, np.pi, 20), rng.uniform(0, 6, 20)
+    assert np.allclose(lay["vsv"].perturbation(r, t, p), harmonic()(r, t, p),
+                       rtol=1e-12)                 # ends bound the span: identity
+    assert not isinstance(m.layer("transition_zone_lower")["vsv"], pm.PerturbedField)
+
+
 def test_the_mean_removed_and_a_band_kept(s40):
     m = transplanted(pm.PREM(), s40, remove_mean=True, lmax=3, lmin=1)
     pert = m.layer("lower_mantle")["vsv"].perturbation

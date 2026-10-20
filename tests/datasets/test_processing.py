@@ -57,6 +57,23 @@ def test_relative_mode_keeps_the_source_perturbation():
     assert all(s is lay["vs"].perturbation for s, lay in zip(p.segments, held))
 
 
+def test_a_span_clips_a_perturbed_source():
+    src = over_reference(pm.PREM(), {"vs": harmonic()}, kind="relative", name="src")
+    onto = simple(4.5e3)
+    whole = rereferenced(src, onto)["vs"]
+    span = (4000e3, 6000e3)
+    p = rereferenced(src, onto, span=span)["vs"]
+    assert p.kind == "relative"
+    assert p.support == pytest.approx(span)
+    assert len(p.segments) == 5                    # the source's 8, clipped to 5
+    inside = [s for s in p.segments if any(s is w for w in whole.segments)]
+    assert len(inside) == 3                        # layers within the span, untouched
+    rng = np.random.default_rng(6)
+    for s in p.segments:
+        r, t, f = points(rng, *s.interval, n=20)
+        assert np.allclose(s(r, t, f), harmonic()(r, t, f), rtol=1e-12)
+
+
 def test_absolute_mode_keeps_the_values():
     prem = pm.PREM()
     src = over_reference(prem, {"vs": harmonic()}, kind="relative", name="src")
