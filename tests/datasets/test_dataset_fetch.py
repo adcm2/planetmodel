@@ -2,6 +2,7 @@
 on this machine, so that nothing here touches the network."""
 import hashlib
 import io
+import re
 import sys
 import tarfile
 import threading
@@ -124,7 +125,8 @@ def test_over_http_once_then_from_the_cache(host, cache, monkeypatch):
 
 def test_offline_a_missing_file_names_where_to_place_it(host, cache, monkeypatch):
     d = entry(Source(f"{host.url}/m.sph", sha(b"x")))
-    with pytest.raises(FileNotFoundError, match=f"{cache / 'm' / 'm.sph'}.*{host.url}"):
+    where = re.escape(str(cache / "m" / "m.sph"))
+    with pytest.raises(FileNotFoundError, match=f"{where}.*{re.escape(host.url)}"):
         fetch(d, download=False)
     monkeypatch.setenv("PLANETMODEL_OFFLINE", "yes")
     with pytest.raises(FileNotFoundError, match="off the network"):

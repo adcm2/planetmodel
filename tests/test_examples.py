@@ -58,7 +58,7 @@ def test_every_example_states_its_header():
     for path in SCRIPTS:
         head = header(path)
         assert set(head) == {"Needs", "Network", "Run"}, path
-        assert str(path.relative_to(ROOT)) in head["Run"], path
+        assert path.relative_to(ROOT).as_posix() in head["Run"], path
         for n in head["Needs"].split(","):
             assert n.strip() in known or n.strip() == "none", (path, n)
 

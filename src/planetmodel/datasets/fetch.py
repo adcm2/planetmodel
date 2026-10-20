@@ -99,9 +99,11 @@ def _user_agent() -> str:
 
 
 def _quoted(url: str) -> str:
-    """The URL with its path percent-encoded, escapes already there kept."""
+    """The URL with its path percent-encoded, escapes already there and
+    colons kept: a colon is legal in a path and marks the drive of a
+    Windows file URL, which an escaped one would hide."""
     parts = urlsplit(url)
-    return urlunsplit(parts._replace(path=quote(parts.path, safe="/%~")))
+    return urlunsplit(parts._replace(path=quote(parts.path, safe="/%~:")))
 
 
 def sha256_of(path: Path) -> str:
