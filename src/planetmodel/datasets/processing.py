@@ -175,7 +175,16 @@ def rereferenced(source: Model, onto: Model, *, names: Sequence[str] | None = No
         (out_kind,) = kinds
         against = _AGAINST[out_kind]
         if all(perturbed) and mode == "relative":
-            pieces = [layer[name].perturbation for layer in holders]
+            pieces = []
+            for layer in holders:
+                p = layer[name].perturbation
+                lo, hi = (float(x) for x in p.interval)
+                if span is not None:
+                    lo, hi = max(lo, span[0]), min(hi, span[1])
+                    if not hi > lo:
+                        continue
+                pieces.append(p if same_interval(p.interval, (lo, hi))
+                              else p.on_interval(lo, hi))
             out[name] = Perturbation(name, out_kind, tuple(pieces))
             continue
         if mode == "relative":
