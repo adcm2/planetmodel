@@ -18,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "planetmodel/character.hpp"
 #include "planetmodel/units.hpp"
@@ -49,6 +50,7 @@ struct FieldSpec {
       {"qkappa", {SCALAR, u::DIMENSIONLESS, "bulk quality factor; zero attenuates nothing"}},
       {"qmu",
        {SCALAR, u::DIMENSIONLESS, "shear quality factor; zero attenuates nothing (a fluid)"}},
+      {"qp", {SCALAR, u::DIMENSIONLESS, "quality factor of P waves; zero attenuates nothing"}},
       {"kappa", {DENSITY, u::MODULUS, "bulk modulus of an isotropic medium"}},
       {"mu", {DENSITY, u::MODULUS, "shear modulus of an isotropic medium"}},
       {"A", {DENSITY, u::MODULUS, "Love modulus A = rho vph^2"}},
@@ -61,6 +63,14 @@ struct FieldSpec {
         "the second elasticity tensor, static, Voigt-reduced in the spherical frame"}},
       {"viscosity", {SCALAR, u::VISCOSITY, "dynamic viscosity"}},
       {"temperature", {SCALAR, u::TEMPERATURE, "absolute temperature"}},
+      {"stress_exponent",
+       {SCALAR, u::DIMENSIONLESS,
+        "stress exponent n of power-law creep, its strain rate growing as the stress to the n"}},
+      {"transition_stress",
+       {DENSITY, u::MODULUS,
+        "deviatoric stress at which power-law creep strains as fast as linear creep"}},
+      {"pressure",
+       {DENSITY, u::MODULUS, "hydrostatic pressure of the spherically symmetric reference"}},
       {"g",
        {SCALAR, u::GRAVITY,
         "gravitational acceleration of the spherically symmetric reference, radially "
@@ -73,15 +83,51 @@ struct FieldSpec {
 }
 
 /**
- * @brief The spec of a vocabulary name.
+ * @brief The families of names: each stem with the spec every member has, a member being the
+ * stem, an underscore and a positive index written without leading zeros (`relaxation_time_3`):
+ * the Prony branches of a generalised Maxwell body in shear.
+ */
+[[nodiscard]] inline const std::map<std::string, FieldSpec, std::less<>>& Families() {
+  namespace u = units;
+  static const auto families = std::map<std::string, FieldSpec, std::less<>>{
+      {"relaxation_strength",
+       {SCALAR, u::DIMENSIONLESS,
+        "fraction of the unrelaxed shear modulus that relaxes in Prony branch k"}},
+      {"relaxation_time", {SCALAR, u::TIME, "relaxation time of Prony branch k"}},
+  };
+  return families;
+}
+
+/**
+ * @brief The family and index of a member of one.
  * @param name The name.
- * @return Its spec, or empty where the vocabulary has no such name.
+ * @return Its stem and index, or empty where it is a member of no family.
+ */
+[[nodiscard]] inline std::optional<std::pair<std::string, int>> Member(std::string_view name) {
+  const auto cut = name.rfind('_');
+  if (cut == std::string_view::npos || cut == 0 || cut + 1 == name.size()) return std::nullopt;
+  const auto stem = name.substr(0, cut);
+  const auto digits = name.substr(cut + 1);
+  if (digits.front() == '0' || digits.size() > 9) return std::nullopt;
+  auto index = 0;
+  for (const auto c : digits) {
+    if (c < '0' || c > '9') return std::nullopt;
+    index = 10 * index + (c - '0');
+  }
+  if (!Families().contains(stem)) return std::nullopt;
+  return std::pair{std::string{stem}, index};
+}
+
+/**
+ * @brief The spec of a name the library speaks, of the vocabulary or a family.
+ * @param name The name.
+ * @return Its spec, or empty where the library has no such name.
  */
 [[nodiscard]] inline std::optional<FieldSpec> VocabularySpec(std::string_view name) {
   const auto& vocabulary = Vocabulary();
-  const auto it = vocabulary.find(name);
-  if (it == vocabulary.end()) return std::nullopt;
-  return it->second;
+  if (const auto it = vocabulary.find(name); it != vocabulary.end()) return it->second;
+  if (const auto found = Member(name)) return Families().find(found->first)->second;
+  return std::nullopt;
 }
 
 }  // namespace planetmodel

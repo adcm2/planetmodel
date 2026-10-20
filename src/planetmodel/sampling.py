@@ -62,6 +62,12 @@ Gauss-Legendre and Driscoll-Healy grids they also integrate the product
 of two fields of the band; the equiangular grids reach their band only
 through the upsampling analysis of `planetmodel.harmonics`.
 
+The shipped grids' longitudes are equally spaced from zero, or from
+`phi0` when it is given: phi0 + 2 pi j / nphi, reduced into [0, 2 pi)
+and sorted, so that a grid depends on phi0 only modulo its spacing, and
+a source's grid of cell centres (longitudes from half a degree, say) is
+the shipped kind it is.  The transforms take any start.
+
 At a pole node the frame (e_theta, e_phi) depends on the longitude, so
 a component of rank 1 or above is sampled there as the limit along its
 own longitude's meridian: the columns differ while the vector does not.
@@ -80,7 +86,7 @@ from numpy.typing import ArrayLike
 from .character import Character
 from .fields import Field
 from .fields import stored_shape as _stored_shape
-from .frames import spherical_frame
+from .frames import spherical_frame, wrapped
 from .mapping import Mapping
 from .mesh1d.mesh import RadialMesh
 from .model import Model
@@ -94,6 +100,14 @@ KINDS = ("gauss_legendre", "driscoll_healy", "equiangular", "custom")
 
 #: What `sample` does on a layer lacking a field.
 MISSING = ("refuse", "nan")
+
+
+def _longitudes(nphi: int, phi0: float) -> np.ndarray:
+    """nphi equally spaced longitudes from phi0, reduced into [0, 2 pi) and
+    sorted; phi0 = 0 gives 2 pi j / nphi exactly."""
+    if not np.isfinite(phi0):
+        raise ValueError(f"phi0 must be finite, got {phi0!r}")
+    return np.sort(wrapped(float(phi0) + 2.0 * np.pi * np.arange(nphi) / nphi))
 
 
 def _readonly(a: ArrayLike, *, name: str) -> np.ndarray:
@@ -226,13 +240,15 @@ class AngularGrid:
         return f"AngularGrid({self.kind}, {self.ntheta} x {self.nphi}{band})"
 
 
-def gauss_legendre(lmax: int, *, nphi: int | None = None) -> AngularGrid:
+def gauss_legendre(lmax: int, *, nphi: int | None = None,
+                   phi0: float = 0.0) -> AngularGrid:
     """The Gauss-Legendre grid resolving degrees and orders up to `lmax`.
 
     `lmax + 1` Gauss-Legendre colatitudes in x = cos(theta), sorted so
     that theta increases, with the Legendre weights alongside, and
-    `nphi` equally spaced longitudes from zero, 2 lmax + 1 by default,
-    the fewest that resolve the orders.  An explicit `nphi` below that
+    `nphi` equally spaced longitudes from `phi0` (zero by default, and
+    as the module docstring reduces it), 2 lmax + 1 by default, the
+    fewest that resolve the orders.  An explicit `nphi` below that
     bound is refused: at 2 lmax the orders +lmax and -lmax are one
     discrete mode and cannot be told apart.
     """
@@ -249,20 +265,20 @@ def gauss_legendre(lmax: int, *, nphi: int | None = None) -> AngularGrid:
         raise ValueError(
             f"nphi={nphi} cannot resolve orders |m| <= {lmax}: the trapezoid "
             f"rule separates them only for nphi >= 2 lmax + 1 = {need}")
-    nphi = int(nphi)
-    phi = 2.0 * np.pi * np.arange(nphi) / nphi
+    phi = _longitudes(int(nphi), phi0)
     return AngularGrid(theta[order], phi, kind="gauss_legendre", lmax=lmax,
                        weights=w[order])
 
 
-def driscoll_healy(lmax: int, *, sampling: int = 1) -> AngularGrid:
+def driscoll_healy(lmax: int, *, sampling: int = 1,
+                   phi0: float = 0.0) -> AngularGrid:
     """The Driscoll-Healy grid resolving degrees and orders up to `lmax`.
 
     n = 2 lmax + 2 equally spaced colatitudes theta_i = pi i / n, from
     the north pole, which is a node, to one step short of the south
-    pole, which is not; n equally spaced longitudes from zero for
-    `sampling=1`, or 2 n for `sampling=2`, the grid equally spaced in
-    both angles.  The weights are Driscoll and Healy's, exact for the
+    pole, which is not; n equally spaced longitudes from `phi0` (zero by
+    default) for `sampling=1`, or 2 n for `sampling=2`, the grid equally
+    spaced in both angles.  The weights are Driscoll and Healy's, exact for the
     polynomials in cos(theta) of degree below n; the north pole's is
     zero.
     """
@@ -273,13 +289,13 @@ def driscoll_healy(lmax: int, *, sampling: int = 1) -> AngularGrid:
         raise ValueError(f"sampling must be 1 or 2, got {sampling}")
     n = 2 * lmax + 2
     theta = np.pi * np.arange(n) / n
-    nphi = sampling * n
-    phi = 2.0 * np.pi * np.arange(nphi) / nphi
+    phi = _longitudes(sampling * n, phi0)
     return AngularGrid(theta, phi, kind="driscoll_healy", lmax=lmax,
                        weights=_driscoll_healy_weights(n))
 
 
-def equiangular(ntheta: int, nphi: int, *, poles: bool = False) -> AngularGrid:
+def equiangular(ntheta: int, nphi: int, *, poles: bool = False,
+                phi0: float = 0.0) -> AngularGrid:
     """Equally spaced colatitudes and longitudes, with weights and a band.
 
     By default the colatitudes are the midpoints theta_i = pi (i + 1/2)
@@ -287,7 +303,8 @@ def equiangular(ntheta: int, nphi: int, *, poles: bool = False) -> AngularGrid:
     rule; `poles=True` makes both poles nodes, theta_i = pi i / (ntheta
     - 1) for ntheta of at least two, with the Clenshaw-Curtis weights.
     Either rule is exact for the polynomials in cos(theta) of degree
-    below ntheta.  The longitudes are phi_j = 2 pi j / nphi.  The band
+    below ntheta.  The longitudes are phi_j = phi0 + 2 pi j / nphi, from
+    zero by default (the module docstring reduces them).  The band
     is ntheta - 1 for the midpoints and ntheta - 2 with the poles, and
     at most (nphi - 1) // 2.
     """
@@ -303,7 +320,7 @@ def equiangular(ntheta: int, nphi: int, *, poles: bool = False) -> AngularGrid:
     else:
         theta = np.pi * (np.arange(ntheta) + 0.5) / ntheta
         weights, band = _fejer_weights(ntheta), ntheta - 1
-    phi = 2.0 * np.pi * np.arange(nphi) / nphi
+    phi = _longitudes(nphi, phi0)
     return AngularGrid(theta, phi, kind="equiangular",
                        lmax=min(band, (nphi - 1) // 2), weights=weights)
 

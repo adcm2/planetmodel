@@ -9,6 +9,19 @@ manner of `is_fluid` and `moduli`:
 - `viscosity`: a Maxwell body in shear,
   mu(omega) = mu i omega tau / (1 + i omega tau) with tau = viscosity / mu,
   mu being the Voigt-averaged shear modulus;
+- Prony branches, `relaxation_strength_k` and `relaxation_time_k` for k
+  = 1, 2, ... (`vocabulary.FAMILIES`): a generalised Maxwell body in
+  shear, mu(omega) = mu [1 - sum_k w_k / (1 + i omega tau_k)], the
+  relaxed part (1 - sum w_k) mu, of which the viscosity is the one-branch
+  case (w_1 = 1, tau_1 = viscosity / mu), so a layer holding both is
+  refused, as is a branch without its partner or a gap in the indices
+  (`branches`);
+- `stress_exponent` n and `transition_stress` sigma_t: power-law creep
+  beside the linear rheology, which a code that steps in time reads (a
+  relaxation time divided by 1 + gamma (|dev sigma| / 2 mu_0)^(n - 1),
+  gamma = (2 mu_0 / sigma_t)^(n - 1), so that power-law creep strains as
+  fast as linear creep at sigma_t); being nonlinear they are no part of
+  a frozen model, and freezing ignores them;
 - `qmu`, `qkappa`: a constant-Q absorption band about the reference
   frequency omega_0,
   mu(omega) = mu [1 + (2 / pi Q_mu) ln(omega / omega_0) + i / Q_mu],
@@ -19,9 +32,10 @@ with delta kappa = (f_kappa - 1) kappa and delta mu = (f_mu - 1) mu,
 A and C gain delta kappa + 4 delta mu / 3, F gains
 delta kappa - 2 delta mu / 3, and L and N gain delta mu, which is the
 isotropic rule when the layer is isotropic and leaves the anisotropy
-real.  A layer holding both a viscosity and Q_mu is a Maxwell body in
-shear (the shear band is not applied on top) with the bulk band; a
-layer holding none of the three is elastic and left alone.
+real.  A layer holding both a viscosity (or branches) and Q_mu is a
+Maxwell body in shear (the shear band is not applied on top) with the
+bulk band; a layer holding none of them is elastic and left alone.
+`is_rheology_name` says which names a layer's rheology is read from.
 
 `frozen(model, omega, *, reference_omega=None)` returns the model with
 the complex moduli of every viscoelastic layer stored under A, C, F, L,
@@ -46,21 +60,63 @@ from .character import DENSITY
 from .fields import ComposedField, Field
 from .materials import LayerLike, kappa_mu, moduli, named
 from .units import FREQUENCY
-from .vocabulary import Constant
+from .vocabulary import Constant, member
 
 if TYPE_CHECKING:
     from .model import Model
 
 __all__ = ["is_viscoelastic", "frozen_moduli", "dispersive_moduli", "frozen",
-           "is_frozen", "reference_omega", "RHEOLOGY_NAMES"]
+           "is_frozen", "reference_omega", "RHEOLOGY_NAMES", "BRANCH_STEMS",
+           "POWER_LAW_NAMES", "branches", "is_rheology_name"]
 
-#: The fields a layer's rheology is read from.
+#: The fields a layer's rheology is read from, beside its Prony branches.
 RHEOLOGY_NAMES = ("viscosity", "qmu", "qkappa")
+
+#: The stems of a Prony branch's two names: its strength and its time.
+BRANCH_STEMS = ("relaxation_strength", "relaxation_time")
+
+#: The names of power-law creep, read beside the linear rheology.
+POWER_LAW_NAMES = ("stress_exponent", "transition_stress")
+
+
+def is_rheology_name(name: str) -> bool:
+    """Whether a layer's rheology is read from fields of this name: one of
+    `RHEOLOGY_NAMES`, a branch's, or one of `POWER_LAW_NAMES`."""
+    return name in POWER_LAW_NAMES or _linear(name)
+
+
+def _linear(name: str) -> bool:
+    """Whether a name is one a linear rheology is read from."""
+    found = member(name)
+    return name in RHEOLOGY_NAMES or (found is not None and found[0] in BRANCH_STEMS)
+
+
+def branches(layer: LayerLike) -> tuple[tuple[Field, Field], ...]:
+    """The layer's Prony branches, (strength, time) for k = 1, 2, ...;
+    empty where it holds none, refused where a branch lacks its partner or
+    the indices skip one."""
+    held: dict[int, dict[str, Field]] = {}
+    for name in layer:
+        found = member(name)
+        if found is not None and found[0] in BRANCH_STEMS:
+            held.setdefault(found[1], {})[found[0]] = layer[name]
+    if not held:
+        return ()
+    if sorted(held) != list(range(1, len(held) + 1)):
+        raise ValueError(f"the Prony branches are numbered {sorted(held)}, not 1 to "
+                         f"{len(held)}")
+    out = []
+    for k in range(1, len(held) + 1):
+        if set(held[k]) != set(BRANCH_STEMS):
+            raise ValueError(f"Prony branch {k} holds {sorted(held[k])}; a branch "
+                             f"is {BRANCH_STEMS[0]}_{k} and {BRANCH_STEMS[1]}_{k}")
+        out.append((held[k][BRANCH_STEMS[0]], held[k][BRANCH_STEMS[1]]))
+    return tuple(out)
 
 
 def is_viscoelastic(layer: LayerLike) -> bool:
-    """Whether a layer holds any of `RHEOLOGY_NAMES`."""
-    return any(n in layer for n in RHEOLOGY_NAMES)
+    """Whether a layer holds any of `RHEOLOGY_NAMES` or a Prony branch."""
+    return any(_linear(n) for n in layer)
 
 
 def _maxwell_shift(mu: Field, eta: Field, omega: float) -> ComposedField:
@@ -73,6 +129,19 @@ def _maxwell_shift(mu: Field, eta: Field, omega: float) -> ComposedField:
         np.divide(-m * m, m + 1j * omega * np.asarray(e), out=out, where=solid)
         return out
     return ComposedField(fn, [mu, eta], character=DENSITY)
+
+
+def _prony_shift(mu: Field, held: tuple[tuple[Field, Field], ...],
+                 omega: float) -> ComposedField:
+    """delta mu of a generalised Maxwell body: -mu sum_k w_k / (1 + i omega
+    tau_k)."""
+    def fn(m: ArrayLike, *pairs: ArrayLike) -> np.ndarray:
+        total = np.zeros(np.shape(m), dtype=complex)
+        for w, tau in zip(pairs[::2], pairs[1::2]):
+            total = total + np.asarray(w) / (1.0 + 1j * omega * np.asarray(tau))
+        return -np.asarray(m) * total
+    return ComposedField(fn, [mu] + [f for pair in held for f in pair],
+                         character=DENSITY)
 
 
 def _band_shift(modulus: Field, q: Field, omega: float,
@@ -94,8 +163,8 @@ def frozen_moduli(layer: LayerLike, omega: float, *,
     """The complex moduli A, C, F, L, N of a viscoelastic layer at `omega`
     as fields, from its rheology fields and its elastic moduli; an
     elastic layer's moduli come back unchanged.  A viscosity makes the
-    shear a Maxwell body; otherwise the Q fields make the constant-Q
-    band of `dispersive_moduli`."""
+    shear a Maxwell body, and Prony branches a generalised one; otherwise
+    the Q fields make the constant-Q band of `dispersive_moduli`."""
     return _shifted_moduli(layer, omega, reference_omega, maxwell=True)
 
 
@@ -114,12 +183,19 @@ def _shifted_moduli(layer: LayerLike, omega: float, reference_omega: float, *,
     """The five at `omega`, kappa and mu shifted by their rheologies and
     recombined through the Voigt rule so that the anisotropy stays real."""
     base = moduli(layer)
+    held = branches(layer) if maxwell else ()
+    if held and "viscosity" in layer:
+        raise ValueError("the layer holds a viscosity and Prony branches; the "
+                         "viscosity is the one-branch case, so give one or the "
+                         "other")
     names = RHEOLOGY_NAMES if maxwell else ("qmu", "qkappa")
-    if not any(n in layer for n in names):
+    if not held and not any(n in layer for n in names):
         return base
     kappa, mu = kappa_mu(layer)
     dmu = dkappa = None
-    if maxwell and "viscosity" in layer:
+    if held:
+        dmu = _prony_shift(mu, held, omega)
+    elif maxwell and "viscosity" in layer:
         dmu = _maxwell_shift(mu, layer["viscosity"], omega)
     elif "qmu" in layer:
         dmu = _band_shift(mu, layer["qmu"], omega, reference_omega)

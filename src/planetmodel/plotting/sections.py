@@ -10,7 +10,9 @@ interface is a sharp edge, and each interface is a faint arc
 as it stands, its interfaces curved where the mapping moved them; a
 slice taken at reference points is drawn at its mapped positions with
 `physical=True`, on plain axes of equal aspect in the plane of the
-section.  The colour scale is shared by the layers (`style.colour_scale`).
+section.  The colour scale is shared by the layers (`style.colour_scale`),
+chosen with `diverging=` and `clip=` as a map's is, and `normalised=True`
+draws the slice divided by its largest absolute value.
 """
 from __future__ import annotations
 
@@ -18,8 +20,8 @@ from typing import Any
 
 import numpy as np
 
-from ..slices import SectionSlice
-from .style import BOUNDARY_STYLE, colour_scale
+from ..slices import SectionSlice, normalised as _normalised
+from .style import BOUNDARY_STYLE, colour_extend, colour_scale
 
 __all__ = ["section"]
 
@@ -36,16 +38,19 @@ def _in_plane(slice_: SectionSlice, points: np.ndarray
 def section(ax: Any, slice_: SectionSlice, *, scale: float = 1.0,
             physical: bool = False, cmap: str | None = None,
             vmin: float | None = None, vmax: float | None = None,
-            interfaces: bool = True, colorbar: bool = False,
-            **style: Any) -> list[Any]:
+            diverging: bool = False, clip: float | None = None,
+            normalised: bool = False, interfaces: bool = True,
+            colorbar: bool = False, **style: Any) -> list[Any]:
     """Draw a section on `ax` by the rules of the module docstring.
 
     `ax` is polar axes (`subplot_kw={"projection": "polar"}`), or plain
     ones for `physical=True`; radii are multiplied by `scale`; `cmap`,
-    `vmin` and `vmax` override the colour scale; `interfaces` draws the
-    faint arcs; `colorbar` adds a colour bar labelled with what the slice
-    shows; `style` goes to `pcolormesh`.  Returns the meshes drawn, one
-    per layer.
+    `vmin` and `vmax` override the colour scale, `diverging` and `clip`
+    choose it, `normalised` divides by the largest absolute value;
+    `interfaces` draws the faint arcs; `colorbar` adds a colour bar
+    labelled with what the slice shows, with arrows at the ends the
+    values run beyond; `style` goes to `pcolormesh`.  Returns the meshes
+    drawn, one per layer.
     """
     polar = getattr(ax, "name", None) == "polar"
     if physical and slice_.at == "physical":
@@ -54,9 +59,12 @@ def section(ax: Any, slice_: SectionSlice, *, scale: float = 1.0,
     if physical == polar:
         raise ValueError("a section is drawn on polar axes (subplot_kw={'projection': "
                          "'polar'}), or with physical=True on plain axes")
+    if normalised:
+        slice_ = _normalised(slice_)
     length = slice_.length
     cmap, lo, hi = colour_scale([lay.values for lay in slice_.layers], slice_.shown,
-                                cmap=cmap, vmin=vmin, vmax=vmax)
+                                cmap=cmap, vmin=vmin, vmax=vmax, diverging=diverging,
+                                clip=clip)
     meshes = []
     for lay in slice_.layers:
         if physical:
@@ -92,5 +100,7 @@ def section(ax: Any, slice_: SectionSlice, *, scale: float = 1.0,
     else:
         ax.set_aspect("equal")
     if colorbar:
-        ax.figure.colorbar(meshes[0], ax=ax, label=slice_.label)
+        ax.figure.colorbar(meshes[0], ax=ax, label=slice_.label,
+                           extend=colour_extend([lay.values for lay in slice_.layers],
+                                                lo, hi))
     return meshes

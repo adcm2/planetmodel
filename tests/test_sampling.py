@@ -172,6 +172,37 @@ def test_driscoll_healy_grid():
         driscoll_healy(-1)
 
 
+@pytest.mark.parametrize("build", [
+    lambda phi0: gauss_legendre(5, phi0=phi0),
+    lambda phi0: driscoll_healy(4, sampling=2, phi0=phi0),
+    lambda phi0: equiangular(9, 20, phi0=phi0),
+    lambda phi0: equiangular(9, 20, poles=True, phi0=phi0)])
+def test_longitudes_start_at_phi0_modulo_the_spacing(build):
+    g0 = build(0.0)
+    step = 2 * np.pi / g0.nphi
+    g = build(0.3 * step)
+    assert np.allclose(g.longitudes, g0.longitudes + 0.3 * step, rtol=0.0, atol=1e-15)
+    assert (g.kind, g.lmax) == (g0.kind, g0.lmax)
+    assert np.array_equal(g.colatitudes, g0.colatitudes)
+    assert np.array_equal(g.weights, g0.weights)
+    # Only phi0 modulo the spacing matters: a whole step, a turn, a negative start.
+    for phi0 in (1.3 * step, 0.3 * step + 2 * np.pi, 0.3 * step - 6 * np.pi):
+        assert np.allclose(build(phi0).longitudes, g.longitudes, rtol=0.0, atol=1e-13)
+    assert np.all(np.diff(g.longitudes) > 0)
+    assert 0.0 <= g.longitudes[0] and g.longitudes[-1] < 2 * np.pi
+    with pytest.raises(ValueError, match="phi0 must be finite"):
+        build(np.nan)
+
+
+def test_a_grid_of_cell_centres_is_its_shipped_kind():
+    # One-degree cells from -180, as CRUST1.0's are: equiangular midpoints
+    # with their longitudes from half a degree.
+    g = equiangular(180, 360, phi0=np.radians(-179.5))
+    assert g.kind == "equiangular" and g.lmax == 179
+    assert np.allclose(np.degrees(g.longitudes[[0, 1, -1]]), [0.5, 1.5, 359.5])
+    assert np.allclose(np.degrees(g.colatitudes[[0, -1]]), [0.5, 179.5])
+
+
 SHIPPED = [gauss_legendre(6), gauss_legendre(5, nphi=14), driscoll_healy(5),
            driscoll_healy(4, sampling=2), equiangular(9, 20), equiangular(10, 21),
            equiangular(9, 20, poles=True), equiangular(10, 21, poles=True)]

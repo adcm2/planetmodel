@@ -245,14 +245,12 @@ def test_refusals_say_what_is_wrong():
                                           poles=[1.0, 1.0])(1.0, 2.0), 1.0)
 
 
-# -- through the expansion: the harmonics extra ---------------------------------
+# -- through the expansion -------------------------------------------------------
 
-@pytest.mark.harmonics
 @pytest.mark.parametrize("grid", [gauss_legendre(12), gauss_legendre(10, nphi=24),
                                   driscoll_healy(10, sampling=2),
                                   equiangular(14, 26, poles=True)], ids=repr)
 def test_the_harmonic_rule_is_exact_on_a_band_limited_field(grid):
-    pytest.importorskip("ducc0")
     c = band16_field()[:, :grid.lmax + 1, :grid.lmax + 1]
     v = synthesise(c, grid.colatitudes[:, None], grid.longitudes[None, :])
     rng = np.random.default_rng(5)
@@ -261,9 +259,7 @@ def test_the_harmonic_rule_is_exact_on_a_band_limited_field(grid):
     assert np.allclose(got, synthesise(c, t, p), rtol=0, atol=1e-12)
 
 
-@pytest.mark.harmonics
 def test_polar_values_come_from_the_expansion():
-    pytest.importorskip("ducc0")
     g = gauss_legendre(16)
     c = band16_field()
     v = synthesise(c, g.colatitudes[:, None], g.longitudes[None, :])
@@ -307,9 +303,7 @@ def test_a_varying_pole_row_is_refused():
     assert polar_values(v, g, rtol=1e-5).shape == (2,)
 
 
-@pytest.mark.harmonics
 def test_the_harmonic_rule_checks_poles_without_using_them():
-    pytest.importorskip("ducc0")
     g = driscoll_healy(8)
     v, exact = on(g)
     with pytest.raises(ValueError, match="disagrees"):
@@ -369,9 +363,7 @@ def test_the_mean_is_the_interpolants_own(grid, method):
     assert np.allclose(stack.mean(), [f.mean(), 2 * f.mean()])
 
 
-@pytest.mark.harmonics
 def test_the_harmonic_rule_mean_is_its_degree_zero_term():
-    pytest.importorskip("ducc0")
     g = gauss_legendre(16)
     c = band16_field()
     v = synthesise(c, g.colatitudes[:, None], g.longitudes[None, :])

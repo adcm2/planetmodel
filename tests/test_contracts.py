@@ -82,3 +82,28 @@ def test_a_relief_with_a_gradient_at_the_poles_maps_smoothly_on_the_axis():
         h = layer_linear(SK, [None, rel, None, rel])
         testing.check_displacement(h, SK)
         testing.check_geometry(Geometry(SK, mapping=RadialStretch(h, rmax=1.0)))
+
+
+def test_a_bicubic_relief_of_rough_values_passes_and_a_bilinear_one_does_not():
+    """Read bicubically, a relief of rough values has a gradient at each
+    pole but no second derivative there, so a central difference at the
+    contract's step misses F by a part in 1e6; differenced again at a
+    hundredth of the step it agrees.  Read bilinearly, the relief is a
+    cone at each pole, which no step makes differentiable."""
+    from planetmodel import equiangular, layer_linear
+    from planetmodel.gridded import GriddedFunction
+
+    grid = equiangular(18, 36)
+    values = 0.1 * np.random.default_rng(1).standard_normal((18, 36))
+    poles = np.array([values[0].mean(), values[-1].mean()])
+    X = cartesian_points(np.array([0.5, 0.85])[:, None], np.array([0.0, np.pi]),
+                         0.0).reshape(-1, 3)
+    cubic = GriddedFunction(grid, values, lateral="cubic", poles=poles)
+    m = RadialStretch(layer_linear(SK, [None, None, None, cubic]), rmax=1.0)
+    testing.check_mapping(m, X)
+    with pytest.raises(AssertionError, match="central difference"):
+        testing.check_mapping(m, X, step=1e-6)
+    linear = GriddedFunction(grid, values, lateral="linear", poles=poles)
+    m = RadialStretch(layer_linear(SK, [None, None, None, linear]), rmax=1.0)
+    with pytest.raises(AssertionError, match="central difference"):
+        testing.check_mapping(m, X)

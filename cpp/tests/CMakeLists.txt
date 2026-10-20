@@ -24,9 +24,6 @@ add_executable(planetmodel_tests
   test_units.cpp)
 target_link_libraries(planetmodel_tests PRIVATE planetmodel::planetmodel
                       GTest::gtest_main)
-# The model files the writer's tests write, for the Python to read back
-# (tests/test_cpp_written.py, with PLANETMODEL_CPP_WRITTEN naming it).
-set(PLANETMODEL_WRITTEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/written")
 target_compile_definitions(planetmodel_tests PRIVATE
   "PLANETMODEL_FIXTURES_DIR=\"${PLANETMODEL_FIXTURES_DIR}\""
   "PLANETMODEL_WRITTEN_DIR=\"${PLANETMODEL_WRITTEN_DIR}\"")

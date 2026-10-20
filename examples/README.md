@@ -1,5 +1,37 @@
 # Examples
 
+Two kinds of material, after MFEM's: **examples**, small scripts that
+each show one idea in under a hundred lines or so, grouped by area
+(`conversion/`, more areas to come as the tutorials are split), and
+**mini-apps** (`miniapps/`), medium-sized programs that use several
+parts of the library together on a real problem, each in a directory
+with its README. Each starts with a header naming what it needs:
+
+```
+# Needs: plot, maps
+# Network: first run (S20RTS, 0.1 MB)
+# Run: poetry run python examples/conversion/03_sl3d_chain.py
+```
+
+`Needs` lists the extras, `Network` whether it fetches a data set, `Run`
+how to run it; `tests/test_examples.py` reads these lines to choose
+each one's markers, so the test suite runs every example it can.
+
+| example | what it shows |
+|---|---|
+| `conversion/01_velocity_to_temperature.py` | a shear-speed anomaly on PREM as a temperature anomaly, by a sensitivity and through density as sl3d does, with sl3d's parameter profiles (`plot`) |
+| `conversion/02_temperature_to_viscosity.py` | the exponential law's viscosity, sl3d's eps against Milne et al.'s, and Latychev et al.'s renormalisation (`plot`) |
+| `conversion/03_sl3d_chain.py` | sl3d's chain on S20RTS, maps at three depths, and what the model cites (`maps`, network) |
+| `conversion/04_prony_branches.py` | Maxwell, Burgers and a fitted Andrade body as Prony branches, their moduli and losses, and a Burgers mantle frozen at a 100-year period (`plot`) |
+| `conversion/05_temperature_from_a_table.py` | a table of Vs against temperature and pressure, written and read, inverted for temperature, and a temperature anomaly from it on PREM (`plot`, `netcdf`) |
+| `conversion/06_lithosphere_base.py` | the base of the lithosphere at a viscosity and at a Maxwell time, as geometry (an interface moved onto it) and as a lid, mapped (`maps`) |
+| `conversion/07_published_viscosity.py` | Lloyd et al.'s viscosity from GLAD-M25, fetched, put on PREM's mantle and mapped at three depths (`netcdf`, `maps`, network) |
+| `conversion/08_power_law.py` | power-law creep's stress exponent and transition stress on a model, and AdGIA's gamma from them |
+
+| mini-app | what it does |
+|---|---|
+| `miniapps/viscosity3d/` | S40RTS (or a published viscosity model) to a 3D viscosity model file for a GIA code: a radial viscosity with an elastic lid, sl3d's chain or Milne's eps, optionally renormalised, a thicker lid where the viscosity stays high, power-law creep or a Burgers body, written, read back, read by the C++ example reader, drawn (`netcdf`, `maps`, network) |
+
 `tutorials/` walks through the ideas of the library in order, one script
 per idea. Each is a plain Python file with `# %%` cell markers, so it runs
 as a script from any directory and cell by cell in an editor. Every
@@ -20,7 +52,9 @@ tutorial keeps go under `figures/`, which is gitignored.
 | `10_random_fields.py` | Matern random fields of radius, on the layers of PREM as a density perturbation, and on a shell as a field with a map and a slice, a figure |
 | `11_models_from_decks.py` | PREM's mineos deck as a model against the polynomial PREM, the shipped GIA deck format and a model type for it with a viscosity column, a figure |
 | `12_a_laterally_varying_model.py` | PREM with a harmonic perturbation of the shear velocity and a log perturbation of a viscosity, written to a model file, read back and compared, and drawn as maps at one depth (needs the `netcdf` and `maps` extras), a figure |
-| `13_pictures.py` | pictures of a perturbed PREM: slices and maps at one depth, a side taken at an interface, cross-sections as wedges and a disc, the body drawn flattened, profiles, spectra, a comparison of two models by degree and depth, and files for ParaView with first steps in it (needs the `maps` and `harmonics` extras), figures |
+| `13_pictures.py` | pictures of a perturbed PREM: slices and maps at one depth, a side taken at an interface, cross-sections as wedges and a disc, the body drawn flattened, profiles, spectra, a comparison of two models by degree and depth, and files for ParaView with first steps in it (needs the `maps` extra), figures |
+| `14_published_models.py` | published models from the registry: S40RTS read as the model it is and drawn, put onto PREM and filtered, S362ANI+M given as velocities and put onto PREM through its own reference, the two compared, a regional model of the North Atlantic merged in, ANT-20 (Antarctica, on a polar stereographic map) merged in and drawn at 100 km with West Antarctica slow and East Antarctica fast, CRUST1.0 put on PREM as geometry (the Moho's shift, a section across the Andes as the body is), LITHO1.0's lithosphere base, what the model cites, the result written to a model file, a model of the Moon (needs the network the first time, and the `netcdf` and `maps` extras), figures |
+| `15_kernels.py` | a sensitivity kernel as a code writes it (the file `cpp/examples/write_kernel.cpp` writes, here written by the Python, or read from the C++ example's output given its path): maps at depths on a scale centred on zero and clipped at a percentile, a section, profiles and the one-dimensional kernel, the column integral, spectra, a kernel on an interface, and files for ParaView (needs the `netcdf` and `maps` extras), figures |
 
 ```
 poetry run python examples/tutorials/01_skeleton_and_geometry.py

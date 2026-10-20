@@ -45,16 +45,13 @@ def nodes_of(g):
             g.grid.longitudes[None, None, None, :])
 
 
-LATERAL = ["linear", "cubic",
-           pytest.param("harmonic", marks=pytest.mark.harmonics)]
+LATERAL = ["linear", "cubic", "harmonic"]
 
 
 @pytest.mark.parametrize("radial", ["polynomial", "linear"])
 @pytest.mark.parametrize("lateral", LATERAL)
 @pytest.mark.parametrize("char", [SCALAR, VECTOR, STRESS, ELASTIC], ids=str)
 def test_the_field_contract_for_every_rank_and_rule(char, lateral, radial):
-    if lateral == "harmonic":
-        pytest.importorskip("ducc0")
     src = smooth_for(char)
     g = GriddedField.sampled(src, gauss_legendre(10), breaks=[0.5, 0.75, 1.0],
                              ngll=4, radial=radial, lateral=lateral)
@@ -231,9 +228,7 @@ def test_a_gridded_function_is_a_relief_whose_geometry_holds(grid):
     assert abs(gf.mean()) < 1e-5                   # bump has no degree-zero term
 
 
-@pytest.mark.harmonics
 def test_a_harmonic_relief_gives_a_geometry_that_holds():
-    pytest.importorskip("ducc0")
     gf = GriddedFunction.sampled(bump, gauss_legendre(8), lateral="harmonic")
     sk = Skeleton([0.0, 0.5, 1.0])
     h = layer_linear(sk, [None, gf, gf])
@@ -241,12 +236,8 @@ def test_a_harmonic_relief_gives_a_geometry_that_holds():
     check_geometry(Geometry(sk, mapping=RadialStretch(h, rmax=1.0)))
 
 
-@pytest.mark.parametrize("lateral", ["linear", "cubic",
-                                     pytest.param("harmonic",
-                                                  marks=pytest.mark.harmonics)])
+@pytest.mark.parametrize("lateral", ["linear", "cubic", "harmonic"])
 def test_the_angular_gradient_is_the_rule_differentiated(lateral):
-    if lateral == "harmonic":
-        pytest.importorskip("ducc0")
     gf = GriddedFunction.sampled(bump, gauss_legendre(32), lateral=lateral)
     rng = np.random.default_rng(5)
     t, p = rng.uniform(0.2, 2.9, 100), rng.uniform(0, 2 * np.pi, 100)

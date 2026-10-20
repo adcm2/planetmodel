@@ -44,7 +44,7 @@ artificial boundary, or explicitly.
 orthonormal harmonics of `planetmodel.harmonics`, with a trailing radial
 axis over the physical nodes `r`; `to_field` wraps one as a
 `HarmonicField` on the shell, and `sample_grid` synthesises one on a
-grid of a shipped kind through ducc0 (the `harmonics` extra).
+grid of a shipped kind through ducc0's grid transforms.
 `LayeredGRF` draws an independent `RadialGRF` on each chosen layer of a
 skeleton and returns one `RadialField` per layer.  All fields are real
 and zero-mean.
@@ -355,7 +355,7 @@ class SphericalGRF:
     def sample_grid(self, grid: AngularGrid, *, rng: Any = None) -> np.ndarray:
         """One sample synthesised on a grid of a shipped kind and band at
         least `lmax`: values of shape (r.size, ntheta, nphi), the layout
-        of a sample.  Through `synthesise_grid`, so it needs ducc0."""
+        of a sample, through `synthesise_grid`."""
         return synthesise_grid(self.sample(rng=rng), grid)
 
     def variance(self) -> np.ndarray:

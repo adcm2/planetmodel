@@ -9,12 +9,14 @@ imports of the rest of the package happen inside the functions.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import ArrayLike
 
 if TYPE_CHECKING:
+    from .datasets import Dataset, RegionalGrid, Strata, Surface
     from .displacement import RadialDisplacement
     from .fields import Field
     from .geometry import Geometry
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from .mapping import Mapping
     from .mesh3d.spec import Refinement
     from .model import Model
+    from .modelfile import Surfaces
     from .randomfield.basis import SpectralBasis, SphericalBasis
     from .sampling import Sample
     from .skeleton import Skeleton
@@ -29,7 +32,8 @@ if TYPE_CHECKING:
 __all__ = ["check_displacement", "check_mapping", "check_geometry",
            "check_layer_function", "check_field", "check_model",
            "check_refinement", "check_sample", "check_spectral_basis",
-           "check_spherical_basis", "check_model_file"]
+           "check_spherical_basis", "check_model_file", "check_dataset",
+           "check_surface", "check_strata", "check_regional"]
 
 
 def _rel(a: ArrayLike, b: ArrayLike, *, rtol: float, floor: float = 1.0) -> bool:
@@ -161,7 +165,11 @@ def check_mapping(m: Mapping, points: ArrayLike, *, rtol: float = 1e-6,
     det F; and, when present, `displacement` against m(X) - X,
     `inverse` as a round trip, and `scaled(k)` against k m(X / k) with
     the same F and J.  The difference step is 1e-6 of each
-    point's radius unless `step` gives one step for every point.
+    point's radius unless `step` gives one step for every point; with the
+    default, a point that disagrees is differenced again at a hundredth
+    of its step, since a mapping once but not twice differentiable there
+    (a bicubic relief at a pole) has a difference converging only
+    linearly in the step.
     """
     X = np.asarray(points, dtype=float)
     assert X.shape[-1] == 3, "points must have shape (..., 3)"
@@ -180,12 +188,23 @@ def check_mapping(m: Mapping, points: ArrayLike, *, rtol: float = 1e-6,
         # depends on direction at the origin is smooth on every ray, and a
         # step much smaller than the radius stays on that ray
         hs = 1e-6 * np.maximum(np.linalg.norm(X, axis=-1), 1e-12 * scale)
-    Fd = np.empty_like(F)
-    for j in range(3):
-        e = np.zeros_like(X)
-        e[..., j] = hs
-        Fd[..., :, j] = (np.asarray(m(X + e), dtype=float)
-                         - np.asarray(m(X - e), dtype=float)) / (2.0 * hs[..., None])
+
+    def central(X: np.ndarray, hs: np.ndarray) -> np.ndarray:
+        Fd = np.empty(X.shape + (3,))
+        for j in range(3):
+            e = np.zeros_like(X)
+            e[..., j] = hs
+            Fd[..., :, j] = ((np.asarray(m(X + e), dtype=float)
+                              - np.asarray(m(X - e), dtype=float))
+                             / (2.0 * hs[..., None]))
+        return Fd
+
+    Fd = central(X, hs)
+    off = ~np.all(np.abs(F - Fd) <= rtol * np.maximum(1.0, np.abs(Fd)), axis=(-2, -1))
+    if step is None and np.any(off):
+        # once but not twice differentiable at a point (a bicubic relief at
+        # a pole): the difference converges there only linearly in the step
+        Fd[off] = central(X[off], hs[off] / 100.0)
     assert _rel(F, Fd, rtol=rtol), (
         "deformation_gradient disagrees with a central difference of m")
 
@@ -495,8 +514,8 @@ def check_refinement(refinement: Refinement, points: ArrayLike) -> None:
 def check_model(model: Model, *, rng: np.random.Generator | None = None) -> None:
     """Hold a Model to its invariants.
 
-    Checks that `replaced` with checks on accepts it and keeps its class
-    and fields; that every
+    Checks that `replaced` with checks on accepts it and keeps its class,
+    fields and citation, which `cite` gives a work a line; that every
     layer's fields pass `check_field`, sit on the layer's interval, and
     have their spec's character; that `layer(name)` and `layer(i)`
     agree; that every constant is its SI value over the scales' factor;
@@ -511,6 +530,11 @@ def check_model(model: Model, *, rng: np.random.Generator | None = None) -> None
     cls = type(model)
     again = model.replaced(check=True)
     assert type(again) is cls, "replaced does not keep the class"
+    assert again.citation == model.citation, "replaced does not keep the citation"
+    assert all(isinstance(w, str) and w and "\n" not in w for w in model.citation), (
+        "a work cited is not one line of text")
+    assert model.cite().splitlines() == list(model.citation), (
+        "cite does not give the citation a work a line")
     for a, b in zip(again.layers, model.layers):
         assert a.fields == b.fields, "replaced changes the fields"
     rtol = model.geometry.rtol
@@ -933,12 +957,13 @@ def check_spherical_basis(basis: SphericalBasis, *,
 
 
 def check_model_file(path: str | os.PathLike[str], model: Model, *,
+                     surfaces: Surfaces | None = None,
                      rng: np.random.Generator | None = None, n: int = 48,
                      rtol: float = 1e-12) -> None:
     """Hold a model file to the model it was written from.
 
     Checks the structure (`validate_structure`); the skeleton, the layer
-    and interface names and the scales; that every variable is held on
+    and interface names, the scales and the citation; that every variable is held on
     the layers its `layers` attribute names, NaN elsewhere, by fields of
     the model of the stated character; that a lateral variable names in
     `radial_layers` exactly the layers where the model's field is radial,
@@ -949,11 +974,16 @@ def check_model_file(path: str | os.PathLike[str], model: Model, *,
     reliefs at its nodes, and a displacement variable the mapping's
     displacement; and that the model read back from the file takes the
     stored values at those nodes, for every variable read by a local
-    rule.  Tolerances are `rtol` of a variable's largest value.  netCDF4
-    is imported here.
+    rule.  Given the `surfaces` the file was written with, that its
+    surfaces group holds exactly those names on exactly those
+    interfaces, NaN on the others, their values at its nodes and poles,
+    and that `read_surfaces` gives functions taking the stored values at
+    the nodes, for a local rule.  Tolerances are `rtol` of a variable's
+    largest value.  netCDF4 is imported here.
     """
     from .frames import cartesian_points, spherical_frame
-    from .modelfile import read_model, read_model_file, validate_structure
+    from .modelfile import (read_model, read_model_file, read_surfaces,
+                            validate_structure)
 
     rng = np.random.default_rng(0) if rng is None else rng
     validate_structure(path)
@@ -966,6 +996,7 @@ def check_model_file(path: str | os.PathLike[str], model: Model, *,
         "the file's interface names are not the model's")
     assert data.scales == model.scales, (
         f"the file is in {data.scales!r}, the model in {model.scales!r}")
+    assert data.citation == model.citation, "the file does not cite what the model does"
     assert data.rtol == model.geometry.rtol, (
         f"the file states rtol {data.rtol!r}, the model's geometry has "
         f"{model.geometry.rtol!r}")
@@ -1069,3 +1100,242 @@ def check_model_file(path: str | os.PathLike[str], model: Model, *,
             want = np.broadcast_to(h(np.full(theta.shape, radius), theta, phi),
                                    g.values[j].shape)
             stored_against(g.values[j], want, f"geometry/boundary_displacement[{j}]")
+    if surfaces is None:
+        return
+    held = data.surfaces
+    assert held is not None, "the file has no surfaces group"
+    given = {name: {model.geometry.interface(w).index: fn for w, fn in on.items()}
+             for name, on in surfaces.items()}
+    names = {name for name in held.variables if not name.endswith("_poles")}
+    assert names == set(given), (
+        f"the surfaces group holds {sorted(names)}, written with {sorted(given)}")
+    faces = sorted({k for on in given.values() for k in on})
+    assert list(held.interfaces) == faces, (
+        f"the surfaces are interfaces {list(held.interfaces)}, the functions are on "
+        f"{faces}")
+    read = read_surfaces(path)
+    theta, phi = held.grid.colatitudes[:, None], held.grid.longitudes[None, :]
+    ends = (np.array([0.0, np.pi]), np.zeros(2))
+    for name, on in given.items():
+        var, poles = held.variables[name], held.variables.get(f"{name}_poles")
+        listed = {int(k) for k in np.atleast_1d(var.attributes["interfaces"])}
+        assert listed == set(on), (
+            f"surfaces/{name} names interfaces {sorted(listed)}, held on {sorted(on)}")
+        for row, k in enumerate(held.interfaces):
+            where = f"surfaces/{name} on interface {k}"
+            if k not in on:
+                assert np.all(np.isnan(var.values[row])) and (
+                    poles is None or np.all(np.isnan(poles.values[row]))), (
+                    f"{where} is not NaN, and the interface lacks it")
+                continue
+            values = var.values[row]
+            want = np.broadcast_to(np.asarray(on[k](theta, phi), dtype=float),
+                                   values.shape)
+            stored_against(values, want, where)
+            if poles is not None:
+                stored_against(poles.values[row],
+                               np.broadcast_to(np.asarray(on[k](*ends), dtype=float),
+                                               (2,)), f"{where}, its poles")
+            if var.attributes["lateral_interpolation"] != "harmonic":
+                key = data.interface_names[k]
+                fn = read[name][k if key is None else key]
+                stored_against(values, fn(theta, phi), f"{where} read back")
+
+
+def check_dataset(dataset: Dataset, *,
+                  paths: Iterable[str | os.PathLike[str]] | None = None,
+                  options: Mapping[str, Any] | None = None) -> None:
+    """Hold a data set's entry, and the object its reader makes, to their
+    protocols.
+
+    Checks that the entry's sources would be cached under distinct names
+    and its reader has `read`; that `describe` and `cite` name it and its
+    works; and, given the `paths` `fetch` gave, that there is one for each
+    file and member in the sources' order, each a file, a plain source's
+    with the entry's sha256, and that the reader reads them, with
+    `options`, into an object that holds to its own protocol: a `Model`
+    to `check_model`, a `RegionalGrid` to `check_regional`, a `Surface`
+    to `check_surface`,
+    `Strata` to `check_strata`.
+    Nothing here touches the network.
+    """
+    from pathlib import Path
+
+    from .datasets import RegionalGrid, Strata, Surface, cite, describe, sha256_of
+    from .model import Model
+
+    names = [s.name for s in dataset.sources]
+    assert len(set(names)) == len(names), f"{dataset.name}: sources share a name"
+    assert callable(getattr(dataset.reader, "read", None)), (
+        f"{dataset.name}: the reader has no read method")
+    text = describe(dataset)
+    assert dataset.name in text and dataset.licence in text, (
+        f"{dataset.name}: describe does not name the data set and its licence")
+    assert cite(dataset).splitlines() == list(dataset.citation), (
+        f"{dataset.name}: cite does not give the entry's citation a work a line")
+    if paths is None:
+        return
+    paths = tuple(os.fspath(p) for p in paths)
+    want = sum(1 if s.members is None else len(s.members) for s in dataset.sources)
+    assert len(paths) == want, (
+        f"{dataset.name}: {len(paths)} paths for {want} files and members")
+    i = 0
+    for source in dataset.sources:
+        count = 1 if source.members is None else len(source.members)
+        for p in paths[i:i + count]:
+            assert os.path.isfile(p), f"{dataset.name}: {p} is not a file"
+        if source.members is None:
+            assert sha256_of(paths[i]) == source.sha256, (
+                f"{dataset.name}: {paths[i]} does not have the entry's sha256")
+        i += count
+    product = dataset.reader.read(tuple(Path(p) for p in paths), dataset,
+                                  **dict(options or {}))
+    assert product is not None, f"{dataset.name}: the reader gave nothing"
+    held = getattr(product, "citation", None)
+    assert held is not None and set(dataset.citation) <= set(held), (
+        f"{dataset.name}: what the reader gives does not cite the entry")
+    assert product.cite().splitlines() == list(held), (
+        f"{dataset.name}: what the reader gives does not cite a work a line")
+    if isinstance(product, Model):
+        check_model(product)
+    if isinstance(product, Surface):
+        check_surface(product)
+    if isinstance(product, Strata):
+        check_strata(product)
+    if isinstance(product, RegionalGrid):
+        check_regional(product)
+
+
+def check_surface(surface: Surface, *, rng: np.random.Generator | None = None,
+                  n: int = 64) -> None:
+    """Hold a `datasets.Surface` to its protocol at `n` random points: its
+    values finite and of the points' shape; its radius its values, or its
+    datum's radius plus an elevation or less a depth or a thickness, and
+    positive, or refused by name where it has no datum; held on a grid,
+    the same values at the grid's nodes; and its mean, where its function
+    has one of its own and a band, the mean of its values by quadrature
+    on a grid of that band (at most 512)."""
+    from .datasets import Surface
+    from .sampling import gauss_legendre
+
+    rng = np.random.default_rng(0) if rng is None else rng
+    theta = np.arccos(rng.uniform(-1.0, 1.0, n))
+    phi = rng.uniform(0.0, 2.0 * np.pi, n)
+    values = surface(theta, phi)
+    assert values.shape == theta.shape and np.all(np.isfinite(values)), (
+        f"{surface!r}: its values are not finite numbers of the points' shape")
+    if surface.measures != "radius" and surface.datum is None:
+        try:
+            surface.radius(theta, phi)
+        except ValueError as error:
+            assert "with_datum" in str(error), f"{surface!r}: {error}"
+        else:
+            raise AssertionError(f"{surface!r} gives a radius without its datum")
+    else:
+        radius = surface.radius(theta, phi)
+        if surface.measures == "radius":
+            want = values
+        else:
+            base = (surface.datum.radius(theta, phi)
+                    if isinstance(surface.datum, Surface) else surface.datum)
+            want = base + values if surface.measures == "elevation" else base - values
+        assert np.allclose(radius, want, rtol=1e-12, atol=0), (
+            f"{surface!r}: its radius is not its datum and values by its measure")
+        assert np.all(radius > 0.0), f"{surface!r}: a radius that is not positive"
+    band = getattr(surface.function, "lmax", None)
+    grid = gauss_legendre(32 if band is None else min(int(band), 512))
+    held = surface.sampled(grid, lateral="linear")
+    t, p = grid.colatitudes[:, None], grid.longitudes[None, :]
+    on = surface(t, p)
+    scale = max(float(np.max(np.abs(on))), 1e-300)
+    assert np.allclose(held(t, p), on, rtol=0, atol=1e-9 * scale), (
+        f"{surface!r}: held on a grid, it does not keep its values at the nodes")
+    if (getattr(surface.function, "mean", None) is not None and band is not None
+            and int(band) <= 512):
+        quadrature = float(grid.mean(on))
+        assert np.isclose(surface.mean(), quadrature, rtol=0, atol=1e-9 * scale), (
+            f"{surface!r}: its mean {surface.mean()} is not its values' "
+            f"{quadrature}")
+
+
+def check_strata(strata: Strata, *, rng: np.random.Generator | None = None,
+                 n: int = 64) -> None:
+    """Hold `datasets.Strata` to their protocol at `n` random points: each
+    stratum's bottom the next one's top; every surface to `check_surface`;
+    no stratum of negative thickness (beyond a part in 1e9 of the radius);
+    every property, and those below, finite, and read by `value` at the
+    top and the bottom of each stratum as its two ends, and between them
+    between those ends."""
+    rng = np.random.default_rng(0) if rng is None else rng
+    for upper, lower in zip(strata.strata[:-1], strata.strata[1:]):
+        assert upper.bottom is lower.top, (
+            f"{strata!r}: {upper.name}'s bottom is not {lower.name}'s top")
+    for surface in strata.surfaces:
+        check_surface(surface, rng=rng, n=n)
+    theta = np.arccos(rng.uniform(-1.0, 1.0, n))
+    phi = rng.uniform(0.0, 2.0 * np.pi, n)
+    for s in strata:
+        top, bottom = s.top.radius(theta, phi), s.bottom.radius(theta, phi)
+        assert np.all(top - bottom >= -1e-9 * np.abs(top)), (
+            f"{strata!r}: {s.name} is of negative thickness somewhere")
+        for name, (at_top, at_bottom) in s.properties.items():
+            a = np.asarray(at_top(theta, phi), dtype=float)
+            b = np.asarray(at_bottom(theta, phi), dtype=float)
+            assert np.all(np.isfinite(a)) and np.all(np.isfinite(b)), (
+                f"{strata!r}: {s.name}'s {name} is not finite")
+            scale = max(float(np.max(np.abs(np.concatenate([a, b])))), 1e-300)
+            assert np.allclose(s.value(name, top, theta, phi), a, rtol=0,
+                               atol=1e-12 * scale), (
+                f"{strata!r}: {s.name}'s {name} at its top is not its top value")
+            thick = top - bottom > 0.0
+            assert np.allclose(s.value(name, bottom, theta, phi)[thick], b[thick],
+                               rtol=0, atol=1e-12 * scale), (
+                f"{strata!r}: {s.name}'s {name} at its bottom is not its bottom "
+                "value")
+            mid = s.value(name, 0.5 * (top + bottom), theta, phi)
+            lo, hi = np.minimum(a, b), np.maximum(a, b)
+            assert np.all((mid >= lo - 1e-12 * scale) & (mid <= hi + 1e-12 * scale)), (
+                f"{strata!r}: {s.name}'s {name} leaves its ends between them")
+    for name, fn in strata.below.items():
+        assert np.all(np.isfinite(np.asarray(fn(theta, phi), dtype=float))), (
+            f"{strata!r}: the {name} beneath is not finite")
+
+
+def check_regional(regional: RegionalGrid, *, rng: np.random.Generator | None = None,
+                   n: int = 400) -> None:
+    """Hold a `datasets.RegionalGrid` to its protocol: at `n` random points
+    and the centre of its box, its values of the points' shape and NaN
+    outside its region; its edge distance zero outside, positive inside;
+    its own coordinates of the box's centre inside its box; and a value
+    at that centre, half way down its radii, for some name."""
+    from .datasets import RegionalGrid
+
+    assert isinstance(regional, RegionalGrid)
+    rng = np.random.default_rng(0) if rng is None else rng
+    (r0, r1), (a0, a1), (b0, b1) = regional.extent
+    assert r0 < r1 and a0 < a1 and b0 < b1, f"{regional!r}: an empty box"
+    a, b = 0.5 * (a0 + a1), 0.5 * (b0 + b1)
+    if regional.projection is None:
+        centre = (np.array([a]), np.array([b]))
+    else:
+        centre = regional.projection.to_angles(np.array([b]), np.array([a]))
+    back = regional.coordinates(*centre)
+    assert np.allclose([back[0][0], back[1][0]], [a, b], rtol=1e-9,
+                       atol=1e-9 * max(abs(a1 - a0), abs(b1 - b0))), (
+        f"{regional!r}: its coordinates of its box's centre are not the centre")
+    theta = np.concatenate([np.arccos(rng.uniform(-1.0, 1.0, n)), centre[0]])
+    phi = np.concatenate([rng.uniform(0.0, 2.0 * np.pi, n), centre[1]])
+    inside = regional.contains(theta, phi)
+    d = regional.edge_distance(theta, phi)
+    assert d.shape == theta.shape and np.all(d[~inside] == 0.0), (
+        f"{regional!r}: an edge distance outside its region")
+    assert np.all(d[inside] >= 0.0), f"{regional!r}: a negative edge distance"
+    r = 0.5 * (r0 + r1)
+    held = False
+    for name in regional.names:
+        v = regional(name, r, theta, phi)
+        assert v.shape == theta.shape, f"{regional!r}: {name} of the wrong shape"
+        assert np.all(np.isnan(v[~inside])), (
+            f"{regional!r}: {name} has values outside its region")
+        held = held or bool(np.isfinite(v[-1]))
+    assert held, f"{regional!r}: nothing at its centre half way down"

@@ -6,7 +6,7 @@ Install the package with its development dependencies and the extras you
 have the libraries for, then install the git hooks:
 
 ```bash
-poetry install --with dev --extras "plot harmonics"        # the fast suite
+poetry install --with dev --extras "plot netcdf maps"     # the fast suite
 poetry install --with dev --all-extras                     # with gmsh and PyMFEM
 poetry run pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
@@ -37,9 +37,9 @@ poetry run pytest -m ""                  # everything
 ```
 
 The default run is `-m "not gmsh and not mfem and not slow"`, set in
-`pyproject.toml`: it needs numpy and scipy, and uses the `plot` and
-`harmonics` extras where installed (the tests that need them skip
-otherwise). The `gmsh` and `mfem` tests need the `meshing` and `mfem`
+`pyproject.toml`: it needs the dependencies (numpy, scipy and ducc0),
+and uses the `plot`, `netcdf` and `maps` extras where installed (the
+tests that need them skip otherwise). The `gmsh` and `mfem` tests need the `meshing` and `mfem`
 extras and are CI's `meshing` job, on Linux; `full-tests` runs everything
 on demand from the Actions tab (Actions -> CI -> Run workflow), and is
 worth running before a release.

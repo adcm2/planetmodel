@@ -1,14 +1,38 @@
-"""The grid transforms of `planetmodel.harmonics` against the scipy basis."""
+"""The transforms of `planetmodel.harmonics`, all through ducc0, against
+scipy's complex harmonics, the independent statement of the basis (to
+the degree at which scipy's overflow), and against one another above it."""
 import numpy as np
 import pytest
+from scipy.special import sph_harm_y_all
 
 from planetmodel import (AngularGrid, driscoll_healy, equiangular, gauss_legendre,
                          real_harmonics, synthesise)
-from planetmodel.harmonics import analyse_grid, synthesise_grid, synthesise_points
+from planetmodel.frames import wrapped
+from planetmodel.harmonics import (analyse_grid, synthesise_gradient, synthesise_grid)
 from planetmodel.randomfield import SphericalGRF
 
-pytestmark = pytest.mark.harmonics
-pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
+
+def scipy_basis(L, theta, phi, *, gradient=False):
+    """The real orthonormal basis, or its (d/dtheta, d/dphi), from scipy's
+    complex harmonics: the Condon-Shortley phase removed, sqrt 2 on the
+    orders above zero."""
+    theta, phi = np.broadcast_arrays(np.asarray(theta, float), np.asarray(phi, float))
+    m = np.arange(L + 1).reshape((1, -1) + (1,) * theta.ndim)
+    sign = (-1.0) ** m
+    if gradient:
+        _, dY = sph_harm_y_all(L, L, theta, wrapped(phi), diff_n=1)
+        parts = [sign * dY[:, :L + 1, ..., 0], sign * dY[:, :L + 1, ..., 1]]
+    else:
+        parts = [sign * sph_harm_y_all(L, L, theta, wrapped(phi))[:, :L + 1]]
+    keep = (np.arange(L + 1)[None, :] <= np.arange(L + 1)[:, None]).reshape(
+        (L + 1, L + 1) + (1,) * theta.ndim)
+    root2 = np.where(m == 0, 1.0, np.sqrt(2.0))
+    out = [np.stack([root2 * y.real * keep, np.sqrt(2.0) * y.imag * keep])
+           for y in parts]
+    for o in out:
+        o[1][:, 0] = 0.0
+    return out if gradient else out[0]
+
 
 
 def random_coefficients(L, rng, *extra):
@@ -20,17 +44,12 @@ def random_coefficients(L, rng, *extra):
     return c
 
 
-def shifted(g, phi0):
-    """The grid g with its longitudes starting at phi0 instead of zero."""
-    return AngularGrid(g.colatitudes, g.longitudes + phi0, kind=g.kind, lmax=g.lmax,
-                       weights=g.weights)
-
-
 EVERY_KIND = [gauss_legendre(7), gauss_legendre(6, nphi=18),
-              shifted(gauss_legendre(5), 0.4), driscoll_healy(6),
-              driscoll_healy(5, sampling=2), equiangular(9, 20),
-              equiangular(9, 20, poles=True), shifted(equiangular(12, 24), 0.1),
-              equiangular(30, 13)]
+              gauss_legendre(5, phi0=0.4), driscoll_healy(6),
+              driscoll_healy(5, sampling=2), driscoll_healy(4, phi0=-2.0),
+              equiangular(9, 20), equiangular(9, 20, poles=True),
+              equiangular(12, 24, phi0=0.1), equiangular(30, 13),
+              equiangular(18, 36, phi0=np.radians(-175.0))]
 
 
 @pytest.mark.parametrize("grid", EVERY_KIND, ids=repr)
@@ -63,19 +82,59 @@ def test_the_weights_are_ducc0s():
         assert np.allclose(grid.weights, want, rtol=0.0, atol=1e-15), rings
 
 
-def test_synthesis_at_points_agrees_with_the_basis():
+def test_the_basis_is_scipy_s():
+    rng = np.random.default_rng(3)
+    for L in (0, 1, 12, 200):
+        t = np.concatenate([[0.0, np.pi, 0.5 * np.pi], rng.uniform(0, np.pi, 20)])
+        p = rng.uniform(-9, 9, t.size)
+        got, want = real_harmonics(L, t, p), scipy_basis(L, t, p)
+        assert got.shape == (2, L + 1, L + 1, t.size)
+        assert np.allclose(got, want, rtol=0, atol=1e-12 * max(1.0, np.abs(want).max()))
+    grid = gauss_legendre(6)          # the points of a grid: a ring a colatitude
+    t, p = grid.colatitudes[:, None], grid.longitudes[None, :]
+    assert np.allclose(real_harmonics(6, t, p), scipy_basis(6, t, p), atol=1e-13)
+    with pytest.raises(ValueError, match=r"\[0, pi\]"):
+        real_harmonics(3, 3.5, 0.0)
+
+
+def test_synthesis_and_its_gradient_at_points_are_scipy_s():
     L = 12
     rng = np.random.default_rng(4)
     c = random_coefficients(L, rng, 3)
     t, p = rng.uniform(0, np.pi, (5, 7)), rng.uniform(-9, 9, (5, 7))
-    got = synthesise_points(c, t, p)
+    got = synthesise(c, t, p)
     assert got.shape == (3, 5, 7)
-    want = np.einsum("slmk,slm...->k...", c, real_harmonics(L, t, p))
+    want = np.einsum("slmk,slm...->k...", c, scipy_basis(L, t, p))
     assert np.allclose(got, want, rtol=0, atol=1e-12)
-    assert synthesise_points(c[..., 0], np.array([0.0, np.pi]), 0.0).shape == (2,)
-    assert synthesise_points(c, np.zeros(0), np.zeros(0)).shape == (3, 0)
+    dt, dp = synthesise_gradient(c[..., 0], t, p)
+    bt, bp = scipy_basis(L, t, p, gradient=True)
+    assert np.allclose(dt, np.einsum("slm,slm...->...", c[..., 0], bt), atol=1e-11)
+    assert np.allclose(dp, np.einsum("slm,slm...->...", c[..., 0], bp), atol=1e-11)
+    assert synthesise(c[..., 0], np.array([0.0, np.pi]), 0.0).shape == (2,)
+    assert synthesise(c, np.zeros(0), np.zeros(0)).shape == (3, 0)
     with pytest.raises(ValueError, match=r"\[0, pi\]"):
-        synthesise_points(c, 3.5, 0.0)
+        synthesise(c, 3.5, 0.0)
+
+
+def test_above_scipy_s_degrees_the_routes_agree_and_the_poles_are_zonal():
+    """scipy's harmonics overflow from degree 646; ducc0's do not. Its
+    synthesis at points and its basis, two routes through its transforms,
+    agree; at the poles only the zonal harmonics are not zero."""
+    L = 800
+    rng = np.random.default_rng(5)
+    c = random_coefficients(L, rng)
+    t = np.array([0.0, 0.3, 1.9, np.pi])
+    p = np.array([0.0, 5.0, 2.2, 0.0])
+    B = real_harmonics(L, t, p)
+    assert np.all(np.isfinite(B))
+    via_basis = np.einsum("slm,slmp->p", c, B)
+    scale = np.abs(via_basis).max()
+    assert np.allclose(synthesise(c, t, p), via_basis, rtol=0, atol=1e-12 * scale)
+    l = np.arange(L + 1)
+    zonal = np.sqrt((2 * l + 1) / (4 * np.pi))
+    assert np.allclose(B[0, :, 0, 0], zonal, rtol=1e-13)
+    assert np.allclose(B[0, :, 0, 3], zonal * (-1.0) ** l, rtol=1e-13)
+    assert np.abs(B[:, :, 1:, [0, 3]]).max() < 1e-10     # sin(pi) is not 0
 
 
 def test_extra_axes_and_a_wider_grid():

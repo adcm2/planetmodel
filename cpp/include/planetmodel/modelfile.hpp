@@ -18,7 +18,10 @@
  * and above interpolated in Cartesian components; a reference with a
  * perturbation by the perturbation's kind.  `ModelFile::Mapping()` gives
  * the mapping, from the boundary displacements of the `geometry` group or
- * from the `displacement` field.
+ * from the `displacement` field.  `ModelFile::SurfaceFieldOn(interface,
+ * name)` reads a field of the `surfaces` group, a number at each point of
+ * one of the skeleton's interfaces (a shape kernel, a boundary's shift), as
+ * a function of the angles by its stated lateral rule.
  *
  * A field holds the interpolants it was built with and nothing mutable,
  * so it is cheap to copy and safe to evaluate from many threads; the
@@ -42,7 +45,10 @@
  * in the format's frames (spherical at the grid's nodes, Cartesian at the
  * poles a grid lacks) with every attribute the format asks for, and
  * `WriteModelFile` writes the file after holding it to the reader's
- * checks, under a name of its own until it is whole:
+ * checks, under a name of its own until it is whole.  Fields on interfaces
+ * go on a grid set once by `SetSurfaceGrid`, each added by
+ * `AddSurfaceField` from a source per interface, evaluated at the
+ * interface's radius:
  *
  * @code
  * auto file = planetmodel::ModelFile(planetmodel::Skeleton({3480e3, 5701e3, 6371e3}));
@@ -51,6 +57,9 @@
  *              planetmodel::GaussLegendre(64));
  * file.AddField("viscosity", {{0, planetmodel::LayerSource::Lateral(lower)},
  *                             {1, planetmodel::LayerSource::Lateral(upper)}});
+ * file.SetSurfaceGrid(planetmodel::GaussLegendre(64));
+ * file.AddSurfaceField("K_moho", spec, {{1, planetmodel::LayerSource::LateralValues(
+ *                                              values, planetmodel::Frame::Spherical)}});
  * planetmodel::WriteModelFile("viscosity.nc", file);
  * @endcode
  */
@@ -101,11 +110,11 @@ inline constexpr auto PERTURBATION_KINDS =
     std::array<std::string_view, 3>{"absolute", "relative", "log"};
 
 /** @brief Names the format gives its own variables, which no field may take. */
-inline constexpr auto RESERVED_NAMES = std::array<std::string_view, 13>{
+inline constexpr auto RESERVED_NAMES = std::array<std::string_view, 14>{
     "radius",         "element_layer",      "element_bounds", "latitude",
     "longitude",      "colatitude_weights", "displacement",   "displacement_poles",
     "layer_bounds",   "layer_name",         "interface_radius", "interface_name",
-    "layer_part"};
+    "layer_part",     "surface_interface"};
 
 /** @brief The frame components are given in. */
 enum class Frame {
@@ -233,6 +242,28 @@ struct FileGeometry {
   std::optional<std::vector<double>> poles{}; /**< (boundary, 2), where the grid lacks a pole. */
   std::string lateral{};                /**< The lateral rule stated. */
   std::string between{};                /**< The rule between surfaces: `linear`. */
+};
+
+/**
+ * @brief The `surfaces` group: fields on some of the skeleton's
+ * interfaces, each a number at every point of the group's grid.
+ */
+struct FileSurfaces {
+  std::vector<int> interfaces{};      /**< The interfaces holding any, increasing. */
+  std::optional<AngularGrid> grid{};  /**< The grid the fields are on. */
+  /** @brief The variables by name: (surface, ntheta, nphi), and `<name>_poles`
+   * (surface, 2) where the grid lacks a pole; NaN where an interface lacks it. */
+  std::map<std::string, FileVariable> variables{};
+
+  /**
+   * @brief The row of an interface, or empty where it holds no field.
+   * @param interface The interface, from the centre.
+   */
+  [[nodiscard]] std::optional<std::size_t> Row(int interface) const {
+    const auto it = std::ranges::find(interfaces, interface);
+    if (it == interfaces.end()) return std::nullopt;
+    return static_cast<std::size_t>(it - interfaces.begin());
+  }
 };
 
 /** @brief A constant of the model, in its units. */
@@ -907,6 +938,8 @@ class ModelFile {
   [[nodiscard]] const std::string& Schema() const noexcept { return schema_; }
   /** @brief The model's name, where it has one. */
   [[nodiscard]] const std::optional<std::string>& Name() const noexcept { return name_; }
+  /** @brief The works the model cites, one a string, in the order stated; empty for none. */
+  [[nodiscard]] const std::vector<std::string>& Citation() const noexcept { return citation_; }
   /** @brief The scales the numbers are in. */
   [[nodiscard]] const ::planetmodel::Scales& GetScales() const noexcept { return scales_; }
   /** @brief The geometry's tolerance, relative to the skeleton's span. */
@@ -935,6 +968,55 @@ class ModelFile {
   [[nodiscard]] const std::vector<FilePart>& Parts() const noexcept { return parts_; }
   /** @brief The `geometry` group, where the file holds the mapping so. */
   [[nodiscard]] const std::optional<FileGeometry>& Geometry() const noexcept { return geometry_; }
+  /** @brief The `surfaces` group, where the file holds fields on interfaces. */
+  [[nodiscard]] const std::optional<FileSurfaces>& Surfaces() const noexcept { return surfaces_; }
+
+  /**
+   * @brief The names of the fields an interface holds.
+   * @param interface The interface, from the centre.
+   */
+  [[nodiscard]] std::vector<std::string> SurfaceNames(int interface) const {
+    auto out = std::vector<std::string>{};
+    const auto row = surfaces_ ? surfaces_->Row(interface) : std::nullopt;
+    if (!row) return out;
+    for (const auto& [name, var] : surfaces_->variables) {
+      if (!name.ends_with("_poles") && HoldsRow(var, *row)) out.push_back(name);
+    }
+    return out;
+  }
+
+  /**
+   * @brief Whether an interface holds a field.
+   * @param interface The interface, from the centre.
+   * @param name The field.
+   */
+  [[nodiscard]] bool HasSurfaceField(int interface, std::string_view name) const {
+    return std::ranges::contains(SurfaceNames(interface), std::string{name});
+  }
+
+  /**
+   * @brief A field on an interface, a function of the angles by the
+   * lateral rule the file states.
+   * @param interface The interface, from the centre.
+   * @param name The field.
+   * @return Its interpolant: `Value(theta, phi)` and `Gradient(theta, phi)`.
+   * @throws planetmodel::Error if the interface does not hold the field, or
+   *         its stated lateral rule is `harmonic`, which the C++ does not
+   *         read.
+   */
+  [[nodiscard]] LateralInterpolant SurfaceFieldOn(int interface, std::string_view name) const {
+    const auto where = std::format("surfaces/{}", name);
+    if (!HasSurfaceField(interface, name)) {
+      throw Error(source_, where, std::format("is not held on interface {}", interface));
+    }
+    const auto& var = surfaces_->variables.at(std::string{name});
+    const auto row = *surfaces_->Row(interface);
+    const auto& grid = *surfaces_->grid;
+    const auto cells = grid.NTheta() * grid.NPhi();
+    const auto rule = LateralRuleNamed(*var.Text("lateral_interpolation"), source_, where);
+    return LateralInterpolant(grid, std::span<const double>(var.values).subspan(row * cells, cells),
+                              SurfacePoles(var.name, row), rule, where);
+  }
 
   /**
    * @brief The part holding a layer.
@@ -1079,6 +1161,27 @@ class ModelFile {
    */
   void SetName(std::string name) {
     name_ = name.empty() ? std::nullopt : std::optional<std::string>{std::move(name)};
+  }
+
+  /**
+   * @brief State the works the model cites, in place of any stated before.
+   * @param works The works, one a string, each trimmed of white space at its ends, an
+   *              empty one or a repeat dropped.
+   * @throws planetmodel::Error if a work is more than one line.
+   */
+  void SetCitation(const std::vector<std::string>& works) {
+    constexpr auto space = std::string_view{" \t\n\r\f\v"};
+    auto out = std::vector<std::string>{};
+    for (const auto& work : works) {
+      const auto first = work.find_first_not_of(space);
+      if (first == std::string::npos) continue;
+      auto w = work.substr(first, work.find_last_not_of(space) - first + 1);
+      if (w.find_first_of("\r\n") != std::string::npos) {
+        Fail("citation", "holds a work of more than one line");
+      }
+      if (std::ranges::find(out, w) == out.end()) out.push_back(std::move(w));
+    }
+    citation_ = std::move(out);
   }
 
   /**
@@ -1494,6 +1597,115 @@ class ModelFile {
     Commit(std::move(made));
   }
 
+  /**
+   * @brief The grid the fields on interfaces are held on, set before the
+   * first of them is added.
+   * @param grid The grid.
+   * @throws planetmodel::Error if the file holds a field on an interface
+   *         already.
+   */
+  void SetSurfaceGrid(AngularGrid grid) {
+    if (surfaces_ && !surfaces_->variables.empty()) {
+      Fail("surfaces", "holds fields already, on the grid set before them");
+    }
+    surfaces_ = FileSurfaces{.grid = std::move(grid)};
+  }
+
+  /**
+   * @brief The points the values of a field on an interface are given at,
+   * for a `LayerSource` of values: the interface's radius on the surface
+   * grid, and both poles where the grid lacks one.
+   * @param interface The interface, from the centre.
+   * @throws planetmodel::Error if the skeleton has no such interface, or the
+   *         surface grid is not set.
+   */
+  [[nodiscard]] LayerPoints SurfacePointsOf(int interface) const {
+    CheckInterface(interface, "surfaces");
+    if (!surfaces_) Fail("surfaces", "has no grid: set it with SetSurfaceGrid first");
+    const auto& grid = *surfaces_->grid;
+    return {{interface_radii_[static_cast<std::size_t>(interface)]}, grid, grid.LacksPole()};
+  }
+
+  /**
+   * @brief A field on interfaces: the variable `name` of the `surfaces`
+   * group, from its source on each of `interfaces`, evaluated at the
+   * interface's radius on the surface grid, NaN on the other interfaces
+   * the group holds.
+   * @param name The name, which the format does not keep for itself and the
+   *        file does not yet hold.
+   * @param spec Its dimensions and meaning, of rank 0; a vocabulary name's
+   *        must be the vocabulary's.
+   * @param interfaces Each interface holding it, from the centre, and its
+   *        source there, a scalar.
+   * @param lateral The lateral rule the variable states.
+   * @throws planetmodel::Error if the name or the spec is refused, the spec
+   *         is not of rank 0, the surface grid is not set, an interface is
+   *         not the skeleton's, the grid cannot carry the rule, or a source
+   *         gives values that do not fit or are not finite.
+   */
+  void AddSurfaceField(const std::string& name, const FieldSpec& spec,
+                       const std::map<int, ::planetmodel::LayerSource>& interfaces,
+                       LateralRule lateral = LateralRule::Linear) {
+    const auto where = "surfaces/" + name;
+    CheckNewName(name, spec);
+    if (spec.character.Rank() != 0) {
+      Fail(where, std::format("is of rank {} by its spec, and a surface field is a number at "
+                              "each point",
+                              spec.character.Rank()));
+    }
+    if (!surfaces_) Fail("surfaces", "has no grid: set it with SetSurfaceGrid first");
+    if (interfaces.empty()) Fail(where, "is held on no interface");
+    for (const auto& [k, source] : interfaces) CheckInterface(k, where);
+    const auto& grid = *surfaces_->grid;
+    CheckRule(grid, lateral, where);
+    // every interface holding anything once this is added, increasing
+    auto rows = surfaces_->interfaces;
+    for (const auto& [k, source] : interfaces) {
+      if (!std::ranges::contains(rows, k)) rows.push_back(k);
+    }
+    std::ranges::sort(rows);
+    auto held = FileSurfaces{.interfaces = rows, .grid = grid};
+    for (const auto& [vname, var] : surfaces_->variables) {
+      held.variables.emplace(vname, Rowed(var, surfaces_->interfaces, rows));
+    }
+    const auto cells = grid.NTheta() * grid.NPhi();
+    const auto nan = std::numeric_limits<double>::quiet_NaN();
+    auto var = FileVariable{.name = name,
+                            .dimensions = {"surface", "latitude", "longitude"},
+                            .shape = {rows.size(), grid.NTheta(), grid.NPhi()},
+                            .values = std::vector<double>(rows.size() * cells, nan)};
+    auto poles = FileVariable{.name = name + "_poles",
+                              .dimensions = {"surface", "pole"},
+                              .shape = {rows.size(), 2},
+                              .values = std::vector<double>(rows.size() * 2, nan)};
+    auto holders = std::vector<int>{};
+    for (const auto& [k, source] : interfaces) {
+      const auto row = static_cast<std::size_t>(std::ranges::find(rows, k) - rows.begin());
+      const auto sampled = source.Sample(SurfacePointsOf(k), SCALAR, true, source_,
+                                         std::format("{} on interface {}", where, k));
+      std::ranges::copy(sampled.values,
+                        var.values.begin() + static_cast<std::ptrdiff_t>(row * cells));
+      if (!sampled.poles.empty()) {
+        std::ranges::copy(sampled.poles, poles.values.begin() + static_cast<std::ptrdiff_t>(2 * row));
+      }
+      holders.push_back(k);
+    }
+    const auto units = units::ScaledUnit(spec.dimensions, scales_);
+    auto& a = var.attributes;
+    a.emplace("long_name", spec.meaning.empty() ? name : spec.meaning);
+    a.emplace("units", units);
+    if (spec.dimensions) a.emplace("dimensions", detail::Exponents(*spec.dimensions));
+    a.emplace("lateral_interpolation", std::string{RuleName(lateral)});
+    a.emplace("interfaces", detail::Integers(holders));
+    held.variables.emplace(name, std::move(var));
+    if (grid.LacksPole()) {
+      poles.attributes.emplace("long_name", std::format("{} at the north and south poles", name));
+      poles.attributes.emplace("units", units);
+      held.variables.emplace(poles.name, std::move(poles));
+    }
+    surfaces_ = std::move(held);
+  }
+
  private:
   friend ModelFile ReadModelFile(const std::filesystem::path& path);
   friend void ValidateModelFile(const ModelFile& file, const std::string& source);
@@ -1537,6 +1749,9 @@ class ModelFile {
     }
     for (const auto& part : parts_) {
       if (part.variables.contains(name)) Fail(name, "is a variable of the file already");
+    }
+    if (surfaces_ && surfaces_->variables.contains(name)) {
+      Fail(name, "is a variable of the file already");
     }
     if (const auto known = VocabularySpec(name)) {
       if (known->character != spec.character ||
@@ -1663,6 +1878,45 @@ class ModelFile {
     }
   }
 
+  /// Refuse an interface the skeleton lacks.
+  void CheckInterface(int interface, std::string_view where) const {
+    if (interface < 0 || interface >= static_cast<int>(interface_radii_.size())) {
+      Fail(where, std::format("is given on interface {}, which the skeleton lacks", interface));
+    }
+  }
+
+  /// A variable of the surfaces group laid over the rows `to` from the
+  /// rows `from`, by interface, NaN on the rows it did not have.
+  static FileVariable Rowed(const FileVariable& var, const std::vector<int>& from,
+                            const std::vector<int>& to) {
+    auto out = var;
+    const auto per_row = var.values.size() / var.shape.front();
+    out.shape.front() = to.size();
+    out.values.assign(to.size() * per_row, std::numeric_limits<double>::quiet_NaN());
+    for (auto i = std::size_t{0}; i < from.size(); ++i) {
+      const auto j = static_cast<std::size_t>(std::ranges::find(to, from[i]) - to.begin());
+      std::copy_n(var.values.begin() + static_cast<std::ptrdiff_t>(i * per_row), per_row,
+                  out.values.begin() + static_cast<std::ptrdiff_t>(j * per_row));
+    }
+    return out;
+  }
+
+  /// Whether a variable of the surfaces group has a value on a row.
+  static bool HoldsRow(const FileVariable& var, std::size_t row) {
+    const auto per_row = var.values.size() / var.shape.front();
+    const auto begin = var.values.begin() + static_cast<std::ptrdiff_t>(row * per_row);
+    return std::any_of(begin, begin + static_cast<std::ptrdiff_t>(per_row),
+                       [](double v) { return !std::isnan(v); });
+  }
+
+  /// A surface field's values at both poles on a row, or nothing where
+  /// the group holds no poles for it.
+  std::span<const double> SurfacePoles(const std::string& name, std::size_t row) const {
+    const auto it = surfaces_->variables.find(name + "_poles");
+    if (it == surfaces_->variables.end()) return {};
+    return std::span<const double>(it->second.values).subspan(2 * row, 2);
+  }
+
   /// The frames at a grid's nodes, `rank` copies of each, for turning
   /// components of rank one and above.
   static std::vector<std::vector<Matrix3>> GridFrames(const AngularGrid& grid, int rank) {
@@ -1768,6 +2022,31 @@ class ModelFile {
         static_cast<void>(PolarValues(grid, values, poles, 1e-9, where));
       }
     }
+    if (surfaces_) {
+      const auto& grid = *surfaces_->grid;
+      const auto cells = grid.NTheta() * grid.NPhi();
+      for (const auto& [name, var] : surfaces_->variables) {
+        if (name.ends_with("_poles")) continue;
+        const auto where = "surfaces/" + name;
+        if (const auto known = VocabularySpec(name)) {
+          const auto dims = detail::DimensionsFrom(var.Numbers("dimensions"));
+          if (known->character.Rank() != 0 || (dims && dims != known->dimensions)) {
+            detail::Fail(source, where,
+                         "is a vocabulary name, stated with another character or other "
+                         "dimensions than the vocabulary's");
+          }
+        }
+        const auto stated = *var.Text("lateral_interpolation");
+        if (stated == "harmonic") continue;
+        CheckRule(grid, LateralRuleNamed(stated, source, where), where);
+        for (auto row = std::size_t{0}; row < surfaces_->interfaces.size(); ++row) {
+          if (!HoldsRow(var, row)) continue;
+          static_cast<void>(PolarValues(
+              grid, std::span<const double>(var.values).subspan(row * cells, cells),
+              SurfacePoles(name, row), 1e-9, where));
+        }
+      }
+    }
   }
 
   /// Whether a variable is a field of the model, not a field's poles, a
@@ -1864,6 +2143,7 @@ class ModelFile {
   std::string source_{};
   std::string schema_{};
   std::optional<std::string> name_{};
+  std::vector<std::string> citation_{};
   ::planetmodel::Scales scales_{};
   double rtol_ = DEFAULT_RTOL;
   std::map<std::string, FileConstant> constants_{};
@@ -1874,6 +2154,7 @@ class ModelFile {
   std::vector<double> interface_radii_{};
   std::vector<FilePart> parts_{};
   std::optional<FileGeometry> geometry_{};
+  std::optional<FileSurfaces> surfaces_{};
 };
 
 namespace detail {
@@ -1950,8 +2231,9 @@ inline std::filesystem::path PartialName(const std::filesystem::path& path) {
  * layers at their Gauss-Lobatto-Legendre nodes, every variable running
  * over the nodes on the part's grid with the attributes and trailing axes
  * its character asks for, known rules, the poles where the grid lacks
- * one, a perturbation that is there and of a known kind, and the mapping
- * held once.
+ * one, a perturbation that is there and of a known kind, the mapping
+ * held once, and the fields on interfaces on the skeleton's interfaces,
+ * over the group's grid, under names no part holds.
  * @param file The file, read or built.
  * @param source The file's path, as the errors name it.
  * @throws planetmodel::Error naming the place of the first fault.
@@ -2144,6 +2426,55 @@ inline void ValidateModelFile(const ModelFile& file, const std::string& source) 
                   "boundary_displacement_poles is missing");
     }
   }
+
+  // the fields on interfaces
+  if (file.surfaces_) {
+    const auto& surfaces = *file.surfaces_;
+    const auto& faces = surfaces.interfaces;
+    const auto& grid = *surfaces.grid;
+    const auto ninterface = static_cast<int>(file.interface_radii_.size());
+    for (auto i = std::size_t{0}; i < faces.size(); ++i) {
+      if (faces[i] < 0 || faces[i] >= ninterface || (i > 0 && faces[i] <= faces[i - 1])) {
+        fail("surfaces/surface_interface", "is not interfaces of the file, increasing");
+      }
+    }
+    const auto cells = grid.NTheta() * grid.NPhi();
+    for (const auto& [vname, var] : surfaces.variables) {
+      if (vname.ends_with("_poles")) continue;
+      const auto vwhere = "surfaces/" + vname;
+      if (var.dimensions != std::vector<std::string>{"surface", "latitude", "longitude"} ||
+          var.shape != std::vector<std::size_t>{faces.size(), grid.NTheta(), grid.NPhi()} ||
+          var.values.size() != faces.size() * cells) {
+        fail(vwhere, "does not run over the surfaces and the grid");
+      }
+      for (const auto& part : file.parts_) {
+        if (part.variables.contains(vname)) {
+          fail(vwhere, "is a layer field's name too; a name is a layer field's or a surface "
+                       "field's, never both");
+        }
+      }
+      const auto rule = var.Text("lateral_interpolation");
+      if (!rule || !std::ranges::contains(LATERAL_RULES, std::string_view{*rule})) {
+        fail(vwhere, "states no known lateral rule");
+      }
+      if (var.attributes.contains("interfaces")) {
+        for (const auto x : var.Numbers("interfaces").value_or(std::vector<double>{-1.0})) {
+          if (!std::ranges::contains(faces, static_cast<int>(x))) {
+            fail(vwhere, "names interfaces that are not surfaces of the group");
+          }
+        }
+      }
+      if (grid.LacksPole()) {
+        const auto it = surfaces.variables.find(vname + "_poles");
+        if (it == surfaces.variables.end() ||
+            it->second.dimensions != std::vector<std::string>{"surface", "pole"} ||
+            it->second.values.size() != 2 * faces.size()) {
+          fail(vwhere, std::format("is on a grid without its poles, and {}_poles is missing",
+                                   vname));
+        }
+      }
+    }
+  }
 }
 
 /**
@@ -2172,6 +2503,13 @@ inline void ValidateModelFile(const ModelFile& file, const std::string& source) 
   if (!schema) fail("schema", "is missing: not a planetmodel model file");
   out.schema_ = *schema;
   out.name_ = text("name");
+  if (const auto citation = text("citation")) {
+    for (auto start = std::size_t{0}; start < citation->size();) {
+      const auto end = std::min(citation->find('\n', start), citation->size());
+      out.citation_.push_back(citation->substr(start, end - start));
+      start = end + 1;
+    }
+  }
   auto scales = std::array<double, 4>{};
   constexpr auto bases = std::array<std::string_view, 4>{"length", "mass", "time", "temperature"};
   for (auto b = std::size_t{0}; b < 4; ++b) {
@@ -2316,6 +2654,45 @@ inline void ValidateModelFile(const ModelFile& file, const std::string& source) 
     geometry.between = var.Text("between").value_or("");
     out.geometry_ = std::move(geometry);
   }
+
+  // the surfaces group, as stored
+  if (std::ranges::contains(groups, std::string{"surfaces"})) {
+    const auto g = netcdf::Group(root, "surfaces", source);
+    for (const auto* dim : {"surface", "latitude", "longitude"}) {
+      if (!netcdf::DimensionLength(g, dim, source)) {
+        fail("surfaces", std::format("has no dimension {}", dim));
+      }
+    }
+    for (const auto* name : {"surface_interface", "latitude", "longitude"}) {
+      if (!netcdf::HasVariable(g, name)) fail("surfaces", std::format("has no variable {}", name));
+    }
+    const auto gattrs = netcdf::ReadAttributes(g, netcdf::GLOBAL, source);
+    const auto kind = detail::TextOf(gattrs, "grid_kind");
+    if (!kind || !std::ranges::contains(GRID_KINDS, std::string_view{*kind})) {
+      fail("surfaces.grid_kind", std::format("is {}, not a kind of grid",
+                                             kind.value_or("missing or a number")));
+    }
+    auto surfaces = FileSurfaces{};
+    if (netcdf::DimensionNames(g, "surface_interface", source) !=
+        std::vector<std::string>{"surface"}) {
+      fail("surfaces/surface_interface", "is not interfaces of the file, increasing");
+    }
+    for (const auto x : netcdf::ReadDoubles(g, "surface_interface", source).values) {
+      if (x != std::round(x)) {
+        fail("surfaces/surface_interface", "is not interfaces of the file, increasing");
+      }
+      surfaces.interfaces.push_back(static_cast<int>(x));
+    }
+    surfaces.grid = detail::GridOf(g, gattrs, source);
+    for (const auto& vname : netcdf::VariableNames(g, source)) {
+      if (vname == "surface_interface" || vname == "latitude" || vname == "longitude" ||
+          vname == "colatitude_weights") {
+        continue;
+      }
+      surfaces.variables.emplace(vname, detail::ReadVariable(g, vname, source));
+    }
+    out.surfaces_ = std::move(surfaces);
+  }
   ValidateModelFile(out, source);
   return out;
 }
@@ -2361,6 +2738,11 @@ inline void ModelFile::WriteTo(int root, const std::string& source) const {
   put(root, global, "Conventions", std::string{MODEL_CONVENTIONS});
   put(root, global, "title", name_ ? "planetmodel model " + *name_ : "planetmodel model");
   if (name_) put(root, global, "name", *name_);
+  if (!citation_.empty()) {
+    auto joined = citation_.front();
+    for (auto k = std::size_t{1}; k < citation_.size(); ++k) joined += "\n" + citation_[k];
+    put(root, global, "citation", joined);
+  }
   put(root, global, "scale_length", std::vector<double>{scales_.Length()});
   put(root, global, "scale_mass", std::vector<double>{scales_.Mass()});
   put(root, global, "scale_time", std::vector<double>{scales_.Time()});
@@ -2480,6 +2862,26 @@ inline void ModelFile::WriteTo(int root, const std::string& source) const {
                              *geometry.poles, source);
       put(g, var, "long_name", std::string{"radial displacement at the north and south poles"});
       put(g, var, "units", length);
+    }
+  }
+
+  // the surfaces group
+  if (surfaces_ && !surfaces_->variables.empty()) {
+    const auto& surfaces = *surfaces_;
+    const auto g = nc::CreateGroup(root, "surfaces", source);
+    nc::Dimension(g, "surface", surfaces.interfaces.size(), source);
+    write_grid(g, *surfaces.grid, true);
+    if (surfaces.grid->LacksPole()) put(g, global, "poles", std::string{"north south"});
+    var = nc::WriteIntegers(g, "surface_interface", {"surface"}, surfaces.interfaces, source);
+    put(g, var, "long_name", std::string{"the interface the surface is, by its index at the root"});
+    for (const auto& [vname, variable] : surfaces.variables) {
+      for (auto i = std::size_t{0}; i < variable.dimensions.size(); ++i) {
+        nc::Dimension(g, variable.dimensions[i], variable.shape[i], source);
+      }
+      var = nc::WriteDoubles(g, vname, variable.dimensions, variable.values, source);
+      for (const auto& [key, value] : variable.attributes) {
+        if (!key.starts_with('_')) put(g, var, key, value);
+      }
     }
   }
 }

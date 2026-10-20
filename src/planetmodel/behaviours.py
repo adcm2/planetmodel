@@ -39,7 +39,7 @@ import numpy as np
 from . import materials, rheology
 from .character import DENSITY, SCALAR
 from .fields import ComposedField, Field
-from .mesh1d.gravity import gravity, gravity_fields, mass
+from .mesh1d.gravity import gravity, gravity_fields, mass, pressure, pressure_fields
 
 if TYPE_CHECKING:
     from .model import CoarseningFit, Layer, Model
@@ -240,7 +240,7 @@ class Elastic:
         from them.
         """
         from .model import Model
-        if name in _FROZEN_FROM:
+        if name in _FROZEN_FROM or rheology.is_rheology_name(name):
             _refuse_frozen(self, f"its moduli were derived from {name!r}")
         _refuse_other_symmetry(self.layer(which), name)
         out = Model.with_field(self, which, name, field, replace=replace)
@@ -345,12 +345,28 @@ class ConstantQ:
                                       name="elastic_moduli")
 
 
+def _with_radial(model: Model, fields: Sequence[Field], name: str,
+                 replace: bool) -> Model:
+    """The model with one field per layer attached under `name`, a layer
+    already holding it refused unless `replace`."""
+    layers = []
+    for layer, field in zip(model.layers, fields):
+        if name in layer and not replace:
+            raise ValueError(
+                f"layer {layer.index} ({layer.name!r}) already holds {name!r}; "
+                "pass replace=True to replace it")
+        layers.append({**layer.fields, name: field})
+    return model.replaced(layers=layers)
+
+
 class SelfGravitating:
-    """The gravity and mass of a spherically symmetric model with a radial
-    density on every layer: the reference body's, computed on each call
-    and never stored, as numbers by `gravity` and `mass`, as one radial
-    field per layer by `gravity_fields`, and as a copy of the model
-    holding that field under the vocabulary name `g` by `with_gravity`;
+    """The gravity, mass and pressure of a spherically symmetric model with
+    a radial density on every layer: the reference body's, computed on
+    each call and never stored, as numbers by `gravity`, `mass` and
+    `pressure`, as one radial field per layer by `gravity_fields` and
+    `pressure_fields`, and as a copy of the model holding that field
+    under the vocabulary name `g` by `with_gravity`, `pressure` by
+    `with_pressure`;
     `with_stratification` attaches d rho / d Phi_0 = rho'(r) / g(r) to
     the fluid layers.  A density that depends on direction is refused,
     and the geometry's mapping does not enter (see `mesh1d.gravity`)."""
@@ -358,20 +374,21 @@ class SelfGravitating:
     gravity = gravity
     mass = mass
     gravity_fields = gravity_fields
+    pressure = pressure
+    pressure_fields = pressure_fields
 
     def with_gravity(self: Model, *, name: str = "g", replace: bool = False) -> Model:
         """The model with its gravity attached to every layer as a radial
         field under `name`, exact where the density is polynomial; a
         layer already holding `name` is refused unless `replace`."""
-        fields = gravity_fields(self)
-        layers = []
-        for layer, field in zip(self.layers, fields):
-            if name in layer and not replace:
-                raise ValueError(
-                    f"layer {layer.index} ({layer.name!r}) already holds {name!r}; "
-                    "pass replace=True to replace it")
-            layers.append({**layer.fields, name: field})
-        return self.replaced(layers=layers)
+        return _with_radial(self, gravity_fields(self), name, replace)
+
+    def with_pressure(self: Model, *, name: str = "pressure",
+                      replace: bool = False) -> Model:
+        """The model with its hydrostatic pressure attached to every layer
+        as a radial field under `name` (`mesh1d.gravity`); a layer already
+        holding `name` is refused unless `replace`."""
+        return _with_radial(self, pressure_fields(self), name, replace)
 
     def with_stratification(self: Model, *, name: str = "drho_dphi0",
                             replace: bool = False) -> Model:
@@ -425,9 +442,9 @@ class Viscoelastic:
     frozen = rheology.frozen
 
     def elastic(self: Model) -> Model:
-        """The model without its rheology fields (`RHEOLOGY_NAMES`), so
+        """The model without its rheology fields (`rheology.is_rheology_name`), so
         that every layer is elastic; a frozen model keeps its complex
         moduli, which are what its rheology became."""
         layers = [{k: f for k, f in layer.fields.items()
-                   if k not in rheology.RHEOLOGY_NAMES} for layer in self.layers]
+                   if not rheology.is_rheology_name(k)} for layer in self.layers]
         return self.replaced(layers=layers, check=False)

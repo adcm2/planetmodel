@@ -176,3 +176,97 @@ def test_numpy_scalars_are_numbers():
     assert MASS ** np.int64(2) == Dimensions(mass=2)
     with pytest.raises(ValueError):
         Scales(length=True)
+
+
+# ------------------------------------------------------------ unit strings
+
+#: Every spelling of a value's unit in the EMC catalogue that the library can
+#: hold, with its vertical axes' "kilometers" and "kilometer ", and what each
+#: means: the dimensions and the SI size of one unit.
+EMC_SPELLINGS = {
+    "km.s-1": (VELOCITY, 1e3), "km/s": (VELOCITY, 1e3),
+    "kilometers/second": (VELOCITY, 1e3), "kilometer sec^-1": (VELOCITY, 1e3),
+    "kilometer per second": (VELOCITY, 1e3), "kmps": (VELOCITY, 1e3),
+    "km s-1": (VELOCITY, 1e3),
+    "%": (DIMENSIONLESS, 0.01), "percent": (DIMENSIONLESS, 0.01),
+    "Percent": (DIMENSIONLESS, 0.01),
+    "km": (LENGTH, 1e3), "kilometer": (LENGTH, 1e3), "kilometers": (LENGTH, 1e3),
+    "kilometer ": (LENGTH, 1e3), "m": (LENGTH, 1.0),
+    "count": (DIMENSIONLESS, 1.0), "1": (DIMENSIONLESS, 1.0),
+    "dimensionless": (DIMENSIONLESS, 1.0), "ratio": (DIMENSIONLESS, 1.0),
+    "kg.m-3": (units.DENSITY, 1.0), "kg/m^3": (units.DENSITY, 1.0),
+    "kg/m3": (units.DENSITY, 1.0), "kilograms/meter^3": (units.DENSITY, 1.0),
+    "g.cm-3": (units.DENSITY, 1e3), "g/cm^3": (units.DENSITY, 1e3),
+    "gram centimeter^-3": (units.DENSITY, 1e3), "g.cc-1": (units.DENSITY, 1e3),
+    "GPa": (MODULUS, 1e9),
+    "degree": (DIMENSIONLESS, math.pi / 180), "degrees": (DIMENSIONLESS, math.pi / 180),
+    "1/s": (units.FREQUENCY, 1.0), "s": (TIME, 1.0),
+}
+
+#: The catalogue's other spellings, each refused by name: an electric unit,
+#: a logarithm, an offset, nothing at all, and a stray separator that reads
+#: as a factor of -1.
+EMC_REFUSED = {
+    "S/m": "not a unit", "siemens.m-1": "not a unit", "ohm-m": "not a unit",
+    "Ohm-m": "not a unit", "log10[S/m]": "logarithm", "Log10(Ohm-m)": "logarithm",
+    "degrees C": "offset", "C": "offset", "degC": "offset", "": "empty",
+    "km.s.-1": "factor",
+}
+
+
+@pytest.mark.parametrize("text", sorted(EMC_SPELLINGS))
+def test_every_emc_spelling_reads(text):
+    dims, factor = units.parse_unit(text)
+    want_dims, want_factor = EMC_SPELLINGS[text]
+    assert dims == want_dims
+    assert factor == pytest.approx(want_factor, rel=1e-15)
+
+
+@pytest.mark.parametrize("text", sorted(EMC_REFUSED))
+def test_every_other_emc_spelling_is_refused_by_name(text):
+    with pytest.raises(ValueError, match=EMC_REFUSED[text]):
+        units.parse_unit(text)
+
+
+def test_a_mislabel_reads_as_written():
+    # g.cm-1 labels densities in four EMC files: the parser reads what is
+    # written, and the data set's entry corrects it.
+    assert units.parse_unit("g.cm-1") == (MASS / LENGTH, pytest.approx(0.1))
+
+
+def test_the_library_reads_its_own_unit_strings():
+    scales = [Scales.SI, Scales.geophysical(6.371e6, temperature=1600.0)]
+    for dims in (DIMENSIONLESS, LENGTH, TIME, VELOCITY, units.DENSITY, MODULUS,
+                 VISCOSITY, GRAVITY, GRAVITATIONAL_CONSTANT, units.TEMPERATURE,
+                 units.TEMPERATURE / TIME):
+        assert units.parse_unit(dims.unit_string()) == (dims, 1.0)
+        for s in scales:
+            got_dims, got = units.parse_unit(units.scaled_unit(dims, s))
+            assert got_dims == dims
+            assert got == pytest.approx(s.factor(dims), rel=1e-9)
+
+
+@pytest.mark.parametrize("text, dims, factor", [
+    ("mm", LENGTH, 1e-3), ("µm", LENGTH, 1e-6), ("μm", LENGTH, 1e-6),
+    ("MPa", MODULUS, 1e6), ("hPa", MODULUS, 1e2), ("ms", TIME, 1e-3),
+    ("min", TIME, 60.0), ("h", TIME, 3600.0), ("Myr", TIME, 31557600e6),
+    ("kyr", TIME, 31557600e3), ("Pa s", VISCOSITY, 1.0), ("Pa.s", VISCOSITY, 1.0),
+    ("Pa*s", VISCOSITY, 1.0), ("kg m**-3", units.DENSITY, 1.0),
+    ("m/s/s", GRAVITY, 1.0), ("kg/m s", MASS * TIME / LENGTH, 1.0),
+    ("kilograms per cubic", None, None),
+])
+def test_prefixes_powers_and_quotients(text, dims, factor):
+    if dims is None:
+        with pytest.raises(ValueError, match="not a unit"):
+            units.parse_unit(text)
+        return
+    got_dims, got = units.parse_unit(text)
+    assert got_dims == dims and got == pytest.approx(factor, rel=1e-15)
+
+
+def test_malformed_strings_are_refused_where_they_fail():
+    for text, words in (("/s", "follows no factor"), ("km/", "ends in an operator"),
+                        ("km..s", "follows no factor"), ("(km)", "cannot read"),
+                        ("0 m", "factor"), ("unknown", "not a unit")):
+        with pytest.raises(ValueError, match=words):
+            units.parse_unit(text)

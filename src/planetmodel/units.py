@@ -32,16 +32,35 @@ The dimension constants are module names.  `DENSITY` here is the
 dimensions kg m^-3 and `DENSITY` in `planetmodel.character` is a
 transformation law; a module using both refers to one of them through
 its module.
+
+**Unit strings of other sources.**  `parse_unit(text)` reads the unit a
+published file states, "km.s-1", "kilometers/second", "g/cm^3", "%",
+into its dimensions and the SI size of one of it, so that a value v in
+that unit is v times the factor in SI.  It is a small grammar, not a
+table of whole strings: symbols (m, g, s, K, Pa, N, J, W, Hz, min, h,
+day, yr, bar, cc, %, deg, rad) with an SI prefix where one applies,
+products by ".", "*" or a space, a quotient of the next factor by "/",
+powers by "^n", "**n" or a trailing integer ("s-1", "m3"), numbers as
+factors (so that `scaled_unit`'s own strings read back), the spelled-out
+words sources use (kilometer, meters, second, sec, gram, per, percent,
+degrees), and the words they use for a pure number (1, count, ratio,
+dimensionless).  What it cannot express is refused by name, never
+guessed: an empty string, a unit with an offset from zero (Celsius,
+Fahrenheit), a logarithm, a symbol it does not know (electric units
+among them, there being no base dimension of current), a non-positive
+factor.  A source that states its unit wrongly is corrected where the
+source is described, not here.
 """
 from __future__ import annotations
 
 import math
 import numbers
+import re
 from dataclasses import KW_ONLY, dataclass
 from typing import ClassVar
 
 __all__ = [
-    "Dimensions", "Scales", "unit_string", "scaled_unit", "G_SI",
+    "Dimensions", "Scales", "unit_string", "scaled_unit", "parse_unit", "G_SI",
     "EARTH_MEAN_DENSITY",
     "DIMENSIONLESS", "MASS", "LENGTH", "TIME", "DENSITY", "VELOCITY",
     "GRAVITY", "MODULUS", "VISCOSITY", "GRAVITATIONAL_CONSTANT", "FREQUENCY",
@@ -162,6 +181,149 @@ MODULUS = Dimensions(mass=1, length=-1, time=-2)
 VISCOSITY = Dimensions(mass=1, length=-1, time=-1)
 GRAVITATIONAL_CONSTANT = Dimensions(mass=-1, length=3, time=-2)
 TEMPERATURE = Dimensions(temperature=1)
+
+
+# -- unit strings ---------------------------------------------------------------
+
+#: Each symbol `parse_unit` reads: its dimensions and the SI size of one.
+_SYMBOLS: dict[str, tuple[Dimensions, float]] = {
+    "m": (LENGTH, 1.0),
+    "g": (MASS, 1e-3),
+    "s": (TIME, 1.0),
+    "K": (TEMPERATURE, 1.0),
+    "Pa": (MODULUS, 1.0),
+    "N": (MASS * LENGTH / TIME ** 2, 1.0),
+    "J": (MASS * LENGTH ** 2 / TIME ** 2, 1.0),
+    "W": (MASS * LENGTH ** 2 / TIME ** 3, 1.0),
+    "Hz": (FREQUENCY, 1.0),
+    "min": (TIME, 60.0),
+    "h": (TIME, 3600.0),
+    "day": (TIME, 86400.0),
+    "yr": (TIME, 31557600.0),                      # the Julian year
+    "bar": (MODULUS, 1e5),
+    "cc": (LENGTH ** 3, 1e-6),
+    "%": (DIMENSIONLESS, 0.01),
+    "deg": (DIMENSIONLESS, math.pi / 180.0),
+    "rad": (DIMENSIONLESS, 1.0),
+}
+
+#: The symbols that take an SI prefix.
+_PREFIXABLE = frozenset({"m", "g", "s", "K", "Pa", "N", "J", "W", "Hz", "yr", "bar"})
+
+#: The SI prefixes `parse_unit` reads, with both forms of the micro sign.
+_PREFIXES = {"G": 1e9, "M": 1e6, "k": 1e3, "h": 1e2, "c": 1e-2, "m": 1e-3,
+             "u": 1e-6, "µ": 1e-6, "μ": 1e-6, "n": 1e-9}
+
+#: Spelled-out words, in any case, and the symbols they stand for.
+_WORDS = {
+    **dict.fromkeys(("kilometer", "kilometers", "kilometre", "kilometres"), "km"),
+    **dict.fromkeys(("meter", "meters", "metre", "metres"), "m"),
+    **dict.fromkeys(("centimeter", "centimeters", "centimetre", "centimetres"), "cm"),
+    **dict.fromkeys(("millimeter", "millimeters", "millimetre", "millimetres"), "mm"),
+    **dict.fromkeys(("second", "seconds", "sec", "secs"), "s"),
+    **dict.fromkeys(("minute", "minutes"), "min"),
+    **dict.fromkeys(("hour", "hours"), "h"),
+    **dict.fromkeys(("day", "days"), "day"),
+    **dict.fromkeys(("year", "years"), "yr"),
+    **dict.fromkeys(("gram", "grams"), "g"),
+    **dict.fromkeys(("kilogram", "kilograms"), "kg"),
+    "kelvin": "K",
+    **dict.fromkeys(("pascal", "pascals"), "Pa"),
+    **dict.fromkeys(("gigapascal", "gigapascals"), "GPa"),
+    **dict.fromkeys(("megapascal", "megapascals"), "MPa"),
+    "percent": "%",
+    **dict.fromkeys(("degree", "degrees"), "deg"),
+    **dict.fromkeys(("radian", "radians"), "rad"),
+    "per": "/",
+}
+
+#: Whole strings, in any case, that are a unit in one word.
+_WHOLE = {
+    **dict.fromkeys(("1", "count", "ratio", "dimensionless", "unitless"),
+                    (DIMENSIONLESS, 1.0)),
+    "kmps": (VELOCITY, 1e3),
+}
+
+#: Whole strings, in any case, of units with an offset from zero.
+_OFFSETS = frozenset({
+    "c", "degc", "deg c", "degree c", "degrees c", "celsius", "degree celsius",
+    "degrees celsius", "°c", "℃", "f", "degf", "deg f", "degree f",
+    "degrees f", "fahrenheit", "degrees fahrenheit", "°f",
+})
+
+#: One token of a unit string: a number, a symbol with its power, or an operator.
+_TOKEN = re.compile(r"""\s*(?:
+      (?P<number>[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?)(?![A-Za-z%µμ])
+    | (?P<symbol>[A-Za-z%µμ]+)
+      (?:\s*(?:\^|\*\*)\s*(?P<caret>[+-]?\d+)|(?P<power>[+-]?\d+))?
+    | (?P<op>[/.*])
+    )""", re.VERBOSE)
+
+
+def _symbol(name: str, text: str) -> tuple[Dimensions, float]:
+    """The dimensions and SI size of one symbol, prefixed or not."""
+    if name in _SYMBOLS:
+        return _SYMBOLS[name]
+    prefix, rest = name[:1], name[1:]
+    if prefix in _PREFIXES and rest in _PREFIXABLE:
+        dims, size = _SYMBOLS[rest]
+        return dims, _PREFIXES[prefix] * size
+    raise ValueError(
+        f"{name!r} in {text!r} is not a unit planetmodel reads (electric units "
+        "among them: its dimensions have no base of current); the data set's "
+        "entry must state the unit")
+
+
+def parse_unit(text: str) -> tuple[Dimensions, float]:
+    """The dimensions of a unit string and the SI size of one of its unit.
+
+    A value v stated in `text` is v times the factor in SI: "km.s-1"
+    gives (VELOCITY, 1000.0), "g/cm^3" (DENSITY, 1000.0), "%"
+    (DIMENSIONLESS, 0.01).  The grammar is the module docstring's; an
+    empty string, an offset, a logarithm, an unknown symbol and a
+    non-positive factor are refused by name.
+    """
+    s = " ".join(str(text).split())
+    low = s.lower()
+    if not s:
+        raise ValueError("an empty unit string says nothing of its unit; the data "
+                         "set's entry must state it")
+    if low in _OFFSETS:
+        raise ValueError(
+            f"{text!r} has an offset from zero (a temperature in Celsius or "
+            "Fahrenheit); planetmodel's scales are factors alone, so the values "
+            "must be stated in kelvin")
+    if re.match(r"(log|ln)\w*\s*[\[(]", low):
+        raise ValueError(f"{text!r} is the logarithm of a quantity, not a unit")
+    if low in _WHOLE:
+        return _WHOLE[low]
+    s = re.sub(r"[A-Za-z]+", lambda w: _WORDS.get(w.group(0).lower(), w.group(0)), s)
+    dims, factor = DIMENSIONLESS, 1.0
+    sign, expect_term, pos = 1, True, 0
+    while pos < len(s):
+        match = _TOKEN.match(s, pos)
+        if match is None or match.end() == pos:
+            raise ValueError(f"cannot read {text!r} as a unit at {s[pos:]!r}")
+        pos = match.end()
+        if match["op"] is not None:
+            if expect_term:
+                raise ValueError(f"cannot read {text!r} as a unit: {match['op']!r} "
+                                 "follows no factor")
+            sign, expect_term = (-1 if match["op"] == "/" else 1), True
+            continue
+        if match["number"] is not None:
+            factor *= float(match["number"]) ** sign
+        else:
+            d, size = _symbol(match["symbol"], text)
+            n = int(match["caret"] or match["power"] or 1) * sign
+            dims, factor = dims * d ** n, factor * size ** n
+        sign, expect_term = 1, False
+    if expect_term:
+        raise ValueError(f"cannot read {text!r} as a unit: it ends in an operator")
+    if not factor > 0.0:
+        raise ValueError(f"{text!r} has the factor {factor:g}; a unit's factor is "
+                         "positive (a misplaced separator?)")
+    return dims, factor
 
 
 @dataclass(frozen=True)

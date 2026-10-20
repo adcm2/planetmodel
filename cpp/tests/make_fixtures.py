@@ -9,8 +9,15 @@ written in CI, not committed.
 nodes: PREM (radial, one part); PREM with a relative perturbation of
 `vsv` over the lower mantle; a two-layer model with a laterally varying
 density and a vector field; PREM in three parts on three kinds of grid;
-a model placed by boundary reliefs (the `geometry` group); and one
-placed by a flattening (the `displacement` field).
+a model placed by boundary reliefs (the `geometry` group); one placed
+by a flattening (the `displacement` field); and a two-layer model with
+fields on both its interfaces (the `surfaces` group, a shape kernel by
+the bilinear rule and a shift by the bicubic one, on a grid without its
+poles); and PREM given a viscosity and converted by sl3d's chain from a
+perturbation of its shear speeds (`model_converted.nc`, the viscosity a
+log perturbation and the model's citation the chain's), and the same
+with that viscosity made a Burgers body's two Prony branches and
+power-law creep beside them (`model_prony.nc`).
 
 Beside them, `model_kinds.nc` (an absolute perturbation of `rho` and a
 log one of `viscosity`), `model_tensors.nc` (a rank-2 `stress`, radial
@@ -18,13 +25,17 @@ on one layer and gridded on the other, and a rank-4 `elastic`) and
 `model_harmonic.nc` (a copy of the lateral one stating the harmonic
 rule, which the C++ refuses); and for every model file but that one
 `<model>.expect`, from the Python's own reading of the file, one fact
-per line: `scales`, `rtol`, `name` and the `layer_name` and
-`interface_name`s (UTF-8 in hexadecimal, `-` for none), each `constant`
+per line: `scales`, `rtol`, `name`, `citation` (its works a line each)
+and the `layer_name` and `interface_name`s (UTF-8 in hexadecimal, `-`
+for none), each `constant`
 with its dimensions, `value <layer> <name> <s|c> r theta phi` and the
 stored components in the spherical or Cartesian frame, `gradient
 <layer> <name> r theta phi` and the derivatives in r, theta and phi of
-a scalar, `absent <layer> <name>` for a variable a layer lacks, and
-`displacement x y z` and u(X) for a mapping.  **Model files to refuse**
+a scalar, `absent <layer> <name>` for a variable a layer lacks,
+`displacement x y z` and u(X) for a mapping, and for a field on
+interfaces `surface <interface> <name> theta phi` and its value,
+`surface_gradient <interface> <name> theta phi` and its derivatives in
+theta and phi, or `surface_absent <interface> <name>`.  **Model files to refuse**
 (`model_cases/bad_*.nc`): malformed copies, listed in `bad.txt` as the
 case, a tab, the place the fault lies, a tab, and a phrase the refusal
 says.  **GLL points** (`gll.txt`): `gll <ngll>` and the points on [-1,
@@ -48,7 +59,8 @@ it (`gl:<lmax>[:<nphi>]`, `dh:<lmax>:<sampling>`,
 `eq:<ntheta>:<nphi>:<poles>`), its `band`, `colatitudes`, `longitudes`
 and `weights`, one line each.  **The vocabulary** (`vocabulary.txt`):
 each name, its rank, weight and Voigt form, its four exponents, and its
-meaning's UTF-8 in hexadecimal.
+meaning's UTF-8 in hexadecimal; then each family's stem the same way,
+after the word `family`.
 
 **Frames** (`frames.txt`): `frame <theta> <phi>` and the nine entries
 of the frame matrix by rows, and `wrapped <x> <start> <value>`, the
@@ -258,8 +270,13 @@ def model_files(directory: Path) -> list[Path]:
     tensors = tensors.with_field(1, "elastic", pm.GriddedField.sampled(
         pm.AnalyticField((0.5, 1.0), elastic, character=pm.ELASTIC, frame="cartesian"),
         pm.gauss_legendre(4), ngll=3, lateral="linear"))
+    kernel = two.replaced(specs={**two.specs, "K_shape": pm.FieldSpec(
+        pm.SCALAR, pm.Dimensions(length=-2), meaning="a shape kernel")})
+    on_faces = {"K_shape": {0: lambda t, p: smooth(t, p) - 0.4 * np.cos(t), 1: smooth},
+                "shift": {1: pm.GriddedFunction.sampled(bump, pm.gauss_legendre(8))}}
     return [
-        write_model(directory / "model_prem.nc", prem, grid=pm.gauss_legendre(2)),
+        write_model(directory / "model_prem.nc", prem.with_pressure(),
+                    grid=pm.gauss_legendre(2)),
         write_model(directory / "model_kinds.nc", kinds, grid=pm.gauss_legendre(6)),
         write_model(directory / "model_tensors.nc", tensors, grid=pm.gauss_legendre(4),
                     fields=["rho", "stress", "elastic"]),
@@ -273,7 +290,46 @@ def model_files(directory: Path) -> list[Path]:
                     grid=pm.gauss_legendre(4)),
         write_model(directory / "model_flattened.nc", flattened,
                     grid=pm.gauss_legendre(8)),
+        write_model(directory / "model_surfaces.nc", kernel, grid=pm.gauss_legendre(4),
+                    fields=["rho", "vp"], surfaces=on_faces),
+        write_model(directory / "model_converted.nc", converted(),
+                    grid=pm.gauss_legendre(6),
+                    fields=["rho", "vsv", "vsh", "viscosity"]),
+        write_model(directory / "model_prony.nc", with_burgers(converted()),
+                    grid=pm.gauss_legendre(6)),
     ]
+
+
+def with_burgers(model: pm.Model) -> pm.Model:
+    """The model with its viscosity made a Burgers body's two branches."""
+    from planetmodel.conversion import building, prony
+    burgers = prony.with_branches(model, prony.burgers_series(strength=5.0,
+                                                              viscosity_ratio=5.0))
+    return building.with_power_law(burgers, exponent=3.5, transition_stress=1e6)
+
+
+def converted() -> pm.Model:
+    """PREM with a viscosity of 2e21 Pa s below 670 km and 5e20 above, its
+    vsv and vsh perturbed over the lower mantle, through sl3d's chain."""
+    from planetmodel.conversion import building, parameters
+    prem = pm.PREM()
+    lo, hi = 3480e3, 5701e3
+    for lay in prem.layers:
+        a, b = lay.interval
+        if lo <= a and b <= 6291e3:
+            prem = prem.with_field(lay.index, "viscosity", pm.constant_field(
+                (a, b), 2e21 if b <= hi else 5e20, name="viscosity"))
+
+    def dlnvs(r: np.ndarray, t: np.ndarray, p: np.ndarray) -> np.ndarray:
+        return 0.01 * np.sin(t) ** 2 * np.cos(2 * p) * (0.5 + (r - lo) / (hi - lo))
+
+    for name in ("vsv", "vsh"):
+        prem = pm.perturbed(prem, name, pm.AnalyticField((lo, hi), dlnvs),
+                            kind="relative")
+    dt = building.temperature_anomaly(
+        building.velocity_anomaly(prem), scaling=parameters.SL3D_DENSITY_SCALING,
+        expansivity=parameters.SL3D_EXPANSIVITY)
+    return building.with_viscosity(prem, dt, parameters.SL3D_VISCOSITY)
 
 
 #: The JSON documents of the walk fixtures, as bytes on disk: the
@@ -738,12 +794,13 @@ def _scalar_gradient(f: Any, r: float, t: float, p: float) -> np.ndarray:
 
 def _expect_model(path: Path) -> Path:
     """The expectations of a model file, by the module docstring."""
-    from planetmodel.modelfile import read_model, read_model_file
+    from planetmodel.modelfile import read_model, read_model_file, read_surfaces
     data, model = read_model_file(path), read_model(path)
     hexed = (lambda x: "-" if not x else x.encode("utf-8").hex())
     s = data.scales
     lines = [f"scales {s.length!r} {s.mass!r} {s.time!r} {s.temperature!r}",
-             f"rtol {data.rtol!r}", f"name {hexed(data.name)}"]
+             f"rtol {data.rtol!r}", f"name {hexed(data.name)}",
+             f"citation {hexed(chr(10).join(data.citation))}"]
     lines += [f"layer_name {i} {hexed(n)}" for i, n in enumerate(data.layer_names)]
     lines += [f"interface_name {i} {hexed(n)}"
               for i, n in enumerate(data.interface_names)]
@@ -788,6 +845,19 @@ def _expect_model(path: Path) -> Path:
         U = mapping.displacement(X)
         for x, u in zip(X, U):
             lines.append("displacement " + " ".join(repr(float(a)) for a in (*x, *u)))
+    for name, on in sorted(read_surfaces(path).items()):
+        for face in model.geometry.interfaces:
+            k = face.index
+            f = on.get(k if face.name is None else face.name)
+            if f is None:
+                lines.append(f"surface_absent {k} {name}")
+                continue
+            for t, p in ((0.0, -1.0), (0.7, 0.3), (np.pi, 4.0), (2.2, 9.5),
+                         (1.3, 2 * np.pi), (0.05, 1.0)):
+                lines.append(f"surface {k} {name} {t!r} {p!r} {float(f(t, p))!r}")
+            for t, p in ((0.7, 0.3), (2.2, 9.5), (1.3, 2 * np.pi)):
+                dt, dp = (float(d) for d in f.angular_gradient(t, p))
+                lines.append(f"surface_gradient {k} {name} {t!r} {p!r} {dt!r} {dp!r}")
     out = path.with_name(path.name.removesuffix(".nc") + ".expect")
     out.write_text("\n".join(lines) + "\n")
     return out
@@ -828,6 +898,7 @@ def _renaming(old: str, new: str, *, group: str) -> Any:
 _P = {"group": "part_0"}
 _RHO = {"group": "part_0", "variable": "rho"}
 _BETWEEN = {"group": "geometry", "variable": "boundary_displacement"}
+_S = {"group": "surfaces"}
 
 #: The malformed model files: (the file copied, an edit by netCDF4, where
 #: the fault lies, what the refusal says).
@@ -896,6 +967,27 @@ _BAD_MODELS: dict[str, tuple[str, Any, str, str]] = {
                           "part_0/rho", "perturbation_kind"),
     "between": ("model_stacked.nc", _setting("between", "cubic", **_BETWEEN),
                 "geometry/boundary_displacement", "between surfaces"),
+    "surface_interface": ("model_surfaces.nc",
+                          _storing((1,), 5, variable="surface_interface", **_S),
+                          "surfaces/surface_interface", "not interfaces of the file"),
+    "surface_order": ("model_surfaces.nc",
+                      _storing((0,), 1, variable="surface_interface", **_S),
+                      "surfaces/surface_interface", "not interfaces of the file"),
+    "surface_grid_kind": ("model_surfaces.nc", _setting("grid_kind", "healpix", **_S),
+                          "surfaces.grid_kind", "not a kind of grid"),
+    "surface_rule": ("model_surfaces.nc",
+                     _setting("lateral_interpolation", "quintic", **_S,
+                              variable="K_shape"),
+                     "surfaces/K_shape", "no known lateral rule"),
+    "surface_holders": ("model_surfaces.nc",
+                        _setting("interfaces", np.int32([0, 3]), **_S,
+                                 variable="shift"),
+                        "surfaces/shift", "not surfaces of the group"),
+    "surface_poles_missing": ("model_surfaces.nc",
+                              _renaming("K_shape_poles", "K_shape_p", **_S),
+                              "surfaces/K_shape", "K_shape_poles is missing"),
+    "surface_name_taken": ("model_surfaces.nc", _renaming("shift", "rho", **_S),
+                           "surfaces/rho", "never both"),
 }
 
 
@@ -974,13 +1066,14 @@ def grids(directory: Path) -> list[Path]:
 
 def vocabulary(directory: Path) -> list[Path]:
     """The vocabulary of the module docstring."""
-    from planetmodel.vocabulary import VOCABULARY
+    from planetmodel.vocabulary import FAMILIES, VOCABULARY
     lines = []
-    for name, spec in VOCABULARY.items():
-        c, d = spec.character, spec.dimensions
-        lines.append(f"{name} {c.rank} {c.weight} {int(bool(c.voigt))} {d.mass} "
-                     f"{d.length} {d.time} {d.temperature} "
-                     f"{spec.meaning.encode('utf-8').hex()}")
+    for prefix, table in (("", VOCABULARY), ("family ", FAMILIES)):
+        for name, spec in table.items():
+            c, d = spec.character, spec.dimensions
+            lines.append(f"{prefix}{name} {c.rank} {c.weight} {int(bool(c.voigt))} "
+                         f"{d.mass} {d.length} {d.time} {d.temperature} "
+                         f"{spec.meaning.encode('utf-8').hex()}")
     path = directory / "vocabulary.txt"
     path.write_text("\n".join(lines) + "\n")
     return [path]

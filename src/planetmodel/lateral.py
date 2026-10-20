@@ -9,9 +9,8 @@ here and in every reader of the library's files:
                periodic in longitude and clamped at the poles
     harmonic   analysis on the grid and synthesis at the point, exact
                for a field band-limited to the grid's band (to the
-               accuracy of `harmonics.synthesise_points`); only on a
-               grid of a shipped kind with a band, and through ducc0
-               (the `harmonics` extra)
+               accuracy of `harmonics.synthesise`); only on a grid of a
+               shipped kind with a band
 
 **The padded grid.**  The local rules are rules on a rectangle of
 (theta, phi), so the sphere is first laid out as one.  The longitudes
@@ -92,8 +91,7 @@ from scipy.sparse import csc_array
 from scipy.sparse.linalg import SuperLU, splu
 
 from .frames import wrapped
-from .harmonics import (analyse_grid, real_harmonics, synthesise_points_gradient,
-                        synthesise_points)
+from .harmonics import analyse_grid, synthesise, synthesise_gradient
 
 if TYPE_CHECKING:
     from .sampling import AngularGrid
@@ -161,10 +159,15 @@ def _grid_values(values: ArrayLike, grid: AngularGrid) -> np.ndarray:
 
 
 def _from_expansion(v: np.ndarray, grid: AngularGrid) -> np.ndarray:
-    """The polar values of the field band-limited to the grid."""
+    """The polar values of the field band-limited to the grid: at a pole
+    only the zonal harmonics are not zero, Y_l0 = sqrt((2l + 1) / 4 pi)
+    at the north pole and (-1)^l times that at the south."""
     c = analyse_grid(v, grid)
-    Y = real_harmonics(c.shape[1] - 1, np.array([0.0, np.pi]), np.zeros(2))
-    return np.einsum("slm...,slmq->...q", c, Y)
+    l = np.arange(c.shape[1])
+    zonal = np.sqrt((2.0 * l + 1.0) / (4.0 * np.pi))
+    north = np.einsum("l...,l->...", c[0, :, 0], zonal)
+    south = np.einsum("l...,l->...", c[0, :, 0], zonal * (-1.0) ** l)
+    return np.stack([north, south], axis=-1)
 
 
 def polar_values(values: ArrayLike, grid: AngularGrid, *,
@@ -177,8 +180,8 @@ def polar_values(values: ArrayLike, grid: AngularGrid, *,
     of `poles`, which must be finite; an entry of `poles` for a pole that
     is a node must agree with its row or be NaN.  With `poles` None, the
     poles the grid lacks come from its expansion, which needs a grid of
-    a shipped kind with a band and the `harmonics` extra; any other grid
-    lacking a pole is refused.
+    a shipped kind with a band; any other grid lacking a pole is
+    refused.
     """
     v = _grid_values(values, grid)
     lead = v.shape[:-2]
@@ -380,7 +383,7 @@ class LateralInterpolant:
         (any range), broadcast together: shape `shape` followed by theirs."""
         t, p, points = self._points(theta, phi)
         if self._method == "harmonic":
-            out = synthesise_points(self._coeffs, t, p)
+            out = synthesise(self._coeffs, t, p)
         else:
             out = self._local(t, p, (0, 0))
         return out.reshape(self._shape + points)
@@ -392,7 +395,7 @@ class LateralInterpolant:
         constant for the bilinear rule, or of the expansion."""
         t, p, points = self._points(theta, phi)
         if self._method == "harmonic":
-            dt, dp = synthesise_points_gradient(self._coeffs, t, p)
+            dt, dp = synthesise_gradient(self._coeffs, t, p)
         else:
             dt, dp = self._local(t, p, (1, 0)), self._local(t, p, (0, 1))
         return dt.reshape(self._shape + points), dp.reshape(self._shape + points)

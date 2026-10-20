@@ -68,7 +68,7 @@ def test_refusals():
 from planetmodel import AnalyticField, flattening, gauss_legendre  # noqa: E402
 from planetmodel import slices  # noqa: E402
 from planetmodel.plotting import (BOUNDARY_STYLE, DIVERGING, SEQUENTIAL,  # noqa: E402
-                                  colour_scale, section)
+                                  colour_extend, colour_scale, section)
 
 
 def _lateral(r, t, p):
@@ -167,6 +167,59 @@ def test_the_colour_scale_is_the_callers_or_by_what_the_values_are(layered):
         colour_scale([np.full(3, np.nan)], plain.shown)
 
 
+def _signed(r, t, p):
+    """Signed, with a spike near one point, as a kernel is beside a source."""
+    return (r * (0.5 * np.cos(t) + np.sin(t) * np.sin(p))
+            + 50.0 * np.exp(-((t - 0.5 * np.pi) ** 2 + p ** 2) / 1e-3))
+
+
+def test_a_signed_field_is_drawn_symmetric_and_clipped_at_a_percentile(layered):
+    m = layered.with_field(1, "K", AnalyticField((0.5, 1.0), _signed, name="K"))
+    sec = slices.section(m, "K", (np.pi / 2, -0.6), azimuth=0.5 * np.pi,
+                         length=1.2, n=5, m=41)
+    fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
+    meshes = section(ax, sec, diverging=True, colorbar=True)
+    held = np.concatenate([lay.values[np.isfinite(lay.values)] for lay in sec.layers])
+    lo, hi = meshes[0].get_clim()
+    assert lo == -hi == -np.max(np.abs(held)) and meshes[0].get_cmap().name == DIVERGING
+    assert fig.axes[-1].get_ylabel() == "K" and meshes[0].colorbar.extend == "neither"
+    plt.close(fig)
+    fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
+    meshes = section(ax, sec, diverging=True, clip=90, colorbar=True)
+    assert np.isclose(meshes[0].get_clim()[1], np.percentile(np.abs(held), 90))
+    assert meshes[0].get_clim()[1] < 0.1 * np.max(np.abs(held))     # the spike cut
+    assert fig.axes[-1].get_ylabel() == "K" and meshes[0].colorbar.extend == "max"
+    plt.close(fig)
+    fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
+    meshes = section(ax, sec, normalised=True, diverging=True, colorbar=True)
+    assert np.allclose(np.asarray(meshes[1].get_array()).reshape(5, 41),
+                       sec.layers[1].values / np.max(np.abs(held)))
+    assert meshes[0].get_clim() == (-1.0, 1.0)
+    assert fig.axes[-1].get_ylabel() == "K, normalised"
+    plt.close(fig)
+
+
+def test_the_scale_clips_at_a_percentile_and_the_bar_says_where(layered):
+    plain = slices.sphere(layered, "rho", radius=0.8, grid=gauss_legendre(4))
+    values = np.concatenate([np.linspace(0.0, 1.0, 101), [1e3]])
+    cmap, lo, hi = colour_scale([values], plain.shown, clip=95)
+    assert cmap == SEQUENTIAL
+    assert (lo, hi) == (np.percentile(values, 5), np.percentile(values, 95))
+    cmap, lo, hi = colour_scale([values - 0.5], plain.shown, diverging=True, clip=95)
+    assert cmap == DIVERGING and hi == -lo == np.percentile(np.abs(values - 0.5), 95)
+    # most of a kernel is zero: a percentile of zero gives way to the largest
+    spike = np.zeros(1000)
+    spike[3] = -2.0
+    assert colour_scale([spike], plain.shown, diverging=True, clip=99)[1:] == (-2.0,
+                                                                               2.0)
+    with pytest.raises(ValueError, match="percentile"):
+        colour_scale([values], plain.shown, clip=40)
+    assert colour_extend([values], 0.0, 2e3) == "neither"
+    assert colour_extend([values], 0.1, 2e3) == "min"
+    assert colour_extend([values], 0.0, 0.9) == "max"
+    assert colour_extend([values, [np.nan]], 0.1, 0.9) == "both"
+
+
 # -- spectra and correlations drawn --------------------------------------------
 
 def _harmonic_model(layered, coeffs, name):
@@ -178,7 +231,6 @@ def _harmonic_model(layered, coeffs, name):
 
 
 def test_a_spectrum_is_a_line_of_power_by_degree(layered):
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
     from planetmodel.plotting import spectrum
     c = np.zeros((2, 4, 4))
     c[0, 0, 0], c[0, 2, 1], c[1, 3, 3] = 1.0, 0.5, 0.25
@@ -195,7 +247,6 @@ def test_a_spectrum_is_a_line_of_power_by_degree(layered):
 
 
 def test_a_correlation_is_an_image_by_degree_and_radius(layered):
-    pytest.importorskip("ducc0", reason="needs the planetmodel[harmonics] extra")
     from planetmodel.plotting import correlation, correlation_total
     a, b = np.zeros((2, 4, 4)), np.zeros((2, 4, 4))
     a[0, 2, 1], a[0, 3, 0], a[0, 1, 1] = 1.0, 0.5, 0.3

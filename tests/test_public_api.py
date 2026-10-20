@@ -241,8 +241,8 @@ def _needs_extra(extra_modules):
 def test_no_top_level_function_needs_an_extra(extra_modules):
     needs = _needs_extra(extra_modules)
     # the analysis sees what it should: these do need an extra
-    assert ("planetmodel.harmonics", "analyse_grid") in needs
-    assert ("planetmodel.randomfield.fields", "SphericalGRF.sample_grid") in needs
+    assert ("planetmodel.modelfile", "read_model") in needs
+    assert ("planetmodel.plotting.maps", "sphere_map") in needs
     assert ("planetmodel.mesh3d.layered", "build_layered_mesh") in needs
     offenders = []
     for name in planetmodel.__all__:

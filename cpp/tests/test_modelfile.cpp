@@ -1,7 +1,8 @@
 // The model file: every file the Python writes read as the Python reads
 // it (its metadata, every variable on every layer in both frames, the
-// scalars' gradients, the mapping), the harmonic rule refused with the
-// numbers still readable, and every malformed copy refused at its place.
+// scalars' gradients, the mapping, the fields on interfaces with their
+// gradients), the harmonic rule refused with the numbers still readable,
+// and every malformed copy refused at its place.
 #include "planetmodel/modelfile.hpp"
 
 #include <gtest/gtest.h>
@@ -70,10 +71,35 @@ void ExpectAsThePython(const std::filesystem::path& expect) {
     if (!fields.contains(key)) fields.emplace(key, file.FieldOn(layer, name));
     return fields.at(key);
   };
+  auto surfaces = std::map<std::pair<int, std::string>, planetmodel::LateralInterpolant>{};
+  auto surface = [&](int interface, const std::string& name)
+      -> const planetmodel::LateralInterpolant& {
+    const auto key = std::pair{interface, name};
+    if (!surfaces.contains(key)) surfaces.emplace(key, file.SurfaceFieldOn(interface, name));
+    return surfaces.at(key);
+  };
   const auto mapping = file.Mapping();
   auto in = std::ifstream(expect);
+  auto lines = std::vector<std::string>{};
+  for (auto line = std::string{}; std::getline(in, line);) lines.push_back(line);
+  // each variable's largest value, the scale of its tolerance, as the
+  // Python's check of a model file has it: a field zero somewhere (a
+  // pressure at the surface) is held to its size, not to that zero
+  auto largest = std::map<std::string, double>{};
+  for (const auto& line : lines) {
+    auto words = std::istringstream{line};
+    auto key = std::string{};
+    auto layer = std::string{};
+    auto name = std::string{};
+    auto tag = std::string{};
+    if (!(words >> key) || key != "value") continue;
+    words >> layer >> name >> tag;
+    auto skip = 0.0;
+    words >> skip >> skip >> skip;
+    for (auto v = 0.0; words >> v;) largest[name] = std::max(largest[name], std::abs(v));
+  }
   auto checked = 0;
-  for (auto line = std::string{}; std::getline(in, line);) {
+  for (const auto& line : lines) {
     auto words = std::istringstream{line};
     auto key = std::string{};
     words >> key;
@@ -87,6 +113,10 @@ void ExpectAsThePython(const std::filesystem::path& expect) {
       EXPECT_EQ(s.Temperature(), ToDouble(rest[3]));
     } else if (key == "rtol") {
       EXPECT_EQ(file.Rtol(), ToDouble(rest[0]));
+    } else if (key == "citation") {
+      auto joined = std::string{};
+      for (const auto& work : file.Citation()) joined += (joined.empty() ? "" : "\n") + work;
+      EXPECT_EQ(joined.empty() ? "-" : joined, rest[0] == "-" ? "-" : Unhex(rest[0]));
     } else if (key == "name") {
       EXPECT_EQ(file.Name().value_or("-"), rest[0] == "-" ? "-" : Unhex(rest[0]));
     } else if (key == "layer_name" || key == "interface_name") {
@@ -117,7 +147,7 @@ void ExpectAsThePython(const std::filesystem::path& expect) {
       ASSERT_EQ(want.size(), f.Size()) << line;
       const auto got = f.Evaluate(r, theta, phi, frame);
       ASSERT_EQ(got.size(), want.size()) << line;
-      const auto scale = Largest(want) + 1e-300;
+      const auto scale = std::max(Largest(want), largest[rest[1]]) + 1e-300;
       for (auto c = std::size_t{0}; c < want.size(); ++c) {
         EXPECT_NEAR(got[c], want[c], 1e-11 * scale) << line << " [" << c << "]";
       }
@@ -146,6 +176,25 @@ void ExpectAsThePython(const std::filesystem::path& expect) {
       const auto moved = mapping(X);
       for (auto i = 0; i < 3; ++i) EXPECT_NEAR(moved[i], X[i] + want[i], 1e-12 * outer) << line;
       ++checked;
+    } else if (key == "surface") {
+      const auto& f = surface(std::stoi(rest[0]), rest[1]);
+      const auto want = ToDouble(rest[4]);
+      EXPECT_NEAR(f.Value(ToDouble(rest[2]), ToDouble(rest[3])), want,
+                  1e-12 * (std::abs(want) + 1.0))
+          << line;
+      ++checked;
+    } else if (key == "surface_gradient") {
+      const auto& f = surface(std::stoi(rest[0]), rest[1]);
+      const auto got = f.Gradient(ToDouble(rest[2]), ToDouble(rest[3]));
+      const auto want = std::vector<double>{ToDouble(rest[4]), ToDouble(rest[5])};
+      const auto scale = Largest(want) + 1.0;
+      EXPECT_NEAR(got[0], want[0], 1e-9 * scale) << line;
+      EXPECT_NEAR(got[1], want[1], 1e-9 * scale) << line;
+      ++checked;
+    } else if (key == "surface_absent") {
+      EXPECT_FALSE(file.HasSurfaceField(std::stoi(rest[0]), rest[1])) << line;
+      EXPECT_THROW(static_cast<void>(file.SurfaceFieldOn(std::stoi(rest[0]), rest[1])), Error)
+          << line;
     }
   }
   EXPECT_GT(checked, 10);
@@ -238,6 +287,30 @@ TEST(ModelFile, TheDerivativesAreTheDifferencesOfTheValues) {
       }
     }
   }
+}
+
+TEST(ModelFile, HoldsFieldsOnInterfacesBesideTheLayers) {
+  PLANETMODEL_FIXTURE(path, "model_surfaces.nc");
+  const auto file = planetmodel::ReadModelFile(path);
+  ASSERT_TRUE(file.Surfaces());
+  EXPECT_EQ(file.Surfaces()->interfaces, (std::vector<int>{0, 1}));
+  EXPECT_EQ(file.SurfaceNames(0), (std::vector<std::string>{"K_shape"}));
+  EXPECT_EQ(file.SurfaceNames(1), (std::vector<std::string>{"K_shape", "shift"}));
+  const auto& kernel = file.Surfaces()->variables.at("K_shape");
+  EXPECT_EQ(kernel.Numbers("dimensions"), (std::vector<double>{0.0, -2.0, 0.0, 0.0}));
+  EXPECT_EQ(kernel.Text("long_name"), "a shape kernel");
+  EXPECT_EQ(file.Surfaces()->variables.at("shift").Text("lateral_interpolation"), "cubic");
+  // a field on interfaces is no field of the layers, nor the other way round
+  EXPECT_FALSE(file.HasField(1, "K_shape"));
+  EXPECT_THROW(static_cast<void>(file.FieldOn(1, "K_shape")), Error);
+  EXPECT_FALSE(file.HasSurfaceField(1, "rho"));
+  EXPECT_THROW(static_cast<void>(file.SurfaceFieldOn(0, "shift")), Error);
+  EXPECT_THROW(static_cast<void>(file.SurfaceFieldOn(2, "K_shape")), Error);
+  // a file without the group holds none
+  PLANETMODEL_FIXTURE(prem, "model_prem.nc");
+  const auto plain = planetmodel::ReadModelFile(prem);
+  EXPECT_FALSE(plain.Surfaces());
+  EXPECT_TRUE(plain.SurfaceNames(1).empty());
 }
 
 TEST(ModelFile, RefusesWhatIsNoFieldOfTheModel) {

@@ -89,8 +89,8 @@ class GriddedField(FieldBase):
     `(nelem, ngll, 2) + stored shape` with components in the Cartesian
     frame, gives the values at the poles the grid lacks, by the rule of
     `lateral.polar_values` with `rtol` of the values' largest; when it is
-    None they are found from the grid's expansion, which needs a band
-    and the `harmonics` extra, and refused otherwise.  Values are real.
+    None they are found from the grid's expansion, which needs a band,
+    and refused otherwise.  Values are real.
     """
 
     def __init__(self, interval: tuple[float, float], breaks: ArrayLike,

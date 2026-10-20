@@ -52,8 +52,8 @@ jobs:
           SKIP: no-commit-to-branch,pytest
         run: pre-commit run --all-files --show-diff-on-failure --color=always
 
-  # The fast suite: numpy and scipy, plus the `plot`, `harmonics` and `netcdf` extras
-  # so that the plotting and grid-transform tests run rather than skip.  Every
+  # The fast suite: the dependencies, plus the `plot`, `netcdf` and `maps` extras
+  # so that the plotting, model-file and map tests run rather than skip.  Every
   # platform and every supported Python.
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.python-version }})
@@ -79,7 +79,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics netcdf maps"
+        run: poetry install --with dev --extras "plot netcdf maps"
 
       - name: Test with pytest
         # The default selection is the fast suite (pyproject's addopts).
@@ -111,7 +111,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics netcdf"
+        run: poetry install --with dev --extras "plot netcdf"
 
       - name: Step numpy and scipy down to their floors
         run: pip install "numpy==2.0.*" "scipy==1.15.*"
@@ -142,7 +142,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics meshing mfem netcdf"
+        run: poetry install --with dev --extras "plot meshing mfem netcdf"
 
       # gmsh's wheel needs the X and OpenGL libraries even headless.
       - name: Install gmsh's system libraries
@@ -188,8 +188,10 @@ jobs:
           pip install poetry
           poetry config virtualenvs.create false
 
+      # plot and maps for the kernel tutorial, run on the C++ example's
+      # file below.
       - name: Install dependencies
-        run: poetry install --with dev --extras "netcdf meshing mfem"
+        run: poetry install --with dev --extras "netcdf meshing mfem plot maps"
 
       - name: Write the fixtures
         run: poetry run python cpp/tests/make_fixtures.py
@@ -217,6 +219,13 @@ jobs:
       # The example reader, on a file the Python wrote.
       - name: The example reads a Python model file
         run: build/cpp/examples/planetmodel_read_model cpp/tests/fixtures/model_stacked.nc
+
+      # The kernel the example wrote, drawn by tutorial 15, which checks it
+      # against the Python's own at every node.
+      - name: The kernel tutorial reads the C++ example's kernel
+        env:
+          MPLBACKEND: Agg
+        run: poetry run python examples/tutorials/15_kernels.py build/cpp/tests/written/kernel.nc
 
       # The library is fetched from the repository at a tag, never from
       # PyPI, so the Python package leaves it out.
@@ -267,8 +276,9 @@ jobs:
             exit "$status"
           fi
 
-  # Everything, including whatever is marked slow.  Run by hand: Actions ->
-  # CI -> Run workflow.  Worth doing before a release.
+  # Everything off the network, including whatever is marked slow.  Run by
+  # hand: Actions -> CI -> Run workflow.  Worth doing before a release.  The
+  # tests marked `network` fetch published data sets and run on their own.
   full-tests:
     name: Full test suite (including slow)
     if: github.event_name == 'workflow_dispatch'
@@ -288,7 +298,7 @@ jobs:
           poetry config virtualenvs.create false
 
       - name: Install dependencies
-        run: poetry install --with dev --extras "plot harmonics meshing mfem netcdf"
+        run: poetry install --with dev --extras "plot meshing mfem netcdf"
 
       - name: Install gmsh's system libraries
         run: |
@@ -296,4 +306,4 @@ jobs:
           sudo apt-get install -y libglu1-mesa libxrender1 libxcursor1 libxft2 libxinerama1
 
       - name: Test with pytest
-        run: poetry run pytest -m "" --cov=planetmodel --cov-report=term-missing
+        run: poetry run pytest -m "not network" --cov=planetmodel --cov-report=term-missing

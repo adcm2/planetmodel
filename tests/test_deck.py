@@ -9,7 +9,7 @@ from planetmodel import (DENSITY, SCALAR, Deck, DeckFormat, Elastic, FieldSpec,
                          Geometry, MINEOS, MineosModel, Model, PREM, SelfGravitating,
                          Tabulated, Viscoelastic, deck_layers, read_deck, testing,
                          write_deck)
-from planetmodel.deck import KINDS, deck_knots, mineos_names
+from planetmodel.deck import KINDS, deck_knots, mineos_names, nd_names
 from planetmodel.layerfunction import PolynomialLayer
 from planetmodel.units import VISCOSITY
 
@@ -362,3 +362,101 @@ def test_a_header_without_an_inner_core_is_not_warned_about():
         warnings.simplefilter("error")
         layers, faces = mineos_names(d)
     assert layers == [None, None] and faces[-1] == "surface"
+
+
+# ------------------------------------------------- TauP's named discontinuities
+
+def nd_file(width=6):
+    """A small two-layer-cored body in TauP's form: a label before the first
+    row, labels between repeated depths (TauP's own and one of words), an
+    unlabelled repeat, comments of the three kinds, `width` numbers a row."""
+    rows = [("crust", None),
+            (0.0, [5.8, 3.4, 2.7, 1400.0, 600.0]),
+            (10.0, [5.8, 3.4, 2.7, 1400.0, 600.0]),
+            ("mantle", None),
+            (10.0, [7.8, 4.4, 3.3, 1000.0, 400.0]),
+            (40.0, [7.9, 4.5, 3.4, 1000.0, 400.0]),
+            (40.0, [8.0, 4.6, 3.45, 900.0, 350.0]),         # a repeat, no label
+            (60.0, [8.1, 4.7, 3.5, 900.0, 350.0]),
+            ("lower mantle", None),
+            (60.0, [8.2, 4.8, 3.6, 800.0, 300.0]),
+            (80.0, [8.3, 4.9, 3.7, 800.0, 300.0]),
+            ("outer-core", None),
+            (80.0, [6.0, 0.0, 9.0, 50000.0, 0.0]),
+            (95.0, [6.5, 0.0, 9.5, 50000.0, 0.0]),
+            ("inner-core", None),
+            (95.0, [7.0, 3.0, 11.0, 500.0, 100.0]),
+            (100.0, [7.1, 3.1, 11.1, 500.0, 100.0])]
+    lines = ["# a test body, 100 km in radius", "/* a block", "   comment */"]
+    for depth, values in rows:
+        if values is None:
+            lines.append(depth)
+        else:
+            row = [depth] + values[:width - 1]
+            lines.append("  ".join(f"{v:g}" for v in row) + "   // a row")
+    return lines
+
+
+def test_an_nd_table_reads_to_an_si_deck_radius_first():
+    from planetmodel import ND
+    d = read_deck(nd_file(), ND)
+    assert d.names == ("vp", "vs", "rho", "qp", "qmu")
+    assert d.radius[0] == 0.0 and d.radius[-1] == 100e3
+    assert list(d.boundaries) == [0.0, 5e3, 20e3, 40e3, 60e3, 90e3, 100e3]
+    assert d["vp"][-1] == 5.8e3 and d["rho"][0] == 11.1e3 and d["qmu"][-1] == 600.0
+    labels = dict((r, lab) for r, lab in d.header["labels"])
+    assert labels == {100e3: "crust", 90e3: "mantle", 40e3: "lower-mantle",
+                      20e3: "outer-core", 5e3: "inner-core"}
+    layers, faces = nd_names(d)
+    assert layers == ["inner_core", "outer_core", "lower_mantle", None, "mantle",
+                      "crust"]
+    assert faces == ["icb", "cmb", None, None, "moho", "surface"]
+
+
+@pytest.mark.parametrize("width", [3, 4, 5, 6])
+def test_every_width_of_row_names_its_columns(width):
+    from planetmodel import ND
+    d = read_deck(nd_file(width), ND)
+    assert d.names == ("vp", "vs", "rho", "qp", "qmu")[:width - 1]
+
+
+def test_an_nd_table_writes_back(tmp_path):
+    from planetmodel import ND
+    d = read_deck(nd_file(), ND)
+    path = write_deck(tmp_path / "body.nd", d, ND)
+    back = read_deck(path, ND)
+    assert np.array_equal(back.radius, d.radius)
+    for name in d.names:
+        assert np.allclose(back[name], d[name], rtol=1e-12)
+    assert back.header["labels"] == d.header["labels"]
+    absent = Deck(d.radius, {**d.columns, "vs": np.where(d.radius < 20e3, np.nan,
+                                                          d["vs"])})
+    with pytest.raises(ValueError, match="every column on every row"):
+        write_deck(tmp_path / "bad.nd", absent, ND)
+
+
+def test_a_malformed_nd_table_is_refused_by_name():
+    from planetmodel import ND
+    lines = nd_file()
+    with pytest.raises(ValueError, match="the same on every row"):
+        read_deck(lines[:6] + ["10 7.8 4.4"] + lines[6:], ND)
+    with pytest.raises(ValueError, match="three to six numbers"):
+        read_deck(["0 1 2 3 4 5 6", "10 1 2 3 4 5 6"], ND)
+    with pytest.raises(ValueError, match="sits at no boundary"):
+        read_deck(["0 5.8 3.4", "label", "10 5.8 3.4"], ND)
+    with pytest.raises(ValueError, match="must not decrease"):
+        read_deck(["10 5.8 3.4", "0 5.8 3.4"], ND)
+    with pytest.raises(ValueError, match="a row is numbers"):
+        read_deck(["0 5.8 x", "10 5.8 3.4"], ND)
+
+
+def test_a_tvel_table_keeps_its_two_header_lines(tmp_path):
+    from planetmodel import TVEL
+    lines = ["a P model", "an S model"] + [ln for ln in nd_file(4)
+                                            if ln[0].isdigit()]
+    d = read_deck(lines, TVEL)
+    assert d.header["lines"] == ("a P model", "an S model")
+    assert d.names == ("vp", "vs", "rho")
+    back = read_deck(write_deck(tmp_path / "body.tvel", d, TVEL), TVEL)
+    assert np.array_equal(back.radius, d.radius)
+    assert back.header["lines"] == d.header["lines"]

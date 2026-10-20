@@ -22,14 +22,17 @@ Modules reached by name, one level down:
   sampling     a model on a radial mesh times an angular grid
   lateral      values between the nodes of an angular grid: the lateral rules
   modelfile    the model file: a model in one netCDF file (netCDF4, optional)
-  harmonics    real spherical harmonics; grid transforms via ducc0 (optional)
+  harmonics    real spherical harmonics, through ducc0
   slices       a field on a sphere, a section or a profile; spectra and
                correlations by degree
   plotting     profiles, sections, maps and spectra drawn (matplotlib and
                cartopy, optional), and VTK files for ParaView
   mesh1d       radial spectral-element meshes (GLL), nodal values, gravity
+               and hydrostatic pressure
   mesh3d       2D and 3D meshes via gmsh, and MFEM export
   randomfield  Matern random fields on balls, annuli and layers
+  datasets     published models: their entries, fetched on demand into a
+               cache, read into the library's objects
   testing      the executable contracts, `check_field` and its kin
 """
 
@@ -47,6 +50,8 @@ from .character import DENSITY, ELASTIC, SCALAR, STRESS, VECTOR, Character, Symm
 from .deck import (
     GIA,
     MINEOS,
+    ND,
+    TVEL,
     Deck,
     DeckFormat,
     Tabulated,
@@ -98,7 +103,7 @@ from .mapping import (
 from .materials import ElasticField, elastic_moduli, is_fluid, kappa_mu, moduli
 from .means import spherical_mean, spherically_averaged
 from .mesh1d import RadialMesh
-from .mesh1d.gravity import gravity, gravity_fields, mass
+from .mesh1d.gravity import gravity, gravity_fields, mass, pressure, pressure_fields
 from .model import CoarseningFit, Layer, Model
 from .perturbation import PerturbedField, perturbed, unperturbed
 from .pushforward import PulledBackField, PushedForwardField, pull_back, push_forward
@@ -214,6 +219,8 @@ __all__ = [
     "DeckFormat",
     "MINEOS",
     "GIA",
+    "ND",
+    "TVEL",
     "read_deck",
     "write_deck",
     "deck_layers",
@@ -233,6 +240,8 @@ __all__ = [
     "gravity",
     "mass",
     "gravity_fields",
+    "pressure",
+    "pressure_fields",
     "testing",
     "__version__",
 ]

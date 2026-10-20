@@ -11,8 +11,13 @@ mineos and PREM decks, three header lines and nine or six columns;
 `GIA` that of a viscoelastic model for glacial isostatic adjustment,
 `r rho vpv vsv vph vsh eta viscosity` after two header lines (a title
 and the column names), SI, NaN where a layer lacks a field (the
-viscosity of an elastic or fluid layer); any other table is a format of
-its own, given its column names.
+viscosity of an elastic or fluid layer); `ND` is TauP's named
+discontinuities, depth first from the surface in km, km/s and g/cm^3
+with label lines naming the regions below them, and `TVEL` its tabled
+velocities under two header lines; any other table is a format of its
+own, given its column names.  A format whose table is not radius-first
+SI rows reads and writes it through hooks of its own, the deck being SI
+and radius first whatever the file.
 
 `read_deck` turns a file into a `Deck`, numbers and a header, nothing
 else.  `deck_layers` turns a deck into the base fields of a model: the
@@ -33,6 +38,7 @@ a model that was read can be written.
 from __future__ import annotations
 
 import os
+import re
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
@@ -48,15 +54,15 @@ from .fields import Field, RadialField
 from .layerfunction import PolynomialLayer, same_interval
 from .skeleton import Skeleton
 from .units import LENGTH, Scales
-from .vocabulary import VOCABULARY, FieldSpec
+from .vocabulary import VOCABULARY, FieldSpec, family_spec
 
 if TYPE_CHECKING:
     from .model import Model
 
 __all__ = ["Deck", "DeckFormat", "MINEOS", "MINEOS_COLUMNS", "MINEOS_ISOTROPIC_COLUMNS",
-           "GIA", "GIA_COLUMNS",
+           "GIA", "GIA_COLUMNS", "ND", "TVEL", "ND_COLUMNS", "ND_LABELS", "Table",
            "read_deck", "write_deck", "deck_layers", "deck_knots", "mineos_names",
-           "Tabulated", "KINDS"]
+           "nd_names", "Tabulated", "KINDS"]
 
 #: The interpolants a deck's knots may be joined by, each a piecewise
 #: polynomial: a not-a-knot cubic spline, the parabola through three
@@ -72,6 +78,12 @@ MINEOS_COLUMNS = ("rho", "vpv", "vsv", "qkappa", "qmu", "vph", "vsh", "eta")
 MINEOS_ISOTROPIC_COLUMNS = ("rho", "vp", "vs", "qkappa", "qmu")
 
 
+#: What a format's own table reader gives: the knot radii, the columns at
+#: them, both SI, and what the table adds to the header.
+type Table = Callable[[Sequence[str]],
+                      tuple[np.ndarray, Mapping[str, np.ndarray], Mapping[str, Any]]]
+
+
 # -- the deck and its format ---------------------------------------------------
 
 @dataclass(frozen=True)
@@ -83,7 +95,11 @@ class DeckFormat:
     `header_lines` is how many lines precede the table, `parse_header`
     turns them into the header mapping a `Deck` carries and
     `write_header` turns a deck back into them.  Without a parser the
-    header lines are kept verbatim under "lines".
+    header lines are kept verbatim under "lines".  A table that is not
+    rows of radius and SI values has `read_table`, from the lines after
+    the header to (radius, columns, more of the header) in SI and radius
+    first, and `write_table`, from a deck and the columns to write to its
+    lines.
     """
 
     columns: tuple[str, ...] | Mapping[int, tuple[str, ...]] = field(hash=False)
@@ -92,6 +108,8 @@ class DeckFormat:
     header_lines: int = 0
     parse_header: Callable[[Sequence[str]], Mapping[str, Any]] | None = None
     write_header: Callable[["Deck"], Sequence[str]] | None = None
+    read_table: Table | None = None
+    write_table: Callable[["Deck", tuple[str, ...]], Sequence[str]] | None = None
 
     def names(self, width: int) -> tuple[str, ...]:
         """The column names of a row with `width` values after the radius."""
@@ -232,6 +250,9 @@ def read_deck(source: str | os.PathLike[str] | Iterable[str],
         raise ValueError(f"{path or 'the deck'}: {len(lines)} lines, fewer than the "
                          f"{n} header lines of a {format.name} deck")
     header = format.header(lines[:n])
+    if format.read_table is not None:
+        radius, columns, more = format.read_table(lines[n:])
+        return Deck(radius, columns, header={**header, **more}, source=path)
     body = [ln for ln in lines[n:] if ln.strip()]
     if not body:
         raise ValueError(f"{path or 'the deck'}: no knots after the header")
@@ -261,14 +282,17 @@ def write_deck(path: str | os.PathLike[str], deck: Deck, format: DeckFormat) -> 
     if len(header) != format.header_lines:
         raise ValueError(f"a {format.name} deck has {format.header_lines} header "
                          f"lines; {len(header)} were produced")
-    rows = np.column_stack([deck.radius] + [deck[n] for n in names])
+    if format.write_table is not None:
+        body = list(format.write_table(deck, tuple(names)))
+    else:
+        rows = np.column_stack([deck.radius] + [deck[n] for n in names])
+        body = [f"{row[0]:14.3f}" + "".join(f"{v:16.8g}" for v in row[1:])
+                for row in rows]
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as fh:
-        for line in header:
+        for line in header + body:
             fh.write(line.rstrip("\n") + "\n")
-        for row in rows:
-            fh.write(f"{row[0]:14.3f}" + "".join(f"{v:16.8g}" for v in row[1:]) + "\n")
     return out
 
 
@@ -334,6 +358,130 @@ def _gia_header_lines(deck: Deck) -> list[str]:
 #: vsv vph vsh eta viscosity` in SI, NaN where a layer lacks a field.
 GIA = DeckFormat(GIA_COLUMNS, name="gia", header_lines=2, parse_header=_gia_header,
                  write_header=_gia_header_lines)
+
+
+# -- TauP's named discontinuities ----------------------------------------------
+
+#: The columns of an `.nd` or `.tvel` row after the depth, by how many there
+#: are: TauP's Qs is the shear quality factor, `qmu`, its Qp `qp`.
+ND_COLUMNS = {5: ("vp", "vs", "rho", "qp", "qmu"), 4: ("vp", "vs", "rho", "qp"),
+              3: ("vp", "vs", "rho"), 2: ("vp", "vs")}
+
+#: The SI size of one unit of each `.nd` column: km/s, g/cm^3, pure numbers.
+_ND_UNITS = {"vp": 1e3, "vs": 1e3, "rho": 1e3, "qp": 1.0, "qmu": 1.0}
+
+#: TauP's labels of the boundaries every planetary model has, and the
+#: interface names they give: a label names the region below it.
+ND_LABELS = {"mantle": "moho", "moho": "moho", "outer-core": "cmb", "cmb": "cmb",
+             "inner-core": "icb", "icocb": "icb"}
+
+
+def _nd_label(line: str) -> str:
+    """A label line in TauP's normal form: lower case, words joined by '-'."""
+    return "-".join(line.lower().split())
+
+
+def _nd_table(lines: Sequence[str]) -> tuple[np.ndarray, dict[str, np.ndarray],
+                                              dict[str, Any]]:
+    """The rows of an `.nd` table: comments (`#`, `//`, `/* */`) dropped,
+    rows `depth vp vs [rho [qp [qs]]]` of one width, a label line before
+    the first row (the outermost region) or between the two rows of a
+    repeated depth (the region below the boundary there); radii from the
+    deepest depth, which is the body's radius, in SI, from the centre."""
+    text = re.sub(r"/\*.*?\*/", " ", "\n".join(lines), flags=re.S)
+    rows: list[list[float]] = []
+    at: list[tuple[int, str]] = []
+    for raw in text.splitlines():
+        line = re.split(r"#|//", raw, maxsplit=1)[0].strip()
+        if not line:
+            continue
+        tokens = line.split()
+        try:
+            float(tokens[0])
+        except ValueError:
+            at.append((len(rows), _nd_label(line)))
+            continue
+        try:
+            rows.append([float(t) for t in tokens])
+        except ValueError:
+            raise ValueError(f"cannot read the row {line!r}: a row is numbers, a "
+                             "label starts with a letter") from None
+    widths = sorted({len(r) for r in rows})
+    if not rows or len(widths) != 1 or widths[0] - 1 not in ND_COLUMNS:
+        raise ValueError(f"the rows of an .nd table are depth vp vs [rho [qp [qs]]], "
+                         f"three to six numbers, the same on every row; got widths "
+                         f"{widths or 'none'}")
+    table = np.array(rows)
+    depth = table[:, 0]
+    if np.any(np.diff(depth) < 0.0):
+        raise ValueError("the depths of an .nd table must not decrease")
+    surface = float(depth[-1])
+    labels = []
+    for k, label in at:
+        if not (k == 0 or (0 < k < depth.size and depth[k - 1] == depth[k])):
+            raise ValueError(f"the label {label!r} sits at no boundary: a label comes "
+                             "before the first row or between the two rows of a "
+                             "repeated depth")
+        labels.append(((surface - float(depth[k if k < depth.size else -1])) * 1e3,
+                       label))
+    names = ND_COLUMNS[widths[0] - 1]
+    radius = (surface - depth[::-1]) * 1e3
+    columns = {n: table[::-1, j + 1] * _ND_UNITS[n] for j, n in enumerate(names)}
+    return radius, columns, {"labels": tuple(labels)}
+
+
+def _nd_table_lines(deck: Deck, names: tuple[str, ...]) -> list[str]:
+    """The rows of an `.nd` table from a deck, from the surface down, its
+    header's labels where they sit; an absent value is refused."""
+    radius, top = deck.radius, float(deck.radius[-1])
+    labels = {float(r): label for r, label in deck.header.get("labels", ())}
+    values = np.column_stack([deck[n] / _ND_UNITS[n] for n in names])
+    if np.isnan(values).any():
+        raise ValueError("an .nd table holds every column on every row; the deck "
+                         "has absent values")
+    out = [labels.pop(top)] if top in labels else []
+    for i in range(radius.size - 1, -1, -1):
+        r = float(radius[i])
+        if i < radius.size - 1 and r == float(radius[i + 1]) and r in labels:
+            out.append(labels[r])
+        depth = (top - r) / 1e3
+        out.append(" ".join([f"{depth:.10g}"] + [f"{v:.10g}" for v in values[i]]))
+    return out
+
+
+def _tvel_header_lines(deck: Deck) -> list[str]:
+    """Two title lines for a `.tvel` table: its own, or the deck's name."""
+    kept = tuple(deck.header.get("lines", ()))
+    title = str(deck.header.get("name", deck.source or "deck"))
+    return list(kept) if len(kept) == 2 else [title, title]
+
+
+#: TauP's named discontinuities: no header, rows `depth vp vs [rho [qp
+#: [qs]]]` from the surface down in km, km/s and g/cm^3, a repeated depth a
+#: boundary, a label line naming the region below it.
+ND = DeckFormat(ND_COLUMNS, name="nd", read_table=_nd_table,
+                write_table=_nd_table_lines)
+
+#: TauP's tabled velocities: two header lines, then `.nd` rows.
+TVEL = DeckFormat(ND_COLUMNS, name="tvel", header_lines=2, read_table=_nd_table,
+                  write_header=_tvel_header_lines, write_table=_nd_table_lines)
+
+
+def nd_names(deck: Deck) -> tuple[list[str | None], list[str | None]]:
+    """Layer and interface names an `.nd` table's labels imply: each label
+    names the layer below it (its words joined by '_'), and the labels of
+    `ND_LABELS` name their interfaces too (`moho`, `cmb`, `icb`); the
+    outermost interface is `surface`.  Every other name is None."""
+    b = deck.boundaries
+    first = 1 if b[0] > 0 else 0
+    layers: list[str | None] = [None] * deck.nlayers
+    faces: list[str | None] = [None] * (deck.nlayers - 1 + first) + ["surface"]
+    for r, label in deck.header.get("labels", ()):
+        k = int(np.argmin(np.abs(b - float(r))))
+        layers[k - 1] = label.replace("-", "_")
+        if label in ND_LABELS and k < b.size - 1:
+            faces[k - 1 + first] = ND_LABELS[label]
+    return layers, faces
 
 
 def mineos_names(deck: Deck) -> tuple[list[str | None], list[str | None]]:
@@ -416,7 +564,7 @@ def deck_layers(deck: Deck, *, kind: str = "cubic",
                 raise ValueError(f"column {name!r} is NaN on part of layer {i}; a "
                                  "column is absent from a layer only when NaN "
                                  "throughout it")
-            spec = known.get(name)
+            spec = known.get(name) or family_spec(name)
             character: Character = SCALAR if spec is None else spec.character
             fields[name] = RadialField(skeleton.interval(i), _interpolant(r, y, kind),
                                        character=character, name=name)

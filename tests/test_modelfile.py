@@ -5,7 +5,10 @@ PREM as a reference and a perturbation; a fully 3D model, a model in
 three parts on three grids, and models placed by boundary reliefs and
 by another mapping, all to the file's own nodes exactly and between
 them by the stated rules; xarray opens the file as CF tools do; a
-malformed file is refused naming what is wrong.
+malformed file is refused naming what is wrong.  Fields on interfaces, on
+a grid with poles and on one without, come back as gridded functions by
+interface, a file without them reads as one with none, and what the
+group cannot hold is refused.
 """
 from pathlib import Path
 
@@ -17,15 +20,17 @@ from planetmodel import (PREM, AnalyticField, GriddedField, GriddedFunction,
                          PerturbedField, Scales, driscoll_healy, equiangular,
                          flattening, gauss_legendre, layer_linear, perturbed,
                          unperturbed)
-from planetmodel.character import DENSITY, VECTOR
+from planetmodel.character import DENSITY, SCALAR, VECTOR
 from planetmodel.harmonics import packing
 from planetmodel.testing import check_geometry, check_model_file
+from planetmodel.units import Dimensions
+from planetmodel.vocabulary import FieldSpec
 
 pytestmark = pytest.mark.netcdf
 netCDF4 = pytest.importorskip("netCDF4", reason="needs the planetmodel[netcdf] extra")
 
 from planetmodel.modelfile import (SCHEMA, read_model, read_model_file,  # noqa: E402
-                                   validate_structure, write_model)
+                                   read_surfaces, validate_structure, write_model)
 
 DATA = Path(__file__).resolve().parents[1] / "examples" / "data"
 
@@ -63,6 +68,21 @@ def test_prem_comes_back_as_the_same_polynomials(prem, tmp_path):
     assert data.schema == SCHEMA and data.name == prem.name
     assert dict(data.meta) == {"source": "PREM", "run": 3}
     assert data.constants["G"] == pytest.approx(prem.constant("G"))
+
+
+def test_a_model_s_citation_is_written_and_read_back(prem, tmp_path):
+    cites = prem.with_citation("A. Author (2026).  Something on top.")
+    path = write_model(tmp_path / "cites.nc", cites, grid=gauss_legendre(2))
+    check_model_file(path, cites)
+    with netCDF4.Dataset(path) as ds:
+        assert ds.getncattr("citation") == cites.cite()
+    assert read_model_file(path).citation == cites.citation
+    assert read_model(path).citation == cites.citation
+    bare = prem.replaced(citation=())
+    path = write_model(tmp_path / "bare.nc", bare, grid=gauss_legendre(2))
+    with netCDF4.Dataset(path) as ds:
+        assert "citation" not in ds.ncattrs()
+    assert read_model(path).citation == ()
 
 
 def test_a_model_in_other_scales_is_read_back_in_them(prem, tmp_path):
@@ -157,8 +177,7 @@ def test_a_fully_3d_model_comes_back(tmp_path):
     q, qb = m.layer(0)["q"], back.layer(0)["q"]
     assert isinstance(qb, GriddedField) and qb.lateral == "harmonic"
     rq = rng.uniform(0.05, 0.45, 30)
-    if pytest.importorskip("ducc0"):
-        assert np.allclose(qb(rq, t, p), q(rq, t, p), rtol=0, atol=1e-11)
+    assert np.allclose(qb(rq, t, p), q(rq, t, p), rtol=0, atol=1e-11)
 
 
 def test_a_field_without_pieces_subdivides_its_own_layer(tmp_path):
@@ -518,3 +537,156 @@ def test_a_missing_perturbation_kind_is_refused(prem, tmp_path):
         "perturbation_kind"))
     with pytest.raises(ValueError, match="perturbation_kind"):
         validate_structure(path)
+
+
+# -- fields on interfaces -------------------------------------------------------
+
+KERNEL = FieldSpec(SCALAR, Dimensions(length=-2), meaning="a shape kernel")
+
+
+def shape(t, p):
+    return np.sin(t) ** 2 * np.cos(2 * p) + 0.3 * np.cos(t)
+
+
+def shift(t, p):
+    return 1e3 * (np.cos(t) ** 2 - 1.0 / 3.0) + 0.0 * p
+
+
+def with_kernel(model):
+    return model.replaced(specs={**model.specs, "K_shape": KERNEL})
+
+
+def same_grid(a, b):
+    """The same grid, its angles through degrees both ways."""
+    return (a.kind == b.kind and a.lmax == b.lmax
+            and np.allclose(a.colatitudes, b.colatitudes, rtol=0, atol=1e-15)
+            and np.allclose(a.longitudes, b.longitudes, rtol=0, atol=1e-15))
+
+
+@pytest.mark.parametrize("grid", [gauss_legendre(8), equiangular(9, 16, poles=True)],
+                         ids=["without poles", "with poles"])
+def test_fields_on_interfaces_come_back_as_gridded_functions(prem, tmp_path, grid):
+    m = with_kernel(prem)
+    surfaces = {"K_shape": {"cmb": shape, 12: shift}, "shift": {"moho": shift}}
+    path = write_model(tmp_path / "s.nc", m, grid=gauss_legendre(2), fields=["rho"],
+                       surfaces=surfaces, surface_grid=grid)
+    check_model_file(path, m, surfaces=surfaces)
+    data = read_model_file(path)
+    assert data.surfaces.interfaces == (1, 9, 12)
+    assert ("K_shape_poles" in data.surfaces.variables) == (grid.kind != "equiangular")
+    back = read_surfaces(path)
+    assert {n: sorted(on) for n, on in back.items()} == {
+        "K_shape": ["cmb", "surface"], "shift": ["moho"]}
+    rng = np.random.default_rng(3)
+    t, p = rng.uniform(0, np.pi, 50), rng.uniform(-np.pi, 3 * np.pi, 50)
+    f = back["K_shape"]["cmb"]
+    assert isinstance(f, GriddedFunction) and f.lateral == "linear"
+    assert np.allclose(f(np.array([0.0, np.pi]), np.zeros(2)),
+                       shape(np.array([0.0, np.pi]), np.zeros(2)), atol=1e-14)
+    assert np.allclose(f(t, p), shape(t, p), atol=0.1)      # bilinear between nodes
+    spec = read_model(path).spec("K_shape")
+    assert spec.dimensions == KERNEL.dimensions and spec.meaning == KERNEL.meaning
+    assert read_model(path).spec("shift").dimensions is None
+    # what is read back writes the same numbers again
+    again = write_model(tmp_path / "again.nc", read_model(path), grid=gauss_legendre(2),
+                        surfaces=back)
+    second = read_model_file(again).surfaces
+    assert second.interfaces == (1, 9, 12) and same_grid(second.grid, grid)
+    for name, var in data.surfaces.variables.items():
+        scale = np.nanmax(np.abs(var.values))
+        assert np.allclose(second.variables[name].values, var.values, rtol=0,
+                           atol=1e-14 * scale, equal_nan=True)
+
+
+def test_a_surface_field_states_its_rule_and_takes_its_grid(tmp_path):
+    two = with_kernel(LayeredIsotropicElastic([0.0, 0.5, 1.0], rho=[10.0, 4.0],
+                                              vp=[9.0, 7.0], vs=[4.0, 3.0]))
+    gf = GriddedFunction.sampled(shape, driscoll_healy(6))
+    path = write_model(tmp_path / "a.nc", two, grid=gauss_legendre(4),
+                       surfaces={"K_shape": {0: gf, 1: gf}})
+    data = read_model_file(path)
+    assert same_grid(data.surfaces.grid, driscoll_healy(6))
+    assert data.surfaces.variables["K_shape"].attributes[
+        "lateral_interpolation"] == "cubic"
+    back = read_surfaces(path)["K_shape"]
+    assert sorted(back) == [0, 1]                       # unnamed: by index
+    assert back[1].lateral == "cubic"
+    path = write_model(tmp_path / "b.nc", two, grid=gauss_legendre(4),
+                       surfaces={"K_shape": {0: gf, 1: shape}},
+                       interpolation={"K_shape": ("polynomial", "cubic")})
+    data = read_model_file(path)
+    assert same_grid(data.surfaces.grid, gauss_legendre(4))   # the outermost part's
+    assert data.surfaces.variables["K_shape"].attributes[
+        "lateral_interpolation"] == "cubic"
+    assert read_surfaces(path, interpolation={"K_shape": ("polynomial", "linear")})[
+        "K_shape"][0].lateral == "linear"
+
+
+def test_a_file_without_surfaces_reads_as_none(prem, tmp_path):
+    path = write_model(tmp_path / "p.nc", prem, grid=gauss_legendre(2), fields=["rho"])
+    assert read_model_file(path).surfaces is None
+    assert read_surfaces(path) == {}
+    with netCDF4.Dataset(path) as ds:
+        assert "surfaces" not in ds.groups
+
+
+def test_writing_refuses_surface_fields_the_file_cannot_hold(prem, tmp_path):
+    from planetmodel.character import VECTOR as V
+    out = tmp_path / "x.nc"
+
+    def write(surfaces, **kw):
+        return write_model(out, prem, grid=gauss_legendre(2), fields=["rho"],
+                           surfaces=surfaces, **kw)
+
+    with pytest.raises(ValueError, match="keeps for itself"):
+        write({"surface_interface": {"cmb": shape}})
+    with pytest.raises(ValueError, match="never both"):
+        write({"rho": {"cmb": shape}})
+    with pytest.raises(ValueError, match="twice"):
+        write({"K": {"cmb": shape, 1: shape}})
+    with pytest.raises(KeyError, match="no interface named"):
+        write({"K": {"core": shape}})
+    with pytest.raises(ValueError, match="no interface"):
+        write({"K": {}})
+    with pytest.raises(TypeError, match="not a function"):
+        write({"K": {"cmb": 3.0}})
+    with pytest.raises(TypeError, match="complex"):
+        write({"K": {"cmb": lambda t, p: (1 + 1j) * np.cos(t)}})
+    with pytest.raises(ValueError, match="not finite"):
+        write({"K": {"cmb": lambda t, p: np.where(t > 1.0, np.nan, 1.0)}})
+    with pytest.raises(ValueError, match="no surfaces"):
+        write(None, surface_grid=gauss_legendre(4))
+    vector = prem.replaced(specs={**prem.specs, "wind": FieldSpec(V, None)})
+    with pytest.raises(ValueError, match="number at each point"):
+        write_model(out, vector, grid=gauss_legendre(2), fields=["rho"],
+                    surfaces={"wind": {"cmb": shape}})
+    assert not out.exists()
+
+
+def surface_file(tmp_path):
+    two = with_kernel(LayeredIsotropicElastic([0.0, 0.5, 1.0], rho=[10.0, 4.0],
+                                              vp=[9.0, 7.0], vs=[4.0, 3.0]))
+    return write_model(tmp_path / "s.nc", two, grid=gauss_legendre(4),
+                       surfaces={"K_shape": {0: shape, 1: shift}, "shift": {1: shift}},
+                       surface_grid=gauss_legendre(6))
+
+
+@pytest.mark.parametrize("edit, message", [
+    (lambda g: g.variables["surface_interface"].__setitem__(1, 2),
+     "not interfaces of the file"),
+    (lambda g: g.variables["surface_interface"].__setitem__(0, 1),
+     "not interfaces of the file"),
+    (lambda g: g.variables["K_shape"].setncattr("lateral_interpolation", "quintic"),
+     "lateral rule"),
+    (lambda g: g.renameVariable("shift_poles", "shift_p"), "shift_poles is missing"),
+    (lambda g: g.renameVariable("shift", "rho"), "never both"),
+    (lambda g: g.variables["shift"].setncattr("interfaces", np.int32([0, 3])),
+     "not surfaces of the group"),
+    (lambda g: g.setncattr("grid_kind", "healpix"), "grid_kind"),
+])
+def test_a_malformed_surfaces_group_is_refused_by_name(tmp_path, edit, message):
+    path = surface_file(tmp_path)
+    validate_structure(path)
+    corrupt(path, lambda ds: edit(ds.groups["surfaces"]))
+    with pytest.raises(ValueError, match=message):
+        read_model_file(path)

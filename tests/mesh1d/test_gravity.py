@@ -190,3 +190,75 @@ def test_radii_are_held_to_the_geometry_tolerance():
     safe = np.where(r > 0, r, 1.0)
     assert np.allclose(g, np.where(r > 0, nd.G * each / safe ** 2, 0.0), rtol=1e-12,
                        atol=0.0)
+
+
+# -- pressure ------------------------------------------------------------------------
+
+def test_prem_pressure_matches_adaptive_quadrature_and_its_table():
+    from planetmodel.mesh1d.gravity import pressure
+    prem = PREM()
+    b = prem.skeleton.boundaries
+
+    def rho_g(s):
+        i = int(min(np.searchsorted(b, s, side="right") - 1, prem.nlayers - 1))
+        return float(prem.layer(i)["rho"](np.array(s))) * float(gravity(prem, s))
+
+    for r in (0.0, 1000e3, 3480e3, 4000e3, 6000e3, 6360e3):
+        cuts = [r] + [x for x in b if r < x < b[-1]] + [b[-1]]
+        want = sum(quad(rho_g, lo, hi, epsabs=0.0, epsrel=1e-13, limit=200)[0]
+                   for lo, hi in zip(cuts[:-1], cuts[1:]))
+        assert float(pressure(prem, r)) == pytest.approx(want, rel=1e-13)
+    # PREM's own table, about 364 GPa at the centre and 135.8 at the CMB
+    centre, cmb = pressure(prem, [0.0, 3480e3])
+    assert centre == pytest.approx(363.9e9, rel=2e-3)
+    assert cmb == pytest.approx(135.8e9, rel=2e-3)
+    assert float(pressure(prem, b[-1])) == 0.0
+
+
+def test_a_uniform_sphere_s_pressure_is_the_closed_form():
+    from planetmodel.mesh1d.gravity import pressure
+    a, rho = 6.0e6, 5000.0
+    ball = LayeredIsotropicElastic.homogeneous(a, rho=rho, vp=8e3, vs=4e3)
+    r = np.linspace(0.0, a, 13)
+    want = 2.0 * np.pi / 3.0 * G_SI * rho ** 2 * (a ** 2 - r ** 2)
+    assert np.allclose(pressure(ball, r), want, rtol=1e-14, atol=1e-6)
+
+
+def test_pressure_fields_are_continuous_with_the_derivative_minus_rho_g():
+    from planetmodel.mesh1d.gravity import pressure, pressure_fields
+    prem = PREM()
+    fields = pressure_fields(prem)
+    for below, above in zip(fields[:-1], fields[1:]):
+        r = below.interval[1]
+        assert float(below(np.array(r))) == pytest.approx(float(above(np.array(r))),
+                                                          rel=1e-14)
+    assert float(fields[-1](np.array(prem.skeleton.boundaries[-1]))) == 0.0
+    for i, f in enumerate(fields):
+        lo, hi = f.interval
+        r = np.linspace(lo, hi, 7)[1:-1]
+        rho = prem.layer(i)["rho"](r)
+        assert np.allclose(f.function.derivative()(r), -rho * gravity(prem, r),
+                           rtol=1e-14)
+        h = 1e-6 * (hi - lo)
+        fd = (f(r + h) - f(r - h)) / (2.0 * h)
+        assert np.allclose(fd, -rho * gravity(prem, r), rtol=1e-6)
+        assert f.character == DENSITY and f.name == "pressure"
+    assert np.allclose(pressure(prem, [1221.5e3, 3480e3]),
+                       [float(fields[0](np.array(1221.5e3))),
+                        float(fields[1](np.array(3480e3)))], rtol=1e-15)
+
+
+def test_with_pressure_attaches_it_in_the_model_s_units():
+    prem = PREM()
+    m = prem.with_pressure()
+    assert m.spec("pressure").dimensions == m.spec("kappa").dimensions
+    assert m.layer("lower_mantle")["pressure"](np.array(5000e3)) == pytest.approx(
+        float(prem.pressure(5000e3)), rel=1e-15)
+    with pytest.raises(ValueError, match="already holds 'pressure'"):
+        m.with_pressure()
+    assert m.with_pressure(replace=True).nlayers == m.nlayers
+    nd = prem.nondimensionalised()
+    k = nd.scales.factor(nd.spec("pressure").dimensions)
+    r = np.array([0.0, 2e6, 5e6]) / nd.scales.length
+    assert np.allclose(k * nd.pressure(r), prem.pressure(r * nd.scales.length),
+                       rtol=1e-13)

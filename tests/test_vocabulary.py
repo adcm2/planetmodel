@@ -7,9 +7,9 @@ from planetmodel.character import DENSITY, ELASTIC, SCALAR
 from planetmodel.vocabulary import CONSTANTS, VOCABULARY, Constant, FieldSpec, spec
 
 EXPECTED_NAMES = {
-    "rho", "vp", "vs", "vpv", "vsv", "vph", "vsh", "eta", "qkappa", "qmu",
+    "rho", "vp", "vs", "vpv", "vsv", "vph", "vsh", "eta", "qkappa", "qmu", "qp",
     "kappa", "mu", "A", "C", "F", "L", "N", "elastic_moduli", "viscosity", "g",
-    "drho_dphi0", "temperature",
+    "drho_dphi0", "temperature", "pressure", "stress_exponent", "transition_stress",
 }
 
 
@@ -23,6 +23,8 @@ def test_the_shipped_names():
 
 
 def test_characters_and_dimensions_are_what_the_physics_says():
+    assert spec("pressure").character is DENSITY
+    assert spec("pressure").dimensions == units.MODULUS
     assert spec("rho").character is DENSITY
     assert spec("rho").dimensions == units.DENSITY
     assert spec("vpv").character is SCALAR

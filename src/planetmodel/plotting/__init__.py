@@ -14,16 +14,20 @@ cartopy's projections (`maps`, the `maps` extra); `spectrum`,
 `correlation` and `correlation_total` draw spectra and correlations by
 degree and radius (`spectra`); `write_vtk` writes a model as VTK files
 for ParaView (`vtk`, no extra needed); `style` holds the look they
-share.  matplotlib is not imported here: the axes are the caller's,
+share, a signed field such as a sensitivity kernel drawn symmetric about
+zero with `diverging=True`, its limits at a percentile with `clip=`, and
+divided by its largest value with `normalised=True`, on maps and
+sections alike.  matplotlib is not imported here: the axes are the caller's,
 made with the `plot` extra, and cartopy only where a map is drawn.
 """
 from .maps import cell_edges, sphere_map
 from .profiles import profile, radial_profile
 from .sections import section
 from .spectra import correlation, correlation_total, spectrum
-from .style import BOUNDARY_STYLE, DIVERGING, SEQUENTIAL, colour_scale
+from .style import BOUNDARY_STYLE, DIVERGING, SEQUENTIAL, colour_extend, colour_scale
 from .vtk import write_vtk
 
 __all__ = ["profile", "radial_profile", "section", "sphere_map", "cell_edges",
            "spectrum", "correlation", "correlation_total", "write_vtk",
-           "BOUNDARY_STYLE", "DIVERGING", "SEQUENTIAL", "colour_scale"]
+           "BOUNDARY_STYLE", "DIVERGING", "SEQUENTIAL", "colour_scale",
+           "colour_extend"]

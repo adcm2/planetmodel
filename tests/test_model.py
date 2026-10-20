@@ -325,3 +325,34 @@ def test_coarsened_reports_an_honest_residual():
     assert coarse.nlayers == 1
     assert 0.05 < fit.residuals[(0, "rho")] < 1.0
     assert repr(fit).startswith("CoarseningFit(2 -> 1 layers")
+
+
+def test_a_model_cites_what_it_rests_on_and_every_copy_keeps_it():
+    from planetmodel import PREM
+    from planetmodel.model import cited
+
+    prem = PREM()
+    assert len(prem.citation) == 1 and prem.citation[0].startswith("Dziewonski")
+    assert "doi:10.1016/0031-9201(81)90046-7" in prem.cite()
+    m = model()
+    assert m.citation == () and m.cite() == ""
+    one = m.with_citation("A. Author (2026).  A ball.", " B. Author (2026).  Two. ")
+    assert one.citation == ("A. Author (2026).  A ball.", "B. Author (2026).  Two.")
+    assert one.cite().splitlines() == list(one.citation)
+    assert one.with_citation("A. Author (2026).  A ball.", "").citation == one.citation
+    assert m.citation == ()                                          # a copy each time
+    for copy in (one.named("ball"), one.refined([0.25]), one.nondimensionalised(),
+                 one.with_field(0, "eta", constant_field(SK.interval(0), 1.0,
+                                                         name="eta"))):
+        assert copy.citation == one.citation
+    assert one.replaced(citation=["C."]).citation == ("C.",)
+    again = Model(geometry(), [fields(0), fields(1)], citation=["C.", "C."])
+    assert again.citation == ("C.",)
+    assert prem.frozen(2 * np.pi / 300.0).citation == prem.citation
+    check_model(one)
+    with pytest.raises(TypeError, match="not one string"):
+        m.replaced(citation="A. Author (2026)")
+    with pytest.raises(ValueError, match="one line"):
+        m.with_citation("A. Author\n(2026)")
+    with pytest.raises(TypeError, match="a string"):
+        cited((), [3])

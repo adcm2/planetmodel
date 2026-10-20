@@ -336,3 +336,24 @@ def test_a_scaled_stretch_linearises_as_the_stretch_of_the_scaled_displacement()
     a, b = scaled.linearise(delta, X=X), direct.linearise(delta, X=X)
     assert np.allclose(a.dF, b.dF, rtol=1e-6, atol=1e-9)
     assert np.allclose(a.dJ, b.dJ, rtol=1e-6, atol=1e-9)
+
+
+def test_the_stretch_s_inverse_breaks_a_newton_cycle_between_layers():
+    """Linear in s on each layer, s + h(s) can send Newton from the outer
+    layer into the inner one and straight back, each step landing on an end
+    of the bracket; the bisection takes over there and the root is found."""
+    from planetmodel import RadialStretch, Skeleton, layer_linear
+    sk = Skeleton([0.0, 0.5, 0.8, 1.0])
+
+    def up(t, p):
+        return 0.15 + 0.0 * t
+
+    def down(t, p):
+        return -0.02 + 0.0 * t
+
+    m = RadialStretch(layer_linear(sk, [None, None, up, down]), rmax=1.0)
+    x = cartesian_points(np.array([0.85, 0.9, 0.6]), 1.0, 2.0)
+    X = m.inverse(x)
+    assert np.allclose(m(X), x, rtol=0, atol=1e-12)
+    assert np.allclose(np.linalg.norm(X, axis=-1), [0.5 + 0.35 / 1.5, 0.5 + 0.4 / 1.5,
+                                                    0.5 + 0.1 / 1.5], atol=1e-12)

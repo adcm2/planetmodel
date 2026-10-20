@@ -1,6 +1,6 @@
 // Read a model file: what it holds on each layer, every scalar field's
-// value and gradient at a point of its layer, and the mapping's
-// displacement of that point.
+// value and gradient at a point of its layer, the mapping's displacement
+// of that point, and every field on an interface at a point of it.
 //
 //   planetmodel_read_model model.nc
 #include <planetmodel/modelfile.hpp>
@@ -19,6 +19,7 @@ int main(int argc, char** argv) {
     std::cout << std::format("{}: {}, schema {}, length scale {} m\n", file.Source(),
                              file.Name().value_or("unnamed"), file.Schema(),
                              file.GetScales().Length());
+    for (const auto& work : file.Citation()) std::cout << std::format("  cite: {}\n", work);
     const auto mapping = file.Mapping();
     const auto& skeleton = file.GetSkeleton();
     for (auto layer = 0; layer < static_cast<int>(skeleton.NLayers()); ++layer) {
@@ -45,6 +46,15 @@ int main(int argc, char** argv) {
       const auto u = mapping.Displacement(pm::CartesianPoint(r, theta, phi));
       std::cout << std::format("  displacement at the point: ({:.4g}, {:.4g}, {:.4g})\n", u[0],
                                u[1], u[2]);
+    }
+    for (auto k = 0; k < static_cast<int>(file.InterfaceRadii().size()); ++k) {
+      const auto name = file.InterfaceNames()[static_cast<std::size_t>(k)].value_or("-");
+      for (const auto& field_name : file.SurfaceNames(k)) {
+        const auto f = file.SurfaceFieldOn(k, field_name);
+        const auto [dtheta, dphi] = f.Gradient(1.0, 2.0);
+        std::cout << std::format("interface {} ({}), {}: {:.6g}, gradient ({:.4g}, {:.4g})\n",
+                                 k, name, field_name, f.Value(1.0, 2.0), dtheta, dphi);
+      }
     }
   } catch (const pm::Error& e) {
     std::cerr << e.what() << "\n";
