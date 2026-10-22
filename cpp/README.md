@@ -48,6 +48,50 @@ source knots. Generic layers default to unknown, and `RadialModel::IsFluid`
 requires the caller to declare a phase. A model with no positive `tref` remains
 usable for elastic evaluation and has no `OmegaRef()`.
 
+## Spherical gravity and constant-Q moduli
+
+`gravity.hpp` prepares enclosed mass from each layer's radial `rho`. It
+splits quadrature at `IntegrationBreakpoints(layer)`, adaptively subdivides
+the intervals, and caches mass prefixes for later radius queries. The
+integral uses an embedded Gauss-Kronrod rule and throws if it cannot meet
+the requested local tolerance by `max_depth` or the per-preparation/query
+`max_evaluations` budget. Density must be finite and non-negative.
+`Mass(r)`, `Gravity(r)` and
+`GravityDerivative(r)` accept radii from the centre through the surface;
+a hollow cavity has zero mass and field. Their values at an interface use
+the outward layer, while overloads taking a layer index select that
+one-sided density explicitly. All values, including `G`, use model units.
+
+```cpp
+#include <planetmodel/gravity.hpp>
+
+const planetmodel::RadialGravity gravity(model);
+const double g = gravity.Gravity(0.5 * model.GetSkeleton().Boundaries().back());
+const double dgdr = gravity.GravityDerivative(0, interface_radius); // inner side
+```
+
+`rheology.hpp` prepares the real elastic Love moduli and Voigt bulk/shear
+loss coefficients once at a radius. `PreparedConstantQ::Evaluate` applies
+the shared frequency factor and returns named `A`, `C`, `F`, `L`, `N`
+complex moduli. `ConstantQFactor` is also exposed so callers evaluating
+many radii can compute it once and pass it to `ApplyFactor` on each prepared
+point. The convention is `exp(+i omega t)` and
+`c(omega) = (2/pi) Log(i omega / omega_ref)`: nonzero frequencies must be
+finite and in the closed lower half-plane. Real negative frequencies give
+the conjugate of positive frequencies. Zero Q means lossless; attenuation
+needs a positive reference angular frequency. This API supports elastic
+and constant-Q fields only and refuses viscosity, Prony and power-law
+fields.
+
+```cpp
+#include <planetmodel/rheology.hpp>
+
+const auto prepared = planetmodel::PreparedConstantQ(model.Material(0), r,
+                                                      model.OmegaRef());
+const auto complex_moduli = prepared.Evaluate({omega, 0.0});
+const auto radial_shear = complex_moduli.L;
+```
+
 ## Getting it
 
 The library is fetched from the Python repository at a release tag. Its
