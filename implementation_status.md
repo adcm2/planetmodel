@@ -1,0 +1,7 @@
+# Implementation status
+
+Phase A adds a native, in-memory C++ radial model built from MINEOS decks. It owns layer interpolants, preserves layer/interface names and source knots, and carries SI scales, model-unit `G`, source identity, and optional `omega_ref`. Elastic properties and radial derivatives are evaluated from primitive fields with Python-compatible description precedence. MINEOS layers carry Fluid/Solid metadata derived from shear source knots; generic layers default to Unknown and require a declared phase for layer-wide classification. No gravity or attenuation law is included.
+
+The C++ README documents the API and breakpoints. Focused GTests cover metadata, one-sided interfaces, isotropic/TI material conversions and derivatives, fluidity independent of Q, unknown phase handling, description precedence, partial moduli, and invalid Q. The fresh g++-13 no-NetCDF build passed with warnings as errors. All 38 available CTest cases passed, including four consumer builds; the two tests needing gmsh/PyMFEM-generated fixtures were excluded because those optional fixtures are unavailable. The strict Doxygen reference build passed.
+
+Validation: 68 available CTest cases passed with NetCDF and 38 without it; two existing Gmsh/PyMFEM fixture cases were unavailable. A one-time Python comparison passed 6,256 material value/derivative checks (maximum scaled difference 2.90e-15). Independent Luna and short Sol reviews passed.

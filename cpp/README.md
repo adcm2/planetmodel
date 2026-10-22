@@ -20,6 +20,34 @@ writes model files that the Python reads. It reads and writes:
 The library knows no solver and no mesh library. Each code keeps its own
 glue: opening the mesh, sampling fields onto its own discretisation.
 
+## In-memory radial models
+
+`radial_model.hpp` is independent of netCDF. The MINEOS factory builds an owned SI radial model
+from a `Deck`, retaining each layer's interpolated primitive fields, MINEOS
+layer and interface names, SI scales, `G`, and a reference angular frequency
+when the header gives a positive `tref`. Material properties such as Love
+moduli and Voigt `kappa`/`mu` are derived at evaluation time with their
+radial derivatives, so no interpolated products need to be refit. The source
+knot radii are available as `IntegrationBreakpoints(layer)` for radial
+integration. A directly constructed model uses its supplied scales; by default
+its `G()` is expressed in those model units. Constructed layers expose their
+endpoints as breakpoints, which assumes the field is smooth within each layer.
+
+```cpp
+#include <planetmodel/radial_model.hpp>
+
+const auto model = planetmodel::ReadMineosModel("prem.200");
+const auto material = model.Material(0);
+const auto shear = material.Evaluate("L", 1.0e6); // value and d/dr, in SI
+const bool fluid = material.IsFluid(1.0e6);
+```
+
+A zero `qmu` records lossless shear behaviour; it does not mark a layer as
+fluid. The MINEOS factory classifies each layer from its shear fields at the
+source knots. Generic layers default to unknown, and `RadialModel::IsFluid`
+requires the caller to declare a phase. A model with no positive `tref` remains
+usable for elastic evaluation and has no `OmegaRef()`.
+
 ## Getting it
 
 The library is fetched from the Python repository at a release tag. Its
