@@ -31,8 +31,11 @@ A transversely isotropic layer is perturbed through its Voigt averages:
 with delta kappa = (f_kappa - 1) kappa and delta mu = (f_mu - 1) mu,
 A and C gain delta kappa + 4 delta mu / 3, F gains
 delta kappa - 2 delta mu / 3, and L and N gain delta mu, which is the
-isotropic rule when the layer is isotropic and leaves the anisotropy
-real.  A layer holding both a viscosity (or branches) and Q_mu is a
+isotropic rule when the layer is isotropic. This is the default TI
+prescription. `fixed_ratios` instead retains C/A, N/L and F/(A - 2L)
+while matching the same complex Voigt bulk and shear moduli; it rejects
+undefined ratios and non-passive loss tensors. A layer holding both a
+viscosity (or branches) and Q_mu is a
 Maxwell body in shear (the shear band is not applied on top) with the
 bulk band; a layer holding none of them is elastic and left alone.
 `is_rheology_name` says which names a layer's rheology is read from.
@@ -159,29 +162,35 @@ def _band_shift(modulus: Field, q: Field, omega: float,
 
 
 def frozen_moduli(layer: LayerLike, omega: float, *,
-                  reference_omega: float) -> dict[str, Field]:
+                  reference_omega: float,
+                  ti_prescription: str = "additive") -> dict[str, Field]:
     """The complex moduli A, C, F, L, N of a viscoelastic layer at `omega`
     as fields, from its rheology fields and its elastic moduli; an
     elastic layer's moduli come back unchanged.  A viscosity makes the
     shear a Maxwell body, and Prony branches a generalised one; otherwise
     the Q fields make the constant-Q band of `dispersive_moduli`."""
-    return _shifted_moduli(layer, omega, reference_omega, maxwell=True)
+    return _shifted_moduli(layer, omega, reference_omega, maxwell=True,
+                           ti_prescription=ti_prescription)
 
 
 def dispersive_moduli(layer: LayerLike, omega: float, *,
-                      reference_omega: float) -> dict[str, Field]:
+                      reference_omega: float,
+                      ti_prescription: str = "additive") -> dict[str, Field]:
     """The complex moduli A, C, F, L, N of a layer at `omega` under the
     constant-Q absorption band alone: kappa dispersed by `qkappa` and mu
     by `qmu` about `reference_omega`, whichever of the two the layer
     holds, a viscosity ignored.  A layer holding neither Q comes back
     with its static moduli."""
-    return _shifted_moduli(layer, omega, reference_omega, maxwell=False)
+    return _shifted_moduli(layer, omega, reference_omega, maxwell=False,
+                           ti_prescription=ti_prescription)
 
 
 def _shifted_moduli(layer: LayerLike, omega: float, reference_omega: float, *,
-                    maxwell: bool) -> dict[str, Field]:
+                    maxwell: bool, ti_prescription: str = "additive") -> dict[str, Field]:
     """The five at `omega`, kappa and mu shifted by their rheologies and
-    recombined through the Voigt rule so that the anisotropy stays real."""
+    recombined through the selected TI prescription."""
+    if ti_prescription not in {"additive", "fixed_ratios"}:
+        raise ValueError("ti_prescription must be 'additive' or 'fixed_ratios'")
     base = moduli(layer)
     held = branches(layer) if maxwell else ()
     if held and "viscosity" in layer:
@@ -204,12 +213,86 @@ def _shifted_moduli(layer: LayerLike, omega: float, reference_omega: float, *,
     zero = 0.0 * kappa
     dmu = zero if dmu is None else dmu
     dkappa = zero if dkappa is None else dkappa
+    if ti_prescription == "fixed_ratios":
+        return _fixed_ratio_moduli(base, dkappa, dmu)
     A = base["A"] + dkappa + (4.0 / 3.0) * dmu
     C = base["C"] + dkappa + (4.0 / 3.0) * dmu
     F = base["F"] + dkappa - (2.0 / 3.0) * dmu
     return {k: named(f, k) for k, f in (("A", A), ("C", C), ("F", F),
                                          ("L", base["L"] + dmu),
                                          ("N", base["N"] + dmu))}
+
+
+def _fixed_ratio_moduli(base: dict[str, Field], dkappa: Field,
+                        dmu: Field) -> dict[str, Field]:
+    """Recombine Voigt shifts while retaining the real TI ratios pointwise."""
+    names = ("A", "C", "F", "L", "N")
+    sources = [base[n] for n in names] + [dkappa, dmu]
+
+    def components(*values: ArrayLike) -> tuple[np.ndarray, ...]:
+        A, C, F, L, N, dk, dm = (np.asarray(v) for v in values)
+        shape = np.broadcast_shapes(*(v.shape for v in (A, C, F, L, N, dk, dm)))
+        A, C, F, L, N, dk, dm = (np.broadcast_to(v, shape) for v in
+                                  (A, C, F, L, N, dk, dm))
+        if not all(np.all(np.isfinite(v)) for v in (A, C, F, L, N, dk, dm)):
+            raise ValueError("fixed_ratios requires finite moduli and Voigt shifts")
+        scale = np.maximum.reduce([np.abs(v) for v in (A, C, F, L, N)])
+        tol = 128.0 * np.finfo(float).eps * scale
+        fluid = (L == 0.0) & (N == 0.0)
+        isotropic_fluid = (fluid & (np.abs(A - C) <= tol) &
+                           (np.abs(A - F) <= tol))
+        if np.any(fluid & ~isotropic_fluid):
+            raise ValueError("fixed_ratios requires a true isotropic fluid when L or N is zero")
+
+        da = np.zeros(shape, dtype=complex)
+        dl = np.zeros(shape, dtype=complex)
+        phi = np.zeros(shape)
+        xi = np.zeros(shape)
+        eta = np.zeros(shape)
+        solid = ~fluid
+        if np.any(solid):
+            bad = solid & ((np.abs(A) <= tol) | (np.abs(L) <= tol) |
+                           (np.abs(A - 2.0 * L) <= tol))
+            if np.any(bad):
+                raise ValueError("fixed_ratios has undefined TI ratios")
+            phi = np.divide(C, A, out=np.zeros(shape), where=solid)
+            xi = np.divide(N, L, out=np.zeros(shape), where=solid)
+            eta = np.divide(F, A - 2.0 * L, out=np.zeros(shape), where=solid)
+            a11, a12 = (4.0 + phi + 4.0 * eta) / 9.0, -(8.0 * eta + 4.0 * xi) / 9.0
+            a21, a22 = (1.0 + phi - 2.0 * eta) / 15.0, (4.0 * eta + 5.0 * xi + 6.0) / 15.0
+            det = a11 * a22 - a12 * a21
+            det_scale = np.maximum(np.abs(a11 * a22) + np.abs(a12 * a21),
+                                   np.finfo(float).tiny)
+            if np.any(solid & (~np.isfinite(det) |
+                               (np.abs(det) <= 128.0 * np.finfo(float).eps * det_scale))):
+                raise ValueError("fixed_ratios TI mapping is singular or ill-conditioned")
+            da[solid] = ((dk * a22 - a12 * dm) / det)[solid]
+            dl[solid] = ((a11 * dm - a21 * dk) / det)[solid]
+        da[fluid] = dk[fluid]
+        dc, df, dn = (np.zeros(shape, dtype=complex) for _ in range(3))
+        dc[fluid], df[fluid] = dk[fluid], dk[fluid]
+        dc[solid], dn[solid] = (phi * da)[solid], (xi * dl)[solid]
+        df[solid] = (eta * (da - 2.0 * dl))[solid]
+        out = (A + da, C + dc, F + df, L + dl, N + dn)
+        if not all(np.all(np.isfinite(v)) for v in out):
+            raise ValueError("fixed_ratios produced non-finite moduli")
+        aa, cc, ff, ll, nn = (np.imag(v) for v in out)
+        loss_scale = np.maximum.reduce([np.abs(v) for v in (aa, cc, ff, ll, nn)])
+        loss_scale = np.where(loss_scale > 0.0, loss_scale, 1.0)
+        aa, cc, ff, ll, nn = (v / loss_scale for v in (aa, cc, ff, ll, nn))
+        loss_tol = 128.0 * np.finfo(float).eps
+        minor = 2.0 * (aa - nn) * cc - 2.0 * ff * ff
+        minor_tol = 128.0 * np.finfo(float).eps * np.maximum(
+            np.abs(2.0 * (aa - nn) * cc) + 2.0 * ff * ff, np.finfo(float).tiny)
+        if np.any((ll < -loss_tol) | (nn < -loss_tol) | (aa - nn < -loss_tol) |
+                  (cc < -loss_tol) | (minor < -minor_tol)):
+            raise ValueError("fixed_ratios produces a non-passive TI loss tensor")
+        return out
+
+    fields = [ComposedField(lambda *v, i=i: components(*v)[i], sources,
+                            character=DENSITY)
+              for i in range(5)]
+    return {name: named(field, name) for name, field in zip(names, fields)}
 
 
 def reference_omega(model: Model) -> float:
@@ -233,15 +316,19 @@ def is_frozen(model: Model) -> bool:
 
 
 def frozen(model: Model, omega: float, *,
-           reference_omega: float | None = None) -> Model:
+           reference_omega: float | None = None,
+           ti_prescription: str = "additive") -> Model:
     """The model frozen at angular frequency `omega`: every viscoelastic
     layer carries its complex moduli under A, C, F, L, N, and the
     constant `omega` records the frequency.  A model with no
     viscoelastic layer comes back as a copy with the constant alone; a
     model that already carries `omega` is refused, since its moduli are
     no longer the elastic ones the dispersion starts from.
-    `reference_omega` defaults to the model's, see `reference_omega`."""
+    `reference_omega` defaults to the model's, see `reference_omega`.
+    `ti_prescription` selects `additive` (the default) or `fixed_ratios`."""
     omega = float(omega)
+    if ti_prescription not in {"additive", "fixed_ratios"}:
+        raise ValueError("ti_prescription must be 'additive' or 'fixed_ratios'")
     if not omega > 0.0:
         raise ValueError(f"omega must be positive, got {omega:g}")
     if is_frozen(model):
@@ -258,7 +345,8 @@ def frozen(model: Model, omega: float, *,
     for layer in model.layers:
         fields = dict(layer.fields)
         if is_viscoelastic(layer):
-            fields.update(frozen_moduli(layer, omega, reference_omega=reference_omega))
+            fields.update(frozen_moduli(layer, omega, reference_omega=reference_omega,
+                                        ti_prescription=ti_prescription))
         layers.append(fields)
     constants = dict(model.constants)
     constants["omega"] = Constant(omega * factor, FREQUENCY,

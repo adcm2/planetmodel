@@ -75,7 +75,12 @@ loss coefficients once at a radius. `PreparedConstantQ::Evaluate` applies
 the shared frequency factor and returns named `A`, `C`, `F`, `L`, `N`
 complex moduli. `ConstantQFactor` is also exposed so callers evaluating
 many radii can compute it once and pass it to `ApplyFactor` on each prepared
-point. The convention is `exp(+i omega t)` and
+point. The default `TIPrescription::Additive` retains the original Voigt
+recombination. Passing `TIPrescription::FixedRatios` as the final constructor
+argument retains `C/A`, `N/L` and `F/(A - 2L)` while matching the same complex
+Voigt bulk and shear moduli; undefined ratios and non-passive loss tensors
+are rejected. The selected value is available from `Prescription()`. The
+convention is `exp(+i omega t)` and
 `c(omega) = (2/pi) Log(i omega / omega_ref)`: nonzero frequencies must be
 finite and in the closed lower half-plane. Real negative frequencies give
 the conjugate of positive frequencies. Zero Q means lossless; attenuation

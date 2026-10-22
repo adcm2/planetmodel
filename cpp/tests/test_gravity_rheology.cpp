@@ -174,4 +174,95 @@ TEST(PreparedConstantQ, PreservesTransverseIsotropyAndRejectsInvalidInputs) {
   EXPECT_DOUBLE_EQ(fluid.Evaluate({2.0, 0.0}).A.imag(), 0.0);
 }
 
+TEST(PreparedConstantQ, FixedRatiosPreserveVoigtTargetsAndRemainPassive) {
+  std::map<std::string, planetmodel::RadialFunction> fields{
+      {"A", Constant(0, 1, 30)}, {"C", Constant(0, 1, 24)},
+      {"F", Constant(0, 1, 17)}, {"L", Constant(0, 1, 3)},
+      {"N", Constant(0, 1, 5)},
+      {"qkappa", Constant(0, 1, 10)}, {"qmu", Constant(0, 1, 20)}};
+  const auto material = planetmodel::RadialMaterial(std::move(fields));
+  const planetmodel::PreparedConstantQ additive(material, 0.5, 2.0);
+  const planetmodel::PreparedConstantQ fixed(material, 0.5, 2.0,
+      planetmodel::TIPrescription::FixedRatios);
+  EXPECT_EQ(fixed.Prescription(), planetmodel::TIPrescription::FixedRatios);
+  const auto base = fixed.Elastic();
+  const auto out = fixed.Evaluate({2.0, 0.0});
+  const auto k_base = (4.0 * base.A + base.C + 4.0 * base.F - 4.0 * base.N) / 9.0;
+  const auto m_base = (base.A + base.C - 2.0 * base.F + 5.0 * base.N + 6.0 * base.L) / 15.0;
+  const auto k_out = (4.0 * out.A + out.C + 4.0 * out.F - 4.0 * out.N) / 9.0;
+  const auto m_out = (out.A + out.C - 2.0 * out.F + 5.0 * out.N + 6.0 * out.L) / 15.0;
+  EXPECT_NEAR(std::abs((k_out - k_base).imag() - fixed.BulkLossCoefficient()), 0.0, 1e-12);
+  EXPECT_NEAR(std::abs((m_out - m_base).imag() - fixed.ShearLossCoefficient()), 0.0, 1e-12);
+  EXPECT_NEAR(std::abs(out.C / out.A - base.C / base.A), 0.0, 1e-14);
+  EXPECT_NEAR(std::abs(out.N / out.L - base.N / base.L), 0.0, 1e-14);
+  EXPECT_NEAR(std::abs(out.F / (out.A - 2.0 * out.L) -
+                       base.F / (base.A - 2.0 * base.L)), 0.0, 1e-14);
+  const auto loss_aa = out.A.imag() - out.N.imag();
+  const auto loss_minor = 2.0 * loss_aa * out.C.imag() - 2.0 * out.F.imag() * out.F.imag();
+  EXPECT_GE(out.L.imag(), -1e-12);
+  EXPECT_GE(out.N.imag(), -1e-12);
+  EXPECT_GE(loss_aa, -1e-12);
+  EXPECT_GE(out.C.imag(), -1e-12);
+  EXPECT_GE(loss_minor, -1e-10);
+  const auto default_out = additive.Evaluate({2.0, 0.0});
+  EXPECT_NE(out.A, default_out.A);
+  const auto damped_factor = planetmodel::ConstantQFactor({4.0, -1.0}, 2.0);
+  const auto damped = fixed.Evaluate({4.0, -1.0});
+  const auto damped_k = (4.0 * damped.A + damped.C + 4.0 * damped.F - 4.0 * damped.N) / 9.0;
+  const auto damped_m = (damped.A + damped.C - 2.0 * damped.F + 5.0 * damped.N +
+                         6.0 * damped.L) / 15.0;
+  EXPECT_NEAR(std::abs((damped_k - k_base) - fixed.BulkLossCoefficient() * damped_factor),
+              0.0, 1e-12);
+  EXPECT_NEAR(std::abs((damped_m - m_base) - fixed.ShearLossCoefficient() * damped_factor),
+              0.0, 1e-12);
+  EXPECT_NEAR(std::abs(damped.C / damped.A - base.C / base.A), 0.0, 1e-14);
+
+  const auto iso = IsotropicMaterial(10.0, 20.0);
+  const planetmodel::PreparedConstantQ iso_additive(iso, 0.5, 2.0);
+  const planetmodel::PreparedConstantQ iso_fixed(iso, 0.5, 2.0,
+      planetmodel::TIPrescription::FixedRatios);
+  const auto iso_a = iso_additive.Evaluate({4.0, -1.0});
+  const auto iso_f = iso_fixed.Evaluate({4.0, -1.0});
+  EXPECT_NEAR(std::abs(iso_f.A - iso_a.A), 0.0, 1e-13);
+  EXPECT_NEAR(std::abs(iso_f.C - iso_a.C), 0.0, 1e-13);
+  EXPECT_NEAR(std::abs(iso_f.F - iso_a.F), 0.0, 1e-13);
+  EXPECT_NEAR(std::abs(iso_f.L - iso_a.L), 0.0, 1e-13);
+  EXPECT_NEAR(std::abs(iso_f.N - iso_a.N), 0.0, 1e-13);
+}
+
+TEST(PreparedConstantQ, FixedRatiosHandleFluidsAndRejectInvalidSolid) {
+  EXPECT_THROW(static_cast<void>(planetmodel::PreparedConstantQ(
+      IsotropicMaterial(10.0, 20.0), 0.5, 2.0,
+      static_cast<planetmodel::TIPrescription>(2))), planetmodel::Error);
+
+  std::map<std::string, planetmodel::RadialFunction> fluid_fields{
+      {"rho", Constant(0, 1, 4)}, {"vp", Constant(0, 1, 3)},
+      {"vs", Constant(0, 1, 0)}, {"qkappa", Constant(0, 1, 10)}};
+  const auto fluid = planetmodel::PreparedConstantQ(
+      planetmodel::RadialMaterial(std::move(fluid_fields)), 0.5, 2.0,
+      planetmodel::TIPrescription::FixedRatios);
+  const auto fluid_moduli = fluid.Evaluate({2.0, 0.0});
+  EXPECT_NEAR(fluid_moduli.A.imag(), 3.6, 1e-13);
+  EXPECT_DOUBLE_EQ(fluid_moduli.L.imag(), 0.0);
+  EXPECT_DOUBLE_EQ(fluid_moduli.N.imag(), 0.0);
+
+  std::map<std::string, planetmodel::RadialFunction> bad_fields{
+      {"rho", Constant(0, 1, 4)}, {"vpv", Constant(0, 1, 3)},
+      {"vph", Constant(0, 1, 2)}, {"vsv", Constant(0, 1, 1)},
+      {"vsh", Constant(0, 1, 2)}, {"eta", Constant(0, 1, 1)},
+      {"qmu", Constant(0, 1, 10)}};
+  EXPECT_THROW(static_cast<void>(planetmodel::PreparedConstantQ(
+      planetmodel::RadialMaterial(std::move(bad_fields)), 0.5, 2.0,
+      planetmodel::TIPrescription::FixedRatios)), planetmodel::Error);
+
+  std::map<std::string, planetmodel::RadialFunction> nonpassive_fields{
+      {"A", Constant(0, 1, 30)}, {"C", Constant(0, 1, 24)},
+      {"F", Constant(0, 1, 17)}, {"L", Constant(0, 1, 3)},
+      {"N", Constant(0, 1, 5)}, {"qkappa", Constant(0, 1, 0)},
+      {"qmu", Constant(0, 1, 20)}};
+  EXPECT_THROW(static_cast<void>(planetmodel::PreparedConstantQ(
+      planetmodel::RadialMaterial(std::move(nonpassive_fields)), 0.5, 2.0,
+      planetmodel::TIPrescription::FixedRatios)), planetmodel::Error);
+}
+
 }  // namespace

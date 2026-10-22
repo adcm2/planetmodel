@@ -5,6 +5,8 @@ import pytest
 from planetmodel import (constant_field, frozen, frozen_moduli, LayeredIsotropicElastic,
                          is_viscoelastic, kappa_mu, moduli, PREM, testing)
 from planetmodel.units import FREQUENCY
+from planetmodel.character import DENSITY, Symmetry
+from planetmodel.materials import voigt_matrix
 
 
 def test_is_viscoelastic():
@@ -64,6 +66,79 @@ def test_constant_q_band_on_prem():
     core = model.layer("outer_core")
     fc = frozen_moduli(core, omega0, reference_omega=omega0)
     assert np.allclose(fc["L"](r[:1] * 0.6), 0.0) and fc["A"].dtype == complex
+
+
+def test_fixed_ratio_attenuation_preserves_voigt_targets_and_ti_ratios():
+    radius = 10.0
+    model = LayeredIsotropicElastic.homogeneous(radius, rho=4.0, vp=3.0, vs=1.0)
+    values = {"A": 30.0, "C": 24.0, "F": 17.0, "L": 3.0, "N": 5.0}
+    for name, value in values.items():
+        model = model.with_field(0, name, constant_field((0.0, radius), value,
+                                                         character=DENSITY, name=name),
+                                 replace=True)
+    for name, value in (("qkappa", 8.0), ("qmu", 12.0)):
+        model = model.with_field(0, name, constant_field((0.0, radius), value, name=name))
+    layer = model.layer(0)
+    r = np.array([1.0, 5.0])
+    additive = frozen_moduli(layer, 4.0, reference_omega=2.0)
+    fixed = frozen_moduli(layer, 4.0, reference_omega=2.0,
+                          ti_prescription="fixed_ratios")
+    explicit_default = frozen_moduli(layer, 4.0, reference_omega=2.0,
+                                     ti_prescription="additive")
+    assert all(np.array_equal(additive[n](r), explicit_default[n](r))
+               for n in values)
+    before = {n: values[n] for n in values}
+    after = {n: fixed[n](r) for n in values}
+    assert np.allclose(after["C"] / after["A"], before["C"] / before["A"])
+    assert np.allclose(after["N"] / after["L"], before["N"] / before["L"])
+    assert np.allclose(after["F"] / (after["A"] - 2 * after["L"]),
+                       before["F"] / (before["A"] - 2 * before["L"]))
+    base_k, base_mu = kappa_mu(layer)
+    fixed_k, fixed_mu = kappa_mu(fixed)
+    add_k, add_mu = kappa_mu(additive)
+    assert np.allclose(fixed_k(r) - base_k(r), add_k(r) - base_k(r))
+    assert np.allclose(fixed_mu(r) - base_mu(r), add_mu(r) - base_mu(r))
+    loss_matrix = voigt_matrix(Symmetry.VTI, {n: fixed[n](r).imag for n in values})
+    assert np.all(np.linalg.eigvalsh(loss_matrix) >= -1e-12)
+    frozen_model = frozen(model, 4.0, reference_omega=2.0,
+                          ti_prescription="fixed_ratios")
+    assert all(np.allclose(frozen_model.layer(0)[n](r), fixed[n](r)) for n in values)
+
+    isotropic = LayeredIsotropicElastic.homogeneous(radius, rho=4.0, vp=3.0, vs=1.0)
+    isotropic = isotropic.with_field(0, "qkappa", constant_field((0.0, radius), 8.0,
+                                                                  name="qkappa"))
+    isotropic = isotropic.with_field(0, "qmu", constant_field((0.0, radius), 12.0,
+                                                               name="qmu"))
+    additive_iso = frozen_moduli(isotropic.layer(0), 4.0, reference_omega=2.0)
+    fixed_iso = frozen_moduli(isotropic.layer(0), 4.0, reference_omega=2.0,
+                              ti_prescription="fixed_ratios")
+    assert all(np.allclose(additive_iso[n](r), fixed_iso[n](r)) for n in values)
+
+
+def test_fixed_ratio_fluid_and_invalid_prescriptions():
+    radius = 10.0
+    fluid = LayeredIsotropicElastic.homogeneous(radius, rho=4.0, vp=3.0, vs=0.0)
+    fluid = fluid.with_field(0, "qkappa", constant_field((0.0, radius), 10.0,
+                                                         name="qkappa"))
+    moduli_fixed = frozen_moduli(fluid.layer(0), 1.0, reference_omega=1.0,
+                                 ti_prescription="fixed_ratios")
+    assert np.allclose(moduli_fixed["A"](5.0), 36.0 + 3.6j)
+    assert np.allclose(moduli_fixed["C"](5.0), 36.0 + 3.6j)
+    assert moduli_fixed["L"](5.0) == 0.0 and moduli_fixed["N"](5.0) == 0.0
+    with pytest.raises(ValueError, match="ti_prescription"):
+        frozen_moduli(fluid.layer(0), 1.0, reference_omega=1.0,
+                      ti_prescription="other")
+
+    bad = LayeredIsotropicElastic.homogeneous(radius, rho=4.0, vp=3.0, vs=1.0)
+    for name, value in {"A": 30.0, "C": 24.0, "F": 17.0, "L": 3.0, "N": 5.0}.items():
+        bad = bad.with_field(0, name, constant_field((0.0, radius), value,
+                                                      character=DENSITY, name=name),
+                             replace=True)
+    for name, value in (("qkappa", 0.0), ("qmu", 20.0)):
+        bad = bad.with_field(0, name, constant_field((0.0, radius), value, name=name))
+    with pytest.raises(ValueError, match="non-passive"):
+        frozen_moduli(bad.layer(0), 1.0, reference_omega=1.0,
+                      ti_prescription="fixed_ratios")["A"](5.0)
 
 
 def test_frozen_model():
